@@ -1,6 +1,7 @@
 use conary_core::op::Repo;
 use conary_core::{Policy, log};
-use conary_github::flow::{Config, Pass, jobs};
+use conary_github::events::Runtime;
+use conary_github::flow::{Config, Pass, jobs, schema};
 use conary_github::{Api, Tokens, anchor};
 use std::path::PathBuf;
 
@@ -13,6 +14,25 @@ pub enum FlowCommand {
     /// A dry pass beside what the steward running the repository says of
     /// each PR now: one JSON line per PR, disagreements first, then a tally.
     Compare(Args),
+    /// Every option of the flow's configuration and conaryd's events
+    /// configuration: their schema, or what a machine's files set.
+    Settings(SettingsArgs),
+}
+#[derive(clap::Args)]
+pub struct SettingsArgs {
+    /// Print the schema of both configurations: each option's type, allowed
+    /// values, default, description, whether it starts paid work and
+    /// whether it's live. No configuration file is read.
+    #[arg(long)]
+    schema: bool,
+    /// The flow configuration whose options to print, each with its
+    /// effective value and whether the file or the default set it.
+    #[arg(long, env = "CONARY_FLOW_CONFIG")]
+    config: Option<PathBuf>,
+    /// conaryd's events configuration whose options to print, the ones that
+    /// take effect only at a restart listed apart.
+    #[arg(long, env = "CONARY_EVENTS_CONFIG")]
+    events_config: Option<PathBuf>,
 }
 #[derive(clap::Args)]
 pub struct Args {
@@ -37,10 +57,13 @@ pub struct Args {
     anchor_repo: Option<String>,
 }
 pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
-    let (FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args)) = command;
+    let args = match command {
+        FlowCommand::Settings(args) => return settings(args),
+        FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args) => args,
+    };
     let compare = matches!(command, FlowCommand::Compare(_));
     let dry_run = args.dry_run || compare;
-    let config: Config = serde_json::from_slice(&std::fs::read(&args.config)?)?;
+    let config = Config::load(&args.config).map_err(own)?;
     let policy = Policy::load(&args.policy)?;
     let tokens: Tokens = super::choose_tokens(
         args.token_command.as_deref(),
@@ -109,4 +132,33 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
         println!("{}", serde_json::to_string(&report)?);
     }
     Ok(())
+}
+
+/// `cn flow settings`: one JSON document, keyed by configuration.
+fn settings(args: &SettingsArgs) -> super::Result<()> {
+    let mut out = serde_json::Map::new();
+    if args.schema {
+        out.insert("flow".into(), schema::flow().map_err(own)?);
+        out.insert("events".into(), schema::events().map_err(own)?);
+    } else {
+        if args.config.is_none() && args.events_config.is_none() {
+            return Err(
+                "give --schema, or a configuration with --config or --events-config".into(),
+            );
+        }
+        if let Some(path) = &args.config {
+            let listing = schema::effective::<Config>(&std::fs::read(path)?).map_err(own)?;
+            out.insert("flow".into(), serde_json::to_value(listing)?);
+        }
+        if let Some(path) = &args.events_config {
+            let listing = schema::effective::<Runtime>(&std::fs::read(path)?).map_err(own)?;
+            out.insert("events".into(), serde_json::to_value(listing)?);
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+/// The library's errors, as this command's.
+fn own(e: Box<dyn std::error::Error + Send + Sync>) -> Box<dyn std::error::Error> {
+    e
 }

@@ -5,11 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 /// Supplied by the caller's configuration, never selected by Conary.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Choice {
+    /// The engine the plugin runs on.
+    #[schemars(extend("x-spender" = false))]
     pub engine: String,
+    /// One of the models the plugin offers; `null` leaves it the plugin's.
+    #[schemars(extend("x-spender" = false))]
     pub model: Option<String>,
+    /// One of the efforts the plugin offers; `null` leaves it the plugin's.
+    #[schemars(extend("x-spender" = false))]
     pub effort: Option<String>,
 }
 

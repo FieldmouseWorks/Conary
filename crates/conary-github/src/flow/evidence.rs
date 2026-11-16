@@ -8,16 +8,27 @@ use conary_core::op::Outcome;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Whose attestations count as evidence, from the machine's configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
+    /// The CI workflow whose attestations count, as `OWNER/REPO/PATH`.
+    #[schemars(extend("x-spender" = false))]
     pub signer: String,
+    /// The prefix of runners started for one job, whose results count beside
+    /// GitHub-hosted ones. `null` accepts GitHub-hosted jobs only.
+    #[schemars(extend("x-spender" = false))]
     pub fresh: Option<String>,
+    /// The checks whose attested results a landing needs.
+    #[schemars(extend("x-spender" = false))]
     pub require: Vec<String>,
+    /// The check whose attested negative run a new test needs.
+    #[schemars(extend("x-spender" = false))]
     pub negative: String,
     /// The machine's producer keys file (`docs/service-attestation.md`):
     /// the services whose signed results count. None trusts no service.
     #[serde(default)]
+    #[schemars(extend("x-spender" = false))]
     pub producers: Option<std::path::PathBuf>,
 }
 impl Evidence {

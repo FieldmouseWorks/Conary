@@ -338,56 +338,130 @@ pub enum Proof {
 }
 
 /// A proof's identity includes what runs, not just its status name.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub enum Recipe {
+    /// Builds this flake attribute.
     Build(String),
+    /// Runs this program with these arguments.
     Run(Vec<String>),
+    /// A check a model runs: no proof plugin is sent it, and it waits.
     Job(String),
 }
 
 /// Machine settings, never selected by the PR's author. The defaults name no
 /// machine, account, label or engine, and start no paid work: an unset one
-/// leaves its step waiting, as an omitted plugin does.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// leaves its step waiting, as an omitted plugin does. Each field's doc is
+/// its description in the published schema ([`super::schema`]), and each
+/// says whether it starts paid work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Whether PRs into the default branch land through the merge train.
+    #[schemars(extend("x-spender" = true))]
     pub train: bool,
+    /// The account a fix job pushes as. Set, a push to the branch by anyone
+    /// else stops that PR's fix job.
+    #[schemars(extend("x-spender" = false))]
     pub job_login: Option<String>,
     /// How many proofs may hold a slot at once. Zero, the default, runs
-    /// none; `None` (`null`) sets no limit.
+    /// none; `null` sets no limit.
+    #[schemars(extend("x-spender" = true))]
     pub proof_slots: Option<u32>,
+    /// Seconds a proof may run before it's stopped.
+    #[schemars(extend("x-spender" = false))]
     pub proof_timeout: u64,
+    /// Seconds a review, fix or judge job may run before it's stopped.
+    #[schemars(extend("x-spender" = false))]
     pub job_timeout: u64,
+    /// The author engines whose changes need a judge: not the engines that
+    /// judge.
+    #[schemars(extend("x-spender" = false))]
     pub judge_engines: BTreeSet<String>,
+    /// The reviewers whose reviews a PR needs, by the name in their marker.
+    #[schemars(extend("x-spender" = false))]
     pub reviewers: BTreeSet<String>,
     /// The accounts the flow posts as: its reviews, `review-settled` and
     /// the train's status are read only from these. None set, no review is
     /// queued.
+    #[schemars(extend("x-spender" = false))]
     pub review_authors: BTreeSet<String>,
+    /// The accounts whose sealed judge and dependency verdicts are read.
+    #[schemars(extend("x-spender" = false))]
     pub verdict_authors: BTreeSet<String>,
+    /// The key that seals a judge's verdict, as 64 lowercase hex digits.
+    #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub judge_key: Option<SealKey>,
+    /// The key that seals a dependency sweep's verdict, as 64 lowercase hex
+    /// digits.
+    #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub major_key: Option<SealKey>,
+    /// Commit emails of the machine's own bots: a commit from one isn't a
+    /// person's edit.
+    #[schemars(extend("x-spender" = false))]
     pub bot_emails: BTreeSet<String>,
+    /// Renovate's commit email. Unset, whether a person edited a Renovate PR
+    /// is unknown.
+    #[schemars(extend("x-spender" = false))]
     pub renovate_email: Option<String>,
+    /// Renovate's login, whose comments say when a refresh may land.
+    #[schemars(extend("x-spender" = false))]
     pub renovate_login: Option<String>,
+    /// The label on an automerged upstream batch.
+    #[schemars(extend("x-spender" = false))]
     pub batch_label: String,
+    /// The label that holds a PR.
+    #[schemars(extend("x-spender" = false))]
     pub hold_label: String,
+    /// The label that puts a PR's proof ahead of those without it.
+    #[schemars(extend("x-spender" = false))]
     pub first_label: String,
     /// The label that hands a PR to its owner. None set, what the owner
     /// decides waits unlisted.
+    #[schemars(extend("x-spender" = false))]
     pub owner_label: Option<String>,
+    /// The people whose approving review is the owner's permission. None
+    /// set, what the owner decides waits.
+    #[schemars(extend("x-spender" = false))]
     pub people: BTreeSet<String>,
+    /// Whether a PR needs green CI to land outside the train.
+    #[schemars(extend("x-spender" = false))]
     pub require_ci: bool,
+    /// The machine's proofs, by check name: what each one runs.
+    #[schemars(extend("x-spender" = true))]
     pub proofs: BTreeMap<String, Recipe>,
+    /// Seconds a PR must sit unchanged before its review is posted.
+    #[schemars(extend("x-spender" = false))]
     pub settle_delay: u64,
+    /// Seconds of quiet on a PR before a fix is handed out.
+    #[schemars(extend("x-spender" = false))]
     pub handoff_after: u64,
+    /// Seconds of quiet before a fix is handed out on a PR a session is
+    /// working.
+    #[schemars(extend("x-spender" = false))]
     pub session_handoff_after: u64,
+    /// Review rounds before a PR that still has findings goes past the limit.
+    #[schemars(extend("x-spender" = false))]
     pub rounds: u32,
+    /// Seconds a PR may wait at one stage before it's overdue.
+    #[schemars(extend("x-spender" = false))]
     pub stall_after: u64,
+    /// Seconds a held PR may wait before it's overdue.
+    #[schemars(extend("x-spender" = false))]
     pub hold_stall_after: u64,
+    /// Seconds a PR may wait in the train before it's overdue.
+    #[schemars(extend("x-spender" = false))]
     pub train_stall_after: u64,
+    /// Seconds a Renovate PR may wait on its own automerge before it's
+    /// overdue.
+    #[schemars(extend("x-spender" = false))]
     pub renovate_merge_after: u64,
+    /// Seconds Renovate is given to act after it's asked to rebase.
+    #[schemars(extend("x-spender" = false))]
     pub renovate_run: u64,
+    /// Whether dependency PRs wait on the machine's Renovate sweep.
+    #[schemars(extend("x-spender" = true))]
     pub renovate_sweep: bool,
 }
 

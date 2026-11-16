@@ -40,6 +40,7 @@ pub use write::{SETTLED, Write, review_body};
 mod execute;
 pub(crate) mod observe;
 mod pass;
+pub mod schema;
 pub use pass::{Config, Pass, Plugins, Report};
 
 mod judging;

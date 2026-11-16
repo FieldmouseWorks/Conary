@@ -226,7 +226,12 @@ fn webhook_http_queues_before_a_pass_and_refuses_bad_requests() {
     use std::sync::Arc;
     let dir = tempfile::tempdir().unwrap();
     let queue = Arc::new(Queue::open(dir.path()).unwrap());
-    let receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let incoming = Arc::clone(&queue);
