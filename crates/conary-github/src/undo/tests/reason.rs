@@ -273,7 +273,9 @@ fn malformed_reasons_are_refused_before_recording_instead_of_becoming_ordinary_p
                 "pull" => ingest::pull(&mut store, &hub, &config(), &repo(), pr)
                     .is_err_and(|e| malformed(&e)),
                 "sync" => {
-                    ingest::sync(&mut store, &hub, &config(), &repo()).is_err_and(|e| malformed(&e))
+                    let dir = store.lock().dir().to_owned();
+                    let gathered = ingest::gather(&hub, &config(), &repo(), &dir).unwrap();
+                    ingest::sync(&mut store, &hub, gathered).is_err_and(|e| malformed(&e))
                 }
                 "backfill" => ingest::backfill(&mut store, &hub, &config(), &repo())
                     .is_err_and(|e| malformed(&e)),
