@@ -1,0 +1,102 @@
+{
+  "conary": "note v1",
+  "change": "6w8are2b3b80am2zabfzkx1dw1",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 338,
+  "url": "https://github.com/fieldmouseworks/conary/pull/338",
+  "summary": "docs: map #218's proof-train requirements onto existing owners and bounded tasks",
+  "task": "fieldmouseworks/conary#325",
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "0ee0c0d603ba5c0fa2f54e0de6451df77a2deeb13aa5d5eacb8ceaff9a2dbdb4",
+    "before": "7df0d0da3e9bbc34d1b15750bd36ae1db5a455e2",
+    "after": "f36cdf62702d137be23efe4892977427afbf1b16",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1794840194460
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529/job/131358853267"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#338)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268628529"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268629388/job/131358857372"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268629388/job/131358857331"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268629388/job/131358856614"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/43268629388/job/131399497770"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/338#pullrequestreview-5921806739"
+    }
+  ]
+}
