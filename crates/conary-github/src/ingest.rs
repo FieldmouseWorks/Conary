@@ -470,11 +470,13 @@ fn record_with_submission(
     // ordinary PR that could evade the undo landing rules. Recorded undos
     // already hold their immutable record; a new one needs a marker that
     // reads and a reason before any ops.
-    let recorded = w
+    let held = w
         .store
         .ledger()
         .by_pr(repo, pr.number)
-        .is_some_and(|c| c.undo.is_some());
+        .and_then(|c| c.undo.as_ref());
+    let recorded = held.is_some();
+    let held_reason = held.and_then(|u| u.reason.clone());
     let undo = match &marked {
         None => None,
         Some(_) if recorded => None,
@@ -485,11 +487,18 @@ fn record_with_submission(
             Some(marker.clone())
         }
     };
-    // Who wrote it and what for are the author's words, not the marker's.
-    let said = if marked.is_some() {
-        Undo::without(&body)
-    } else {
-        body.clone()
+    // Who wrote it and what for are the author's words, not the marker's
+    // nor its reason's.
+    let said = match &marked {
+        None => body.clone(),
+        Some(m) => {
+            let reasons: Vec<&str> = held_reason
+                .as_deref()
+                .into_iter()
+                .chain(m.as_ref().ok().map(|m| m.reason.as_str()))
+                .collect();
+            Undo::without(&body, &reasons)
+        }
     };
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {

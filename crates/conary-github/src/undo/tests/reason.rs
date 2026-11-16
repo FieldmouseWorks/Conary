@@ -313,3 +313,57 @@ fn a_recorded_undo_keeps_its_rules_when_its_marker_lacks_a_reason_or_is_malforme
         assert_eq!(u.undo.as_ref().unwrap().reason.as_deref(), Some(REASON));
     }
 }
+
+#[test]
+fn a_reason_naming_a_session_or_issue_makes_it_neither_the_undo_s_author_nor_its_task() {
+    let session = "https://claude.ai/code/session_01Bad";
+    let reason = format!("Roll back {session} because deployments fail, refs #7");
+    for selection in 0..3 {
+        for recover in [false, true] {
+            let case = format!("selection {selection}, recover {recover}");
+            let dir = tempfile::tempdir().unwrap();
+            let mut store = store(&dir);
+            let hub = github();
+            let ids = super::group::chain(&mut store, &hub, &repo(), 10, &[Some(session)]);
+            let request = |store: &mut Store| match selection {
+                0 => undo(store, &hub, &hub, &config(), ids[0], &reason).map(|u| vec![u]),
+                1 => undo_actor(store, &hub, &hub, &config(), session, &reason).map(|g| g.undos),
+                _ => undo_since(store, &hub, &hub, &config(), &repo(), 0, &reason).map(|g| g.undos),
+            };
+            if recover {
+                // Opened but not recorded: taking it up reads the body afresh.
+                hub.fail(Call::Pull.pr(100));
+                assert!(request(&mut store).is_err(), "{case}");
+                hub.heal(Call::Pull);
+            }
+            let got = request(&mut store).unwrap();
+            assert_eq!(got.len(), 1, "{case}");
+            let u = store.ledger().change(got[0].change).unwrap();
+            assert_eq!(u.author.session, None, "{case}");
+            assert_eq!(u.intent.as_ref().unwrap().task, None, "{case}");
+            assert_eq!(
+                u.undo.as_ref().unwrap().reason.as_deref(),
+                Some(reason.as_str()),
+                "{case}"
+            );
+            // Once it lands, asking to undo the session again must not
+            // revert the undo and bring back what it took out.
+            let undo_change = got[0].change;
+            hub.steward_lands(REMI, got[0].pr);
+            ingest::pull(&mut store, &hub, &config(), &repo(), got[0].pr).unwrap();
+            assert_eq!(
+                store.ledger().change(ids[0]).unwrap().status(),
+                Kept::Reverted,
+                "{case}"
+            );
+            let _ = undo_actor(&mut store, &hub, &hub, &config(), session, "Again");
+            assert_eq!(store.ledger().undo_of(undo_change), None, "{case}");
+            assert_eq!(pulls(&hub), 1, "{case}");
+            assert_eq!(
+                store.ledger().change(ids[0]).unwrap().status(),
+                Kept::Reverted,
+                "{case}"
+            );
+        }
+    }
+}
