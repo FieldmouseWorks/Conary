@@ -203,12 +203,31 @@ it's two days of normal work with nothing traced to the switch.
 
 | | Switch | Owner | Opens when |
 | --- | --- | --- | --- |
-| S1 | remi lands through conaryd | [#314](https://github.com/FieldmouseWorks/Conary/issues/314) | Every 5c task is live on remi, #313 has landed, the producers' keys are provisioned, and the shadow has agreed for two days with every disagreement accounted for |
+| S1 | remi lands through conaryd | [#314](https://github.com/FieldmouseWorks/Conary/issues/314) | Every 5c task is live on remi, #313 has landed, the producers' keys are provisioned, and every kind of shadow disagreement is judged, with none left that is the flow's error ([the shadow is a dry run](#the-shadow-is-a-dry-run-not-a-target)) |
 | S2 | Every other repository, burrow among them, a group at a time | [#315](https://github.com/FieldmouseWorks/Conary/issues/315) and the tasks it files | S1 has settled. burrow's part starts by turning its train on (fence 10) |
 | S3 | Hosted runs substitute from the build store, and the kept builds go | [burrow#989](https://github.com/FieldmouseWorks/burrow/issues/989) | burrow's part of S2 has settled, and the store's shadow has twenty good reports |
 | S4 | The steward's Python is deleted | The tasks #316 files | Every repository lands through conaryd |
 | S5 | One plan a run | [burrow#990](https://github.com/FieldmouseWorks/burrow/issues/990) | S3 has settled |
 | S6 | proj's one pass | [burrow#976](https://github.com/FieldmouseWorks/burrow/issues/976), split by burrow#978 | S2 has settled, and the pass's own shadow has been quiet |
+
+### The shadow is a dry run, not a target
+
+The steward is being deleted, and it isn't always right. So S1 doesn't wait
+for the flow to agree with it for a set time. The shadow shows what the flow
+would decide on remi's real PRs before it decides anything, and each kind of
+disagreement is judged against GitHub's actual state:
+
+- **The flow is wrong:** fixed in the flow, with a sim test from the PR, and
+  live on remi before S1 opens.
+- **The steward is wrong:** left as it is, and listed in
+  [flow.md](flow.md) as a deliberate difference, with the PR as its example.
+- **Timing:** one side a pass behind the other. Said why it's harmless.
+
+S1 opens once no kind is unjudged and none is the flow's error, on the shadow
+running the fixed flow (fence 12). There's no fixed count of days. Peter's
+call, 2026-11-16: "we're completely ripping it out." The first kind found,
+every train PR read as unsettled, is
+[#410](https://github.com/FieldmouseWorks/Conary/issues/410).
 
 S3 goes before S6 because it's the cheaper one to undo: it touches hosted
 CI only, and a run that can't reach the store builds cold. S6 replaces the
