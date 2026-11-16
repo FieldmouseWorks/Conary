@@ -23,6 +23,9 @@ pub(super) fn owner(f: &Facts, why: &str) -> Decision {
 }
 
 pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    if let Some(decision) = vacate(f, m) {
+        return decision;
+    }
     if let Some(kind) = f.failed {
         return failed(m, kind, now, "The step failed; trying again later");
     }
@@ -192,6 +195,30 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         super::review::Look::Next(decision) => decision,
         super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
     }
+}
+
+/// A paused or held PR keeps nothing running. Every worker of its that
+/// hasn't answered is stopped at once, through the stop path, so a proof's
+/// slot frees as soon as its worker ends; nothing new starts; and what its
+/// workers finished stays, so nothing is redone once it's lifted. A pause
+/// then waits here, before anything else is decided. A hold waits where it
+/// always has, after what an owner must hear of first.
+fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
+    let held = f.labels.contains(&f.settings.hold_label);
+    if f.paused.is_none() && !held {
+        return None;
+    }
+    if let Some(first) = f.working.first() {
+        m.stopping.extend(f.working.iter().cloned());
+        let why = match &f.paused {
+            Some(pause) => format!("Paused ({}): stopping its work", pause.reason),
+            None => "On hold (the hold label): stopping its work".into(),
+        };
+        return Some(at(Stage::None, Step::StopJob(first.clone()), &why));
+    }
+    f.paused
+        .as_ref()
+        .map(|pause| wait(Stage::None, None, &format!("Paused: {}", pause.reason)))
 }
 
 fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {

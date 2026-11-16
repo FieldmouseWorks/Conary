@@ -226,14 +226,35 @@ fn collect(work: &Work, now: u64, mutate: bool) -> Result<Completion> {
             result: Some(Err("plugin exceeded deadline or worker was lost".into())),
         };
         if mutate {
-            std::fs::write(work.path.with_extension("cancel"), b"deadline\n")?;
+            mark(work, b"deadline\n")?;
             persist::save_once(&work.path.with_extension("answer"), &timed_out)?;
         }
         return Ok(timed_out);
     }
     Ok(answer)
 }
-pub fn cancel(work: &Work) -> Result<()> {
-    std::fs::write(work.path.with_extension("cancel"), b"obsolete\n")?;
-    Ok(())
+/// Ask the worker to stop, recording why. The first reason asked stays.
+pub fn cancel(work: &Work, why: super::pause::Stop) -> Result<()> {
+    mark(work, why.marker())
+}
+/// Why a worker was asked to stop, if it was asked as a stop rather than at
+/// its deadline.
+pub(crate) fn stopped(work: &Work) -> Option<super::pause::Stop> {
+    std::fs::read(work.path.with_extension("cancel"))
+        .ok()
+        .and_then(|marker| super::pause::Stop::from_marker(&marker))
+}
+/// Write the worker's cancellation marker, unless one is already there: the
+/// runner reads only that it exists, the flow what it says.
+fn mark(work: &Work, marker: &[u8]) -> Result<()> {
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(work.path.with_extension("cancel"))
+    {
+        Ok(mut file) => Ok(file.write_all(marker)?),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }

@@ -1,7 +1,7 @@
 use conary_core::op::Repo;
 use conary_core::{Policy, log};
 use conary_github::events::Runtime;
-use conary_github::flow::{Config, Pass, jobs, schema};
+use conary_github::flow::{Config, Pass, Pause, Scope, jobs, pause, schema};
 use conary_github::{Api, Tokens, anchor};
 use std::path::PathBuf;
 
@@ -17,6 +17,28 @@ pub enum FlowCommand {
     /// Every option of the flow's configuration and conaryd's events
     /// configuration: their schema, or what a machine's files set.
     Settings(SettingsArgs),
+    /// Pause the repository: the next decision stops every worker its PRs
+    /// have running and starts nothing, until it's resumed. Needs no
+    /// conaryd, GitHub, build or deploy, and is always allowed.
+    Pause(PauseArgs),
+    /// Lift the repository's pause: the next pass carries on from each PR's
+    /// saved state.
+    Resume(ResumeArgs),
+}
+#[derive(clap::Args)]
+pub struct PauseArgs {
+    repo: Repo,
+    /// Why it's paused, shown in each PR's decision while it is.
+    #[arg(long)]
+    reason: String,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
+}
+#[derive(clap::Args)]
+pub struct ResumeArgs {
+    repo: Repo,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
 }
 #[derive(clap::Args)]
 pub struct SettingsArgs {
@@ -59,6 +81,17 @@ pub struct Args {
 pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     let args = match command {
         FlowCommand::Settings(args) => return settings(args),
+        FlowCommand::Pause(args) => {
+            let paused = Pause {
+                scope: Scope::Repository,
+                reason: args.reason.clone(),
+                at: jobs::now(),
+            };
+            pause::pause(&args.data, &args.repo, &paused).map_err(own)?;
+            println!("{}", serde_json::to_string(&paused)?);
+            return Ok(());
+        }
+        FlowCommand::Resume(args) => return pause::resume(&args.data, &args.repo).map_err(own),
         FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args) => args,
     };
     let compare = matches!(command, FlowCommand::Compare(_));

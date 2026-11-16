@@ -99,6 +99,16 @@ impl Pass<'_> {
             for pr in data.records()? {
                 let result: Result<()> = (|| {
                     let mut record = data.load(pr)?;
+                    // The repository's off switch reaches every owned worker,
+                    // even when its PR closed or a later GitHub read fails.
+                    let cancelled = super::pause::cancel(self.root, repo, pr, &mut record, false)
+                        .and_then(|changed| {
+                            if changed {
+                                data.save(pr, &record)
+                            } else {
+                                Ok(())
+                            }
+                        });
                     let reconciled = if record.landing.is_some() || !record.pending.is_empty() {
                         match store.as_deref_mut() {
                             Some(store) => super::ledger::reconcile(
@@ -127,7 +137,9 @@ impl Pass<'_> {
                         super::ledger::withdraw_live(pr, data, &mut record)?;
                     }
                     let cleaned = super::ledger::cleanup(github, repo, pr, data, &mut record);
-                    reconciled.and(cleaned)
+                    // A cancellation/read error must not preserve a live
+                    // permission: revocation and cleanup still run above.
+                    cancelled.and(reconciled).and(cleaned)
                 })();
                 if let Err(error) = result {
                     recovery.push((pr, error.to_string()));
@@ -177,6 +189,19 @@ impl Pass<'_> {
                     self.config.settings.clone(),
                     &self.config.trusted_authors,
                 )?;
+                // Cancellation is independent of whichever intention wins
+                // below, and precedes hydration's deadline bookkeeping.
+                if let Some(data) = &data
+                    && super::pause::cancel(
+                        self.root,
+                        repo,
+                        pr,
+                        &mut record,
+                        facts.labels.contains(&facts.settings.hold_label),
+                    )?
+                {
+                    data.save(pr, &record)?;
+                }
                 report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
@@ -194,6 +219,9 @@ impl Pass<'_> {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                // Read afresh before each PR's decision: a pause written
+                // during the pass stops the PRs after it.
+                facts.paused = super::pause::read(self.root, repo)?.filter(|p| p.covers(pr));
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
@@ -280,6 +308,11 @@ impl Pass<'_> {
                         Ok(succeeded) => {
                             record.succeeded.extend(succeeded);
                         }
+                        // A pause the effect read is no failure: the next
+                        // decision reads it.
+                        Err((_, error)) if error.is::<super::pause::Paused>() => {
+                            report.error = Some(error.to_string());
+                        }
                         Err((kind, error)) => {
                             if let Step::PostReview(role) = &next.step
                                 && kind == Failure::Post
@@ -362,6 +395,8 @@ impl Pass<'_> {
             // A proof's preparation is the proof plugin's to answer.
             Purpose::Proof | Purpose::Prepare => "proof",
         };
+        // Paused since its decision: nothing is saved or launched.
+        super::pause::effect(self.root, &facts.repo, facts.number)?;
         let executable = self
             .path(kind)
             .ok_or("plugin is not configured")?

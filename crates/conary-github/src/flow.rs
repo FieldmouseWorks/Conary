@@ -59,6 +59,9 @@ mod scope;
 
 mod occupancy;
 
+pub mod pause;
+pub use pause::{Pause, Scope};
+
 mod ledger;
 
 mod approval;
