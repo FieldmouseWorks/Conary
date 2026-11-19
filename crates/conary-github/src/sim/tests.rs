@@ -380,6 +380,7 @@ mod flow_pass_service;
 mod flow_pass_slots;
 
 mod flow_pause;
+mod flow_switches;
 
 mod flow_pass_landing;
 
