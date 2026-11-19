@@ -862,13 +862,13 @@ fn the_reviewers_word_on_the_head_is_recorded_as_a_review_never_attested() {
             (
                 "codex",
                 Outcome::Fail,
-                "https://github.com/x/y/pull/9#pullrequestreview-11",
+                "https://github.com/x/y/pull/9#pullrequestreview-11 at 2026-10-27T11:10:00Z",
                 false
             ),
             (
                 "codex",
                 Outcome::Pass,
-                "https://github.com/x/y/pull/9#issuecomment-1",
+                "https://github.com/x/y/pull/9#issuecomment-1 at 2026-10-27T11:20:00Z",
                 false
             ),
         ]
@@ -930,7 +930,58 @@ fn the_reviewers_word_from_before_a_retarget_is_not_the_new_revisions() {
         reviews,
         [(
             Outcome::Pass,
-            "https://github.com/x/y/pull/9#issuecomment-2"
+            "https://github.com/x/y/pull/9#issuecomment-2 at 2026-10-27T13:00:01Z"
         )]
     );
+}
+
+#[test]
+fn each_rewrite_of_the_reviewers_summary_is_a_word_of_its_own() {
+    let (_dir, mut store) = open();
+    let f = fake();
+    let words = |store: &Store, change| -> Vec<Outcome> {
+        store
+            .ledger()
+            .change(change)
+            .unwrap()
+            .evidence
+            .iter()
+            .filter(|e| e.kind == CheckKind::Review)
+            .map(|e| e.result)
+            .collect()
+    };
+    f.put_reviews(REPO, 9, json!([]));
+    // Clean, then findings on another look at the same head, then clean
+    // again: the connector rewrites the one summary each time.
+    let clean = |at| json!([summary(1, CONNECTOR, HEAD, "completed", Some(false), at)]);
+    f.put_comments(REPO, 9, clean("2026-10-27T11:20:00Z"));
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    f.put_comments(
+        REPO,
+        9,
+        json!([summary(
+            1,
+            CONNECTOR,
+            HEAD,
+            "completed",
+            Some(true),
+            "2026-10-27T11:30:00Z"
+        )]),
+    );
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    f.put_comments(REPO, 9, clean("2026-10-27T11:40:00Z"));
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    // The ledger's last word is the reviewer's last word.
+    assert_eq!(
+        words(&store, change),
+        [Outcome::Pass, Outcome::Fail, Outcome::Pass]
+    );
+    // Read again unchanged, it's the same word, recorded once.
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        0
+    );
+    assert_eq!(words(&store, change).len(), 3);
 }

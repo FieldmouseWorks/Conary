@@ -108,12 +108,24 @@ pub(super) fn reviewer(
                 kind: CheckKind::Review,
                 check: reviews::NAME.to_owned(),
                 result,
-                source: w.url.map_or_else(
-                    || format!("{} on PR {}", reviews::NAME, pr.number),
-                    str::to_owned,
-                ),
+                source: publication(&w, pr.number),
                 attest: None,
             })
         })
         .collect())
+}
+
+/// A word's publication, as the source its record names: where it is, and
+/// when GitHub dated it. The connector rewrites its summary comment in
+/// place, so its address alone would make a later word the same record as
+/// an earlier one with the same result, and the ledger would drop it.
+fn publication(w: &crate::flow::reviews::Word<'_>, pr: u64) -> String {
+    let at = i64::try_from(w.at)
+        .ok()
+        .and_then(|s| jiff::Timestamp::from_second(s).ok())
+        .map_or_else(|| w.at.to_string(), |t| t.to_string());
+    match w.url {
+        Some(url) => format!("{url} at {at}"),
+        None => format!("{} on PR {pr} at {at}", crate::flow::reviews::NAME),
+    }
 }
