@@ -95,7 +95,7 @@ milestone's exit check in the [roadmap](#12-roadmap) includes it.
 | `heavy-work-waits-for-settled-inputs` | [Finish line](#12-roadmap), item 9 | [#292](https://github.com/FieldmouseWorks/Conary/issues/292) (its tasks #296 to #302), then M6 slice 8 ([#320](https://github.com/FieldmouseWorks/Conary/issues/320)) |
 | `reusable-modules` | [Finish line](#12-roadmap), item 7 | Every slice, and M7's setup path; [#378](https://github.com/FieldmouseWorks/Conary/issues/378) for the flow's defaults |
 | `no-model-in-mechanical-step` | A proof, build, replay or poll is a program ([a proof is a program](plugins.md#versions)). A model is a `fix` asked to read a failed proof's log, never what runs it, so the flow sends no model-run check to a proof plugin | The contract and its conformance test: [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330, continued by C1 in #377). The flow and the plugin: M6 slice 5c, tasks C3 ([#375](https://github.com/FieldmouseWorks/Conary/issues/375)) and P ([m6-plugins.md](m6-plugins.md)). wend's model-run check: [#315](https://github.com/FieldmouseWorks/Conary/issues/315) |
-| `degraded-counts-as-failed` | A degraded outcome (a fallback taken, a cache or evidence lookup that half-worked, an unreadable record read conservatively) is recorded as an op naming what degraded, and counts as its check's failure, never as a pass. The flow's status names it | [FP5](m6-properties.md#fp5-ledger-and-flow-record-a-degraded-outcome-and-count-it-failed) |
+| `degraded-counts-as-failed` | A degraded outcome (a fallback taken, a cache or evidence lookup that half-worked, an unreadable record read conservatively) is recorded as an op naming what degraded, and counts as its check's failure, never as a pass. The flow's status names it. The op is [section 4.6](#46-op-log)'s; the flow's paths are [flow.md](flow.md#degraded-paths)'s | [FP5](m6-properties.md#fp5-ledger-and-flow-record-a-degraded-outcome-and-count-it-failed) |
 | `spenders-off-by-default` | Every setting that starts paid work (a plugin, an admission like a drain, proof slots) defaults to off or zero, and a test holds every such default to that. M7's setup path turns each on explicitly | [#378](https://github.com/FieldmouseWorks/Conary/issues/378) (landed in #381), held through the schema by [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions), M7's setup path ([below](#m7s-setup-path)) |
 | `one-settings-source` | Conary's settings publish a self-describing schema: each setting's name, type, allowed values, default, description, and whether it's live. A settings source such as [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) imports it rather than declaring it again; a machine's configuration is generated from that source or written by hand against the schema, and nothing reads a setting the schema doesn't declare | [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) for the schema; burrow for its import and the configuration it renders ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)), which [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes; M7's setup path ([below](#m7s-setup-path)) |
 | `live-settings` | Every setting is read at the next decision, as the flow's configuration is on each pass ([flow.md](flow.md)), so changing one needs no release, restart or deploy. A setting that does need one says so in the schema, and Conary's status shows it as that exception | [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions), M7's setup path ([below](#m7s-setup-path)) |
@@ -394,7 +394,8 @@ Op {
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
            train's join, leave, candidate, candidate_evidence, verdict and
-           finish (section 4.7); undo (section 5); classify (section 4.4)
+           finish (section 4.7); undo (section 5); classify (section 4.4);
+           degraded and restored (below)
   sig:     the ledger key's signature over the id
 }
 ```
@@ -404,6 +405,20 @@ It's the source of truth: everything else is rebuilt by replaying it, and an
 op the ledger can't apply is refused before it's written. Nothing in the log
 is ever edited or deleted. A correction is a new op that supersedes the old
 one.
+
+A path that half-worked is recorded too: a `degraded` op names the change,
+its revision, what degraded (`what`: the flow's record of the change's work,
+a worker's answer with the job and the kind of work it answers for, or an
+evidence lookup that couldn't tell, with the check it was for) and `why`, a
+line of at most 200 bytes built from the failure's kind, never from text a
+file, a plugin or GitHub put in it. Whatever came through it counts as its
+check's failure, never a pass. The ledger holds a path degraded for a
+revision once: the same op again, while it lasts, is refused. A later
+`restored` op clears it when the same path works again for that revision;
+the `degraded` op stays, and the change keeps every degradation, cleared or
+not (`degradations` in `change_get`). What counts is the change's current
+revision: one degraded on an earlier revision stays as its last op left it.
+[flow.md](flow.md#degraded-paths) says which paths the flow records.
 
 The log is refused whole if any line fails its id, its signature, its
 parent or its schema, the last line included. A last line with no newline is

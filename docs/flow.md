@@ -392,6 +392,42 @@ wait at one stage before it's overdue: `high` 1800, `medium` and `low`
 7200 by default. A hold's, the train's and a Renovate automerge's own
 deadlines stay as they are. The level is in each PR's Next, as `priority`.
 
+## Degraded paths
+
+A degraded path is one that half-worked and went on without the answer it
+was for. The flow records each one it meets, through one owner
+([`flow::degraded`](../crates/conary-github/src/flow/degraded.rs)), as the
+ledger's `degraded` op ([DESIGN 4.6](DESIGN.md#46-op-log)), counts it as its
+check's failure, and names it in the PR's decision as `degraded`: each
+entry's `path`, what it names, and `why`. Left out when there are none. The
+paths it records:
+
+- **A record that doesn't read** (`record`). Every pass reads each open PR's
+  record, so a targeted kick meets every PR's too. That PR's workers are
+  taken as holding every proof slot, and a PR waiting on one says whose
+  work it is. Its own decision waits, naming it, and nothing acts for it or
+  writes over the record.
+- **A worker's answer that doesn't read** (`answer`, with its `job` and the
+  `kind` of work). The worker is taken as still running, and holding its
+  slot if it's a proof. The PR's decision waits on it, unless it's stopping
+  work.
+- **An evidence lookup that can't tell** (`lookup`, with its `check`): a
+  read of GitHub that a landing's attested evidence needed didn't answer.
+  The landing isn't granted, and the PR waits at the proof stage. A lookup
+  that told no is no degradation: it's the check's own answer.
+
+A pass records each path once while it lasts, against the PR's revision as
+the ledger has it, and appends `restored` when the same path works again: a
+record or answer the next pass reads, a lookup that tells. A PR the ledger
+hasn't seen has nothing to record against, and its decision still names
+what degraded. A dry run records nothing and names the same. A decision
+names a lookup the ledger still holds degraded until it's looked up again.
+
+`cn flow status` lists every open PR's degraded paths as `degraded`, each
+with its `pr`: a record or answer that doesn't read now, read from the data
+directory, and what its last decision named. A record it can't read is
+listed, not an error.
+
 ## Effects and retries
 
 The executor revokes previous permission before cosmetic stage-label writes.
