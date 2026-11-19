@@ -115,16 +115,16 @@ id = "one-settings-source"
 lesson = "Settings have one self-describing schema that a settings source imports and every reader loads; no part keeps its own copy."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
 applies = ["flow settings", "M6 slice 5d", "M7 standalone setup"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#61-execution-choices-and-independent-judging", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/flow.md#the-settings-schema", "crates/conary-github/src/flow/schema.rs", "crates/conary-github/tests/flow_settings.rs", "https://github.com/FieldmouseWorks/Conary/issues/428"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#61-execution-choices-and-independent-judging", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/flow.md#the-settings-schema", "crates/conary-github/src/flow/schema.rs", "crates/conary-github/tests/flow_settings.rs", "crates/cn/tests/flow_settings.rs"]
 
 [[lessons]]
 id = "live-settings"
 lesson = "Every setting is live, read at the next decision; one that needs a deploy or restart says so, visibly."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/655"]
 applies = ["flow settings", "conaryd", "M6 slice 5d", "M7 standalone setup"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/flow.md", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/conaryd.md#verified-flow-events", "crates/conary-github/src/events/runtime.rs", "crates/conary-github/tests/flow_settings.rs", "https://github.com/FieldmouseWorks/Conary/issues/428"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/flow.md", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/DESIGN.md#m7s-setup-path", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/313", "docs/conaryd.md#verified-flow-events", "docs/gate-reuse.md#running-it", "crates/conary-github/src/flow/schema.rs", "crates/conary-github/tests/flow_settings.rs", "crates/conaryd/tests/gate_reuse.rs"]
 
 [[lessons]]
 id = "explicit-priority"

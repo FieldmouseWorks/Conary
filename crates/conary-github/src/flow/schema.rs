@@ -1,5 +1,6 @@
-//! The published schema of the flow's configuration ([`super::Config`]) and
-//! conaryd's events configuration ([`crate::events::Runtime`]), as
+//! The published schema of the flow's configuration ([`super::Config`]),
+//! conaryd's events configuration ([`crate::events::Runtime`]) and its
+//! gate-reuse configuration ([`crate::reuse::Settings`]), as
 //! `cn flow settings --schema` prints it. It's generated from the types their
 //! loaders parse, so no option exists without its entry, and [`of`] holds
 //! every entry to what the schema promises its readers.
@@ -15,6 +16,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 /// The flow configuration's schema.
 pub fn flow() -> Result<Value> {
@@ -23,6 +26,10 @@ pub fn flow() -> Result<Value> {
 /// conaryd's events configuration's schema.
 pub fn events() -> Result<Value> {
     of::<crate::events::Runtime>()
+}
+/// conaryd's gate-reuse configuration's schema.
+pub fn reuse() -> Result<Value> {
+    of::<crate::reuse::Settings>()
 }
 
 /// `T`'s schema, with every option's `x-live` said and its description on
@@ -146,6 +153,78 @@ pub fn restart_only<T: JsonSchema>() -> Vec<String> {
         .filter(|(_, option)| option["x-live"] == Value::Bool(false))
         .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// A configuration file as a running daemon reads it: again at each
+/// decision, with the options the schema declares `x-live: false` kept as
+/// the daemon started with them. A change to one of those waits for a
+/// restart, and is logged once, by its name.
+pub struct Live<T> {
+    path: PathBuf,
+    /// The started configuration, as its loader writes it.
+    started: Value,
+    value: T,
+    /// The options the schema declares `x-live: false`.
+    restart: Vec<String>,
+    waiting: Mutex<Vec<String>>,
+}
+impl<T: JsonSchema + Serialize + DeserializeOwned> Live<T> {
+    pub fn open(path: &Path) -> Result<Self> {
+        let (value, _) = load::<T>(&std::fs::read(path)?)?;
+        Ok(Self {
+            path: path.into(),
+            started: serde_json::to_value(&value)?,
+            value,
+            restart: restart_only::<T>(),
+            waiting: Mutex::default(),
+        })
+    }
+    /// The configuration the daemon started with.
+    pub fn started(&self) -> &T {
+        &self.value
+    }
+    /// The configuration now: the file as it reads, but for the options
+    /// that take effect only at a restart.
+    pub fn read(&self) -> Result<T> {
+        // Both read by the one loader, and compared as it writes them, so
+        // neither a duplicate key nor another spelling of a value counts.
+        let (now, _) = load::<T>(&std::fs::read(&self.path)?)?;
+        let mut now = serde_json::to_value(now)?;
+        let mut waiting = Vec::new();
+        if let Some(fields) = now.as_object_mut() {
+            for name in &self.restart {
+                let started = self.started.get(name);
+                if fields.get(name) != started {
+                    waiting.push(name.clone());
+                }
+                match started {
+                    Some(value) => fields.insert(name.clone(), value.clone()),
+                    None => fields.remove(name),
+                };
+            }
+        }
+        let value = serde_json::from_value(now)?;
+        let mut noted = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        if *noted != waiting {
+            if !waiting.is_empty() {
+                eprintln!(
+                    "conaryd: {} changed in {}: conaryd keeps what it started with until it restarts",
+                    waiting.join(", "),
+                    self.path.display()
+                );
+            }
+            *noted = waiting;
+        }
+        Ok(value)
+    }
+    /// The options changed in the file that wait for a restart, as the last
+    /// read saw them.
+    pub fn waiting(&self) -> Vec<String> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// Where an option's value came from.

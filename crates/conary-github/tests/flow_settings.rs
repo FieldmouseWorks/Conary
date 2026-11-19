@@ -1,8 +1,10 @@
 //! The configuration's published schema (`flow::schema`), and the options it
-//! says are live taking effect at the next decision that reads them.
+//! says are live taking effect at the next decision that reads them, in each
+//! of the three files: the flow's, and conaryd's events and gate-reuse ones.
 use conary_github::events::{Live, Queue, Receiver, Runtime};
 use conary_github::flow::schema::{self, From};
 use conary_github::flow::{Config, Settings};
+use conary_github::reuse;
 use ring::hmac;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -93,6 +95,13 @@ fn every_option_has_an_entry_and_one_without_fails() {
         "the default is the loader's"
     );
     assert!(events["properties"]["listen"]["x-needs"].is_string());
+    let reuse = schema::reuse().unwrap();
+    assert!(reuse["properties"]["listen"]["x-needs"].is_string());
+    assert_eq!(
+        reuse["properties"].as_object().unwrap().len(),
+        7,
+        "every field of reuse::Settings is in the schema"
+    );
 
     let unsaid = schema::of::<grown::Unsaid>().unwrap_err().to_string();
     assert!(unsaid.contains("drain has no description"), "{unsaid}");
@@ -112,7 +121,8 @@ fn every_spender_defaults_off_and_a_new_one_that_starts_on_fails() {
     let mut spenders = Vec::new();
     let flow = schema::flow().unwrap();
     let events = schema::events().unwrap();
-    for schema in [&flow, &events] {
+    let reuse = schema::reuse().unwrap();
+    for schema in [&flow, &events, &reuse] {
         let structs = std::iter::once(("", schema))
             .chain(
                 schema["$defs"]
@@ -271,6 +281,55 @@ fn only_a_restart_only_option_keeps_its_started_value() {
         .map(|(n, _)| n.as_str())
         .collect();
     assert_eq!(restart, ["data", "listen", "secret_path"]);
+}
+
+/// conaryd read its gate-reuse configuration once, as it started. Now each
+/// option the schema says is live changes what a running daemon reads at the
+/// next lookup, and `listen`, the one it says isn't, keeps the started
+/// address and waits, named, for a restart.
+#[test]
+fn only_listen_of_the_gate_reuse_configuration_keeps_its_started_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate-reuse.json");
+    let mut config = json!({
+        "listen": "127.0.0.1:8091",
+        "repos": ["o/r"],
+        "token_command": "conary-token",
+        "signer": "o/ci/.github/workflows/gate.yml",
+    });
+    std::fs::write(&path, config.to_string()).unwrap();
+    let live = schema::Live::<reuse::Settings>::open(&path).unwrap();
+    let started = serde_json::to_value(live.started()).unwrap();
+    let schema = schema::reuse().unwrap();
+    let options = schema["properties"].as_object().unwrap();
+    for (name, option) in options {
+        let other = match name.as_str() {
+            "listen" => json!("127.0.0.1:1"),
+            "repos" => json!(["x/y"]),
+            "token_command" => json!("other"),
+            "signer" => json!("x/ci/.github/workflows/other.yml"),
+            "fresh" => json!("fresh-"),
+            "api" | "server" => json!("http://other"),
+            _ => panic!("{name}: give it another value here"),
+        };
+        config[name] = other.clone();
+        std::fs::write(&path, config.to_string()).unwrap();
+        let read = serde_json::to_value(live.read().unwrap()).unwrap();
+        if option["x-live"] == json!(true) {
+            assert_eq!(read[name], other, "{name} is live");
+            assert!(live.waiting().is_empty(), "{name}");
+        } else {
+            assert_eq!(read[name], started[name], "{name} waits for a restart");
+            assert_eq!(live.waiting(), std::slice::from_ref(name));
+        }
+        config[name] = started[name].clone();
+    }
+    let restart: Vec<_> = options
+        .iter()
+        .filter(|(_, o)| o["x-live"] == json!(false))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(restart, ["listen"]);
 }
 
 #[test]

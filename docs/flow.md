@@ -100,9 +100,10 @@ GitHub authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or
 
 ## The settings schema
 
-`cn flow settings --schema` prints the JSON Schema of this file (`flow`) and
+`cn flow settings --schema` prints the JSON Schema of this file (`flow`),
 of conaryd's [events configuration](conaryd.md#verified-flow-events)
-(`events`). `flow::schema` generates it from the types the loaders parse,
+(`events`) and of its [gate-reuse configuration](gate-reuse.md#running-it)
+(`gate_reuse`). `flow::schema` generates it from the types the loaders parse,
 so an option can't exist without its entry. Each option has its type,
 allowed values, default and a one-line description, and says three things
 more:
@@ -112,7 +113,7 @@ more:
 - `x-live`: whether a change takes effect at the next decision that reads
   it. Every option of this file is live. One that isn't says in `x-needs`
   what a change needs, and why.
-- `x-secret`: the seal keys, and conaryd's token command, whose arguments
+- `x-secret`: the seal keys, and conaryd's token commands, whose arguments
   may carry a credential. Conary never prints their values.
 
 Every reader loads a file through `flow::schema::load`: typed, so a
@@ -125,7 +126,9 @@ and whether the file or the default set it. The options of each section,
 of a set `evidence` and of each `execution` entry are listed one by one.
 `--events-config PATH` (`CONARY_EVENTS_CONFIG`) does the same for conaryd's
 file, with the options that take effect only at a restart listed apart,
-under `not_live`. `--schema` reads neither file. A settings source, such as
+under `not_live`, and `--gate-reuse-config PATH`
+(`CONARY_GATE_REUSE_CONFIG`) for its gate-reuse file. `--schema` reads
+none of them. A settings source, such as
 burrow's, imports this schema rather than declaring the options again.
 
 ## Person approval

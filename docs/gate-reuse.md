@@ -114,6 +114,15 @@ are refused:
 - `api` and `server`: GitHub's API root and web root, github.com's when
   left out.
 
+conaryd reads the file again at each lookup, so a change to any option but
+`listen` takes effect at the next one. `listen` keeps the address conaryd
+bound as it started: a change to it is logged once, by its name, as
+waiting for a restart. While the file doesn't read, every lookup is
+refused with 503, its reason in conaryd's log, and the gate runs. The
+[settings schema](flow.md#the-settings-schema) declares each option
+(`gate_reuse`), and `cn flow settings --gate-reuse-config PATH` lists a
+file's.
+
 It reads the ledger conaryd serves, for the trains' candidates. Without
 the option, no listener starts. A caller's workflow then names the
 lookup's external URL as its `gate-reuse-lookup`, with `gate-reuse` on.

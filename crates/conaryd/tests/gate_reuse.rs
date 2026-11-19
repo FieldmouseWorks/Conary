@@ -203,4 +203,35 @@ fn conaryd_answers_lookups_from_the_machines_configuration() {
     assert!(refused(Some("Bearer x"), &request("example/other")).starts_with("HTTP/1.1 403"));
     assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 401"));
     assert!(daemon.0.try_wait().unwrap().is_none());
+
+    // The configuration is read again at each lookup: another repository
+    // listed is answered for at once, while a new address waits for a
+    // restart and the started one keeps answering.
+    let mut changed = config.clone();
+    changed["repos"] = json!(["example/project", "example/other"]);
+    changed["listen"] = json!(nothing.to_string());
+    std::fs::write(root.join("gate-reuse.json"), changed.to_string()).unwrap();
+    assert!(refused(None, &request("example/other")).starts_with("HTTP/1.1 401"));
+    // A file that doesn't read trusts no one: the gate runs.
+    std::fs::write(root.join("gate-reuse.json"), b"{").unwrap();
+    assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 503"));
+    std::fs::write(root.join("gate-reuse.json"), config.to_string()).unwrap();
+    assert!(refused(Some("Bearer x"), &request("example/other")).starts_with("HTTP/1.1 403"));
+    assert!(daemon.0.try_wait().unwrap().is_none());
+
+    daemon.0.kill().unwrap();
+    daemon.0.wait().unwrap();
+    let mut err = String::new();
+    daemon
+        .0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut err)
+        .unwrap();
+    assert!(
+        err.contains("listen changed in") && err.contains("until it restarts"),
+        "{err}"
+    );
+    assert!(!err.contains("echo token"), "{err}");
 }

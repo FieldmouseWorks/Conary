@@ -6,6 +6,8 @@
 //! attested pass"). It only reads: an answer is never recorded.
 
 use std::collections::BTreeSet;
+use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -14,6 +16,7 @@ use sha2::{Digest, Sha256};
 use conary_core::ledger::Ledger;
 use conary_core::op::Repo;
 
+use crate::Api;
 use crate::api::{ApiError, CheckRun, Source};
 use crate::attest::{self, Signer, Subject, Trust, attested, gated};
 use crate::train::Forge;
@@ -506,24 +509,45 @@ fn pass(
 }
 
 /// The machine's configuration file for the lookup, as conaryd reads it
-/// (`docs/gate-reuse.md`).
-#[derive(Debug, Clone, Deserialize)]
+/// (`docs/gate-reuse.md`). A running daemon reads it again at each lookup
+/// ([`Lookup`]), so every option but `listen` takes effect at the next one.
+/// None of them starts paid work: a hit saves a gate's run, and anything
+/// else runs the gate as it would without the lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     /// Where it listens for requests, behind TLS termination.
+    #[schemars(extend(
+        "x-spender" = false,
+        "x-live" = false,
+        "x-needs" = "a restart of conaryd: it binds the address once, as it starts"
+    ))]
     pub listen: std::net::SocketAddr,
+    /// The repositories it answers for, as `OWNER/REPO`. Any other is
+    /// refused.
+    #[schemars(extend("x-spender" = false))]
     pub repos: Vec<String>,
-    /// The program that prints a repository's GitHub token, as `cn`'s.
+    /// The program that prints a repository's GitHub token, as `cn`'s, run
+    /// without a shell. Its arguments may carry a credential, so its value is
+    /// never printed.
+    #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub token_command: String,
-    /// The signer workflow, `owner/repo/.github/workflows/FILE`.
+    /// The signer workflow whose attestations count, as the train's,
+    /// `OWNER/REPO/.github/workflows/FILE`.
+    #[schemars(extend("x-spender" = false))]
     pub signer: String,
-    /// What fresh self-hosted runners' names start with; none counts
-    /// GitHub's hosted runners alone.
+    /// What the names of self-hosted runners started fresh for one job start
+    /// with, as the train's; `null` counts GitHub's hosted runners alone.
     #[serde(default)]
+    #[schemars(extend("x-spender" = false))]
     pub fresh: Option<String>,
+    /// The GitHub API root.
     #[serde(default = "api")]
+    #[schemars(extend("x-spender" = false))]
     pub api: String,
+    /// GitHub's web root, which a hit's run is named under.
     #[serde(default = "server")]
+    #[schemars(extend("x-spender" = false))]
     pub server: String,
 }
 
@@ -552,6 +576,82 @@ impl Settings {
             },
             server: self.server.clone(),
         })
+    }
+}
+
+/// The lookup as conaryd runs it: its configuration file read again at
+/// each request, but for `listen`, which keeps the address it bound.
+pub struct Lookup {
+    settings: crate::flow::schema::Live<Settings>,
+    /// The API the last request read GitHub through, kept while its root
+    /// and token command stay the same, so its tokens and GitHub's keys are
+    /// read once rather than at each request.
+    api: Mutex<Option<(String, String, Arc<Api>)>>,
+}
+
+impl Lookup {
+    /// The lookup configured by the file at `path`, read as it is now. A
+    /// file that doesn't read, or whose options don't, is refused here, so a
+    /// daemon never starts on one.
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let settings =
+            crate::flow::schema::Live::<Settings>::open(path).map_err(|e| e.to_string())?;
+        let lookup = Self {
+            settings,
+            api: Mutex::default(),
+        };
+        lookup.configured(lookup.settings.started().clone())?;
+        Ok(lookup)
+    }
+
+    /// The configuration conaryd started with: its `listen` is the one it
+    /// binds.
+    pub fn started(&self) -> &Settings {
+        self.settings.started()
+    }
+
+    /// The answer to a request, as [`answer`] gives it, under the
+    /// configuration as it reads now. When that doesn't read, nothing is
+    /// trusted, so the request is refused with 503 and the gate runs; the
+    /// reason goes to conaryd's log, never to the requester.
+    pub fn answer(
+        &self,
+        ledger: Result<&Ledger, String>,
+        now: i64,
+        authorization: Option<&str>,
+        body: &[u8],
+    ) -> Reply {
+        let read = self
+            .settings
+            .read()
+            .map_err(|e| e.to_string())
+            .and_then(|settings| self.configured(settings));
+        match read {
+            Ok((config, api)) => answer(&*api, &*api, ledger, &config, now, authorization, body),
+            Err(e) => {
+                eprintln!(
+                    "conaryd: the gate-reuse configuration doesn't read, so lookups are refused: {e}"
+                );
+                Reply::refused(503, "the lookup's configuration doesn't read")
+            }
+        }
+    }
+
+    /// `settings`' configuration, and the API to read GitHub through: the
+    /// last one, unless its root or token command changed.
+    fn configured(&self, settings: Settings) -> Result<(Config, Arc<Api>), String> {
+        let config = settings.config()?;
+        let mut kept = self.api.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((root, command, api)) = &*kept
+            && *root == settings.api
+            && *command == settings.token_command
+        {
+            return Ok((config, Arc::clone(api)));
+        }
+        let tokens = crate::Tokens::command(&settings.token_command).map_err(|e| e.to_string())?;
+        let api = Arc::new(Api::new(&settings.api, tokens));
+        *kept = Some((settings.api, settings.token_command, Arc::clone(&api)));
+        Ok((config, api))
     }
 }
 

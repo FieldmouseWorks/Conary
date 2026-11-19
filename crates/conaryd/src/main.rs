@@ -83,18 +83,13 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Starts the gate-reuse lookup's listener, reading the ledger with
-/// `reader`, its own.
+/// `reader`, its own. The configuration is read again at each lookup, but
+/// for the address it binds here.
 fn gate_reuse(path: &std::path::Path, reader: Reader) -> Result<(), Box<dyn std::error::Error>> {
-    use conary_github::reuse::{Settings, answer};
     use std::sync::{Mutex, PoisonError};
-    let settings: Settings = serde_json::from_slice(&std::fs::read(path)?)?;
-    let config = settings.config()?;
-    let api = conary_github::Api::new(
-        &settings.api,
-        conary_github::Tokens::command(&settings.token_command)?,
-    );
+    let lookup = conary_github::reuse::Lookup::open(path)?;
     let reader = Mutex::new(reader);
-    let listener = std::net::TcpListener::bind(settings.listen)?;
+    let listener = std::net::TcpListener::bind(lookup.started().listen)?;
     std::thread::Builder::new().spawn(move || {
         let served = conaryd::reuse::serve(listener, move |authorization, body| {
             let ledger = reader
@@ -106,7 +101,7 @@ fn gate_reuse(path: &std::path::Path, reader: Reader) -> Result<(), Box<dyn std:
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
             let ledger = ledger.as_deref().map_err(Clone::clone);
-            answer(&api, &api, ledger, &config, now, authorization, body)
+            lookup.answer(ledger, now, authorization, body)
         });
         if served.is_err() {
             eprintln!("conaryd: gate-reuse listener stopped");
