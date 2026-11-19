@@ -287,3 +287,26 @@ fn landing_switches_hold_the_step_they_keep_off() {
         ["no_people"]
     );
 }
+
+/// A held PR is read in full, so its hold can say what it keeps off. A
+/// read that fails doesn't keep the hold from stopping its work: the label
+/// the open list shows does.
+#[test]
+fn a_hold_stops_its_work_when_its_read_fails() {
+    use crate::sim::Call;
+    let c = super::flow_pass_slots::two(1);
+    let now = jobs::now();
+    super::flow_pass_slots::prepared(&c, now, true);
+    c.pass(now + 1, false);
+    let proof =
+        super::flow_pass_slots::work(&c, 3, |p| matches!(p, jobs::Purpose::Proof)).remove(0);
+    c.hub.label(REPO, 3, &["hold"]);
+    c.hub.fail(Call::Pull.pr(3));
+    c.hub.fail(Call::Reviews.pr(3));
+    let reports = c.pass(now + 2, false);
+    assert!(reports[0].error.is_some(), "{:?}", reports[0]);
+    assert_eq!(
+        std::fs::read(proof.path.with_extension("cancel")).unwrap(),
+        b"held\n"
+    );
+}

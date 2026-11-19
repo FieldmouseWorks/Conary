@@ -349,7 +349,8 @@ landing step. The PR's `description` stays the one its decision gives.
 
 A held PR is read as fully as any other, so its decision can say what the
 hold keeps off. The hold still decides it ahead of everything but what an
-owner must hear of first, as before.
+owner must hear of first, as before, and a read that fails doesn't keep it
+from stopping the PR's work: the label the open list shows does.
 
 ```console
 cn flow status OWNER/REPO --config flow.json
