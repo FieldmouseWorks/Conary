@@ -11,27 +11,27 @@
         ]
       },
       "locked": {
-        "lastModified": 1794871095,
-        "narHash": "sha256-1QNTVnZjUNxO8SN480Lnu5T+X/jQgITZkbUmOUjGy10=",
+        "lastModified": 1795076527,
+        "narHash": "sha256-HDB8rYt2bnoaqtxsjQ0w+fvRMa6qQ5qMFDzbSZOfql0=",
         "ref": "main",
-        "rev": "61c1e8cd945f6a9093aa23a2ced76b1d49432d6a",
-        "revCount": 712,
+        "rev": "2cf299975265516d33c7f60fe1799c65297f9566",
+        "revCount": 729,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
       "original": {
         "ref": "main",
-        "rev": "61c1e8cd945f6a9093aa23a2ced76b1d49432d6a",
+        "rev": "2cf299975265516d33c7f60fe1799c65297f9566",
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       }
     },
     "crane": {
       "locked": {
-        "lastModified": 1793836618,
-        "narHash": "sha256-TREenflwEjxOSq292FYwbc3kEm7TDRtXCZRNWEdjBmg=",
+        "lastModified": 1794962885,
+        "narHash": "sha256-zrweT2tXbcWiJMACOhOr2eYFJKVa6g59ouRaZ3BS5Do=",
         "ref": "refs/heads/master",
-        "rev": "79fd63528501446749c09f08cad486a58c7d173e",
+        "rev": "95e62def851e9d650f0eab63cb4f59a3306e20bd",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/ipetkov/crane"
@@ -51,10 +51,10 @@
         "spectrum": "spectrum"
       },
       "locked": {
-        "lastModified": 1793281488,
-        "narHash": "sha256-ErGIqtoWEX9KKC8NFtJDx2pGGG02Cr6LGxrvzLd2sqA=",
+        "lastModified": 1794529892,
+        "narHash": "sha256-m5iXk3ILiCuRpCgqYWNiGVFmu8YLh2FNxxaZj/Auc10=",
         "ref": "refs/heads/main",
-        "rev": "b7bd556974fa8a171b5b639200e81d52244dfde4",
+        "rev": "194a254693f49af939a2b53d04982bd4b276fdb3",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/microvm-nix/microvm.nix"
@@ -67,10 +67,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1794165970,
-        "narHash": "sha256-XuAV2cUwaod3Bt4XFVqiXz3v1w2ex16W6Sv4S7EWres=",
+        "lastModified": 1794872590,
+        "narHash": "sha256-E+XLAfnC7+bdr4qlEgRv6cdGmiqTU5oeFNKCha7epqQ=",
         "ref": "nixos-26.05",
-        "rev": "ac588ef1c914865dad517b337ea0eb9694a4021c",
+        "rev": "f68407657ad294471eb4b2e65d193df26edf729f",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
@@ -84,10 +84,10 @@
     },
     "nixpkgs-unstable": {
       "locked": {
-        "lastModified": 1794192123,
-        "narHash": "sha256-SvB8u5qaJAOwZZyZciqTVOg/rBoUs2w0sFTU6ED51AQ=",
+        "lastModified": 1794890597,
+        "narHash": "sha256-lME2lHoDHAaSHP3/okgiVoJ0icVEvsQH8LeU3We7tcc=",
         "ref": "nixos-unstable",
-        "rev": "177d0540942fb205af6993b1d5fa0b57799e09f8",
+        "rev": "04906337b6d53e8bb0eaf0470ae9f070a4d4eb55",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
