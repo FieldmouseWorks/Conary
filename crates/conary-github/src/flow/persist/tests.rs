@@ -25,6 +25,9 @@ fn canonical_record() -> Value {
             *word = json!(verdict.word());
         }
     }
+    // A decision saved before it carried its priority level reads as the
+    // default level's.
+    value["decision"]["priority"] = json!("medium");
     value
 }
 

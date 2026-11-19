@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{FixClaim, ProofData, ProofPlan, SealKey, TrainState, Unposted};
+use super::{
+    FixClaim, Level, ProofData, ProofPlan, Rank, SealKey, StallAfter, TrainState, Unposted,
+};
 use conary_core::policy::Classified;
 use serde::{Deserialize, Serialize};
 
@@ -414,9 +416,13 @@ pub struct Settings {
     /// The label that holds a PR.
     #[schemars(extend("x-spender" = false))]
     pub hold_label: String,
-    /// The label that puts a PR's proof ahead of those without it.
+    /// The priority level each label gives the PR it's on. A PR with labels
+    /// of more than one level takes the highest.
     #[schemars(extend("x-spender" = false))]
-    pub first_label: String,
+    pub priority_labels: BTreeMap<String, Level>,
+    /// The priority level of a PR with none of `priority_labels`.
+    #[schemars(extend("x-spender" = false))]
+    pub default_priority: Level,
     /// The label that hands a PR to its owner. None set, what the owner
     /// decides waits unlisted.
     #[schemars(extend("x-spender" = false))]
@@ -444,9 +450,10 @@ pub struct Settings {
     /// Review rounds before a PR that still has findings goes past the limit.
     #[schemars(extend("x-spender" = false))]
     pub rounds: u32,
-    /// Seconds a PR may wait at one stage before it's overdue.
+    /// Seconds a PR may wait at one stage before it's overdue, by its
+    /// priority level.
     #[schemars(extend("x-spender" = false))]
-    pub stall_after: u64,
+    pub stall_after: StallAfter,
     /// Seconds a held PR may wait before it's overdue.
     #[schemars(extend("x-spender" = false))]
     pub hold_stall_after: u64,
@@ -503,7 +510,12 @@ impl Default for Settings {
             renovate_login: None,
             batch_label: "upstream batch".into(),
             hold_label: "hold".into(),
-            first_label: "first".into(),
+            priority_labels: BTreeMap::from([
+                ("priority: high".into(), Level::High),
+                ("priority: medium".into(), Level::Medium),
+                ("priority: low".into(), Level::Low),
+            ]),
+            default_priority: Level::Medium,
             owner_label: None,
             people: BTreeSet::new(),
             require_ci: true,
@@ -512,7 +524,7 @@ impl Default for Settings {
             handoff_after: 1800,
             session_handoff_after: 7200,
             rounds: 5,
-            stall_after: 7200,
+            stall_after: StallAfter::default(),
             hold_stall_after: 28800,
             train_stall_after: 7200,
             renovate_merge_after: 7200,
@@ -613,7 +625,8 @@ pub struct Facts {
     pub timeline_cut_at: Option<u64>,
     pub stacked_on: Option<u64>,
     pub open_prs: BTreeSet<u64>,
-    pub first_prs: BTreeSet<u64>,
+    /// Where each open PR stands in line for a proof slot.
+    pub queue: BTreeMap<u64, Rank>,
     pub base_held: bool,
     pub queued_merge: bool,
     pub train: TrainState,
@@ -631,6 +644,15 @@ pub struct Facts {
     pub succeeded: BTreeSet<Failure>,
 }
 impl Facts {
+    /// This PR's place in line, by its own labels and age.
+    pub fn rank(&self) -> Rank {
+        Rank::new(
+            &self.settings,
+            self.labels.iter().map(String::as_str),
+            self.created_at,
+            self.number,
+        )
+    }
     /// [`super::judging_context`] over what this read saw on GitHub: what a
     /// judge asked now reads, and what a pass or owner verdict must have
     /// read to count. [`super::read_judging_context`] reads the same.
@@ -786,4 +808,8 @@ pub struct Next {
     /// when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub switches: Vec<super::Holding>,
+    /// The PR's priority level, which orders its proof slot and train
+    /// admission and sizes its stall deadline.
+    #[serde(default)]
+    pub priority: Level,
 }

@@ -2,7 +2,7 @@
 //! goes on, other repos advance, and the failed repo's kicks and bookings
 //! wait for its retry, across restarts too.
 use crate::events::{Kick, Queue, Ran, Recovery};
-use crate::flow::{Next, Report, Stage, Step};
+use crate::flow::{Level, Next, Report, Stage, Step};
 use std::cell::Cell;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ fn booked(at: u64) -> Report {
             on_usage: false,
             owner_notice: None,
             switches: vec![],
+            priority: Level::Medium,
         }),
         error: None,
         owner_approval: None,

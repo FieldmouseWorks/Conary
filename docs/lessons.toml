@@ -131,8 +131,8 @@ id = "explicit-priority"
 lesson = "Work goes in order of explicit priority, then age, never by a binary first flag or by accident."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/652", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow", "train", "M6 slice 5d", "flow proofs"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port", "docs/flow.md#priority", "crates/conary-github/src/sim/tests/flow_priority.rs", "crates/conary-github/src/sim/tests/flow_slots.rs"]
 
 [[lessons]]
 id = "one-question-per-decision"

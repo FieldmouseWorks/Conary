@@ -15,29 +15,34 @@ pub(super) fn two(slots: u32) -> Case {
         .insert("machine".into(), Recipe::Run(vec!["check".into()]));
     c.config.plugins.proof = Some(example());
     c.clean_review();
-    c.hub.pr(REPO, 5, &head(5));
-    c.hub.edit_pull(REPO, 5, |p| {
+    c.hub
+        .post_status(&head(3), json!({"context":"machine","state":"pending"}));
+    another(&c, 5);
+    c
+}
+/// PR `n` beside PR 3, opened at the same time, reviewed clean on a green
+/// head, its machine check pending.
+pub(super) fn another(c: &Case, n: u64) {
+    c.hub.pr(REPO, n, &head(n));
+    c.hub.edit_pull(REPO, n, |p| {
         p["user"]["login"] = json!("owner");
         p["created_at"] = json!("2099-01-01T00:00:00Z");
     });
     let mut snapshot = c.hub.snapshot(REPO, 3).unwrap();
-    snapshot.revision = Revision::from(&c.hub.pull(REPO, 5).unwrap());
-    c.hub.flow_snapshot(REPO, 5, snapshot);
-    c.good_ci(&head(5));
-    c.hub.flow_review(REPO, 5, "reviewer", Verdict::Clean, 0);
-    let r = c.hub.reviews(REPO, 5).unwrap().pop().unwrap();
+    snapshot.revision = Revision::from(&c.hub.pull(REPO, n).unwrap());
+    c.hub.flow_snapshot(REPO, n, snapshot);
+    c.good_ci(&head(n));
+    c.hub.flow_review(REPO, n, "reviewer", Verdict::Clean, 0);
+    let r = c.hub.reviews(REPO, n).unwrap().pop().unwrap();
     c.sign_check(
-        &head(5),
+        &head(n),
         "conary/review/reviewer",
-        Some(&review_receipt(&head(5), r.body.as_deref().unwrap())),
+        Some(&review_receipt(&head(n), r.body.as_deref().unwrap())),
     );
-    for n in [3, 5] {
-        c.hub
-            .post_status(&head(n), json!({"context":"machine","state":"pending"}));
-    }
-    c
+    c.hub
+        .post_status(&head(n), json!({"context":"machine","state":"pending"}));
 }
-fn kick(c: &Case, pr: u64, dry: bool, now: u64) -> Vec<Report> {
+pub(super) fn kick(c: &Case, pr: u64, dry: bool, now: u64) -> Vec<Report> {
     Pass {
         config: &c.config,
         policy: &c.policy,
@@ -138,9 +143,9 @@ fn a_live_holder_is_not_counted_again_as_a_queued_waiter() {
     assert_eq!(c.deferred.0.borrow().len(), 2);
 }
 #[test]
-fn first_priority_is_used_before_admission_but_output_is_stable() {
+fn priority_is_used_before_admission_but_output_is_stable() {
     let c = two(1);
-    c.hub.label(REPO, 5, &["first"]);
+    c.hub.label(REPO, 5, &["priority: high"]);
     let now = crate::flow::jobs::now();
     prepared(&c, now, true);
     let report = c.pass(now + 1, true);

@@ -1,6 +1,6 @@
 //! Regression coverage for receiver review findings.
 use crate::events::{Kick, Queue, Runtime};
-use crate::flow::{Next, Report, Stage, Step};
+use crate::flow::{Level, Next, Report, Stage, Step};
 fn kick() -> Kick {
     Kick {
         repo: "o/r".into(),
@@ -25,6 +25,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
             on_usage: false,
             owner_notice: None,
             switches: vec![],
+            priority: Level::Medium,
         }),
     }
 }

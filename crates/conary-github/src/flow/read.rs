@@ -129,7 +129,7 @@ pub fn read(
         timeline_cut_at: extra.timeline_cut_at,
         stacked_on: None,
         open_prs: BTreeSet::new(),
-        first_prs: BTreeSet::new(),
+        queue: BTreeMap::new(),
         base_held: false,
         queued_merge: pull.auto_merge.is_some(),
         train: TrainState::default(),
@@ -157,14 +157,9 @@ pub fn read(
     }
     let open = source.pulls(&repository, crate::api::Pulls::Open)?;
     facts.open_prs = open.iter().map(|p| p.number).collect();
-    facts.first_prs = open
+    facts.queue = open
         .iter()
-        .filter(|p| {
-            p.labels
-                .iter()
-                .any(|l| l.name == facts.settings.first_label)
-        })
-        .map(|p| p.number)
+        .map(|p| (p.number, super::Rank::of(&facts.settings, p)))
         .collect();
     facts.stacked_on = open
         .iter()
