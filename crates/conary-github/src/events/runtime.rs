@@ -7,7 +7,6 @@ use crate::{
 use conary_core::{Policy, log, reader};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 /// conaryd's events configuration file. A running daemon reads it again at
 /// each delivery and pass, so every option but those declared `x-live: false`
@@ -81,75 +80,10 @@ fn repo_names<S: serde::Serializer>(
 }
 
 /// The events configuration as a running daemon reads it: again at each
-/// delivery and pass, with the options the schema declares `x-live: false`
-/// kept as the daemon started with them. A change to one of those waits for
-/// a restart, and is logged once, by its name.
-pub struct Live {
-    path: PathBuf,
-    /// The started configuration, as its loader writes it.
-    started: serde_json::Value,
-    runtime: Runtime,
-    /// The options the schema declares `x-live: false`.
-    restart: Vec<String>,
-    waiting: Mutex<Vec<String>>,
-}
+/// delivery and pass, but for the options the schema declares
+/// `x-live: false` ([`flow::schema::Live`]).
+pub type Live = flow::schema::Live<Runtime>;
 impl Live {
-    pub fn open(path: &Path) -> Result<Self> {
-        let (runtime, _) = flow::schema::load::<Runtime>(&std::fs::read(path)?)?;
-        Ok(Self {
-            path: path.into(),
-            started: serde_json::to_value(&runtime)?,
-            runtime,
-            restart: flow::schema::restart_only::<Runtime>(),
-            waiting: Mutex::default(),
-        })
-    }
-    /// The configuration the daemon started with.
-    pub fn started(&self) -> &Runtime {
-        &self.runtime
-    }
-    /// The configuration now: the file as it reads, but for the options
-    /// that take effect only at a restart.
-    pub fn read(&self) -> Result<Runtime> {
-        // Both read by the one loader, and compared as it writes them, so
-        // neither a duplicate key nor another spelling of a value counts.
-        let (now, _) = flow::schema::load::<Runtime>(&std::fs::read(&self.path)?)?;
-        let mut now = serde_json::to_value(now)?;
-        let mut waiting = Vec::new();
-        if let Some(fields) = now.as_object_mut() {
-            for name in &self.restart {
-                let started = self.started.get(name);
-                if fields.get(name) != started {
-                    waiting.push(name.clone());
-                }
-                match started {
-                    Some(value) => fields.insert(name.clone(), value.clone()),
-                    None => fields.remove(name),
-                };
-            }
-        }
-        let runtime = serde_json::from_value(now)?;
-        let mut noted = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
-        if *noted != waiting {
-            if !waiting.is_empty() {
-                eprintln!(
-                    "conaryd: {} changed in {}: conaryd keeps what it started with until it restarts",
-                    waiting.join(", "),
-                    self.path.display()
-                );
-            }
-            *noted = waiting;
-        }
-        Ok(runtime)
-    }
-    /// The options changed in the file that wait for a restart, as the last
-    /// read saw them.
-    pub fn waiting(&self) -> Vec<String> {
-        self.waiting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
     /// The repositories listed now, as the receiver takes them.
     pub fn repos(&self) -> Result<Vec<String>> {
         Ok(self.read()?.repos.iter().map(ToString::to_string).collect())
@@ -181,7 +115,7 @@ impl Live {
         ledger: &Path,
         queue: &std::sync::Arc<Queue>,
     ) -> Result<std::convert::Infallible> {
-        self.runtime.restart(queue)?;
+        self.started().restart(queue)?;
         queue.work(
             |work| self.work(ledger, work, queue),
             |repo, recovery| {

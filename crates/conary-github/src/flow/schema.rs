@@ -1,5 +1,6 @@
-//! The published schema of the flow's configuration ([`super::Config`]) and
-//! conaryd's events configuration ([`crate::events::Runtime`]), as
+//! The published schema of the flow's configuration ([`super::Config`]),
+//! conaryd's events configuration ([`crate::events::Runtime`]) and its
+//! gate-reuse configuration ([`crate::reuse::Settings`]), as
 //! `cn flow settings --schema` prints it. It's generated from the types their
 //! loaders parse, so no option exists without its entry, and [`of`] holds
 //! every entry to what the schema promises its readers.
@@ -15,6 +16,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 /// The flow configuration's schema.
 pub fn flow() -> Result<Value> {
@@ -23,6 +26,10 @@ pub fn flow() -> Result<Value> {
 /// conaryd's events configuration's schema.
 pub fn events() -> Result<Value> {
     of::<crate::events::Runtime>()
+}
+/// conaryd's gate-reuse configuration's schema.
+pub fn reuse() -> Result<Value> {
+    of::<crate::reuse::Settings>()
 }
 
 /// `T`'s schema, with every option's `x-live` said and its description on
@@ -148,6 +155,78 @@ pub fn restart_only<T: JsonSchema>() -> Vec<String> {
         .collect()
 }
 
+/// A configuration file as a running daemon reads it: again at each
+/// decision, with the options the schema declares `x-live: false` kept as
+/// the daemon started with them. A change to one of those waits for a
+/// restart, and is logged once, by its name.
+pub struct Live<T> {
+    path: PathBuf,
+    /// The started configuration, as its loader writes it.
+    started: Value,
+    value: T,
+    /// The options the schema declares `x-live: false`.
+    restart: Vec<String>,
+    waiting: Mutex<Vec<String>>,
+}
+impl<T: JsonSchema + Serialize + DeserializeOwned> Live<T> {
+    pub fn open(path: &Path) -> Result<Self> {
+        let (value, _) = load::<T>(&std::fs::read(path)?)?;
+        Ok(Self {
+            path: path.into(),
+            started: serde_json::to_value(&value)?,
+            value,
+            restart: restart_only::<T>(),
+            waiting: Mutex::default(),
+        })
+    }
+    /// The configuration the daemon started with.
+    pub fn started(&self) -> &T {
+        &self.value
+    }
+    /// The configuration now: the file as it reads, but for the options
+    /// that take effect only at a restart.
+    pub fn read(&self) -> Result<T> {
+        // Both read by the one loader, and compared as it writes them, so
+        // neither a duplicate key nor another spelling of a value counts.
+        let (now, _) = load::<T>(&std::fs::read(&self.path)?)?;
+        let mut now = serde_json::to_value(now)?;
+        let mut waiting = Vec::new();
+        if let Some(fields) = now.as_object_mut() {
+            for name in &self.restart {
+                let started = self.started.get(name);
+                if fields.get(name) != started {
+                    waiting.push(name.clone());
+                }
+                match started {
+                    Some(value) => fields.insert(name.clone(), value.clone()),
+                    None => fields.remove(name),
+                };
+            }
+        }
+        let value = serde_json::from_value(now).map_err(quiet)?;
+        let mut noted = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        if *noted != waiting {
+            if !waiting.is_empty() {
+                eprintln!(
+                    "conaryd: {} changed in {}: conaryd keeps what it started with until it restarts",
+                    waiting.join(", "),
+                    self.path.display()
+                );
+            }
+            *noted = waiting;
+        }
+        Ok(value)
+    }
+    /// The options changed in the file that wait for a restart, as the last
+    /// read saw them.
+    pub fn waiting(&self) -> Vec<String> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
 /// Where an option's value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,13 +257,39 @@ pub struct Listing {
 /// a duplicate or unknown key is refused, and with every struct in it
 /// written as an object, the one form the schema describes (serde would
 /// also take a struct as a positional array). Returns the file as JSON too.
+/// Its errors never quote a value: see [`quiet`].
 pub fn load<T: JsonSchema + DeserializeOwned>(file: &[u8]) -> Result<(T, Value)> {
-    let loaded: T = serde_json::from_slice(file)?;
-    let raw: Value = serde_json::from_slice(file)?;
+    let loaded: T = serde_json::from_slice(file).map_err(quiet)?;
+    let raw: Value = serde_json::from_slice(file).map_err(quiet)?;
     let schema = of::<T>()?;
     objects(&schema, &schema, &raw, "")?;
     Ok((loaded, raw))
 }
+/// Why a configuration file doesn't read, without any of its values: serde
+/// quotes a value of the wrong type or form, and a secret's value (a token
+/// command's credential) may be the one quoted, even as the whole document.
+/// So only what names the schema's own options, one missing or given twice,
+/// is said as serde says it; anything else, an option it doesn't know
+/// included (its name is the file's), is said by its kind and place.
+fn quiet(e: serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let at = format!("at line {} column {}", e.line(), e.column());
+    match e.classify() {
+        Category::Io => format!("it can't be read {at}"),
+        Category::Syntax | Category::Eof => format!("it isn't JSON {at}"),
+        Category::Data => {
+            let said = e.to_string();
+            if said.starts_with("missing field `") || said.starts_with("duplicate field `") {
+                said
+            } else if said.starts_with("unknown field `") {
+                format!("it names an option the schema doesn't declare {at}")
+            } else {
+                format!("a value isn't of the type or form its option takes {at}")
+            }
+        }
+    }
+}
+
 /// Whether each struct `raw` holds where `owner` says, at `path`, is an object.
 fn objects(schema: &Value, owner: &Value, raw: &Value, path: &str) -> Result<()> {
     let Some(fields) = raw.as_object() else {

@@ -1,8 +1,10 @@
 //! The configuration's published schema (`flow::schema`), and the options it
-//! says are live taking effect at the next decision that reads them.
+//! says are live taking effect at the next decision that reads them, in each
+//! of the three files: the flow's, and conaryd's events and gate-reuse ones.
 use conary_github::events::{Live, Queue, Receiver, Runtime};
 use conary_github::flow::schema::{self, From};
 use conary_github::flow::{Config, Settings};
+use conary_github::reuse;
 use ring::hmac;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -93,6 +95,13 @@ fn every_option_has_an_entry_and_one_without_fails() {
         "the default is the loader's"
     );
     assert!(events["properties"]["listen"]["x-needs"].is_string());
+    let reuse = schema::reuse().unwrap();
+    assert!(reuse["properties"]["listen"]["x-needs"].is_string());
+    assert_eq!(
+        reuse["properties"].as_object().unwrap().len(),
+        7,
+        "every field of reuse::Settings is in the schema"
+    );
 
     let unsaid = schema::of::<grown::Unsaid>().unwrap_err().to_string();
     assert!(unsaid.contains("drain has no description"), "{unsaid}");
@@ -112,7 +121,8 @@ fn every_spender_defaults_off_and_a_new_one_that_starts_on_fails() {
     let mut spenders = Vec::new();
     let flow = schema::flow().unwrap();
     let events = schema::events().unwrap();
-    for schema in [&flow, &events] {
+    let reuse = schema::reuse().unwrap();
+    for schema in [&flow, &events, &reuse] {
         let structs = std::iter::once(("", schema))
             .chain(
                 schema["$defs"]
@@ -271,6 +281,149 @@ fn only_a_restart_only_option_keeps_its_started_value() {
         .map(|(n, _)| n.as_str())
         .collect();
     assert_eq!(restart, ["data", "listen", "secret_path"]);
+}
+
+/// conaryd read its gate-reuse configuration once, as it started. Now each
+/// option the schema says is live changes what a running daemon reads at the
+/// next lookup, and `listen`, the one it says isn't, keeps the started
+/// address and waits, named, for a restart.
+#[test]
+fn only_listen_of_the_gate_reuse_configuration_keeps_its_started_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate-reuse.json");
+    let mut config = json!({
+        "listen": "127.0.0.1:8091",
+        "repos": ["o/r"],
+        "token_command": "conary-token",
+        "signer": "o/ci/.github/workflows/gate.yml",
+    });
+    std::fs::write(&path, config.to_string()).unwrap();
+    let live = schema::Live::<reuse::Settings>::open(&path).unwrap();
+    let started = serde_json::to_value(live.started()).unwrap();
+    let schema = schema::reuse().unwrap();
+    let options = schema["properties"].as_object().unwrap();
+    for (name, option) in options {
+        let other = match name.as_str() {
+            "listen" => json!("127.0.0.1:1"),
+            "repos" => json!(["x/y"]),
+            "token_command" => json!("other"),
+            "signer" => json!("x/ci/.github/workflows/other.yml"),
+            "fresh" => json!("fresh-"),
+            "api" | "server" => json!("http://other"),
+            _ => panic!("{name}: give it another value here"),
+        };
+        config[name] = other.clone();
+        std::fs::write(&path, config.to_string()).unwrap();
+        let read = serde_json::to_value(live.read().unwrap()).unwrap();
+        if option["x-live"] == json!(true) {
+            assert_eq!(read[name], other, "{name} is live");
+            assert!(live.waiting().is_empty(), "{name}");
+        } else {
+            assert_eq!(read[name], started[name], "{name} waits for a restart");
+            assert_eq!(live.waiting(), std::slice::from_ref(name));
+        }
+        config[name] = started[name].clone();
+    }
+    let restart: Vec<_> = options
+        .iter()
+        .filter(|(_, o)| o["x-live"] == json!(false))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(restart, ["listen"]);
+}
+
+/// A configuration that doesn't read is refused without any of its values:
+/// a token command's credential, written where it doesn't belong, even as
+/// the whole file or as an option's name, never reaches an error, so
+/// neither conaryd's log nor `cn flow settings` prints it.
+#[test]
+fn no_reader_quotes_a_value_of_a_file_it_refuses() {
+    let secret = "env KEY=hunter2 conary-token";
+    let files = [
+        json!(secret),
+        json!([secret]),
+        json!({"token_command": secret, "repos": secret}),
+        json!({"token_command": secret, "listen": secret}),
+        json!({"token_command": secret, "fresh": [secret]}),
+        json!({secret: 1}),
+        json!({"settings": {"train": secret}}),
+        json!({"settings": {secret: true}}),
+    ];
+    for file in files {
+        let bytes = file.to_string().into_bytes();
+        let errors = [
+            schema::load::<reuse::Settings>(&bytes).err(),
+            schema::load::<Runtime>(&bytes).err(),
+            schema::load::<Config>(&bytes).err(),
+            schema::effective::<reuse::Settings>(&bytes).err(),
+            schema::effective::<Runtime>(&bytes).err(),
+            schema::effective::<Config>(&bytes).err(),
+        ];
+        for error in errors {
+            let error = error.expect("refused").to_string();
+            assert!(!error.contains("hunter2"), "{file}: {error}");
+        }
+    }
+    let missing = schema::load::<reuse::Settings>(b"{}").unwrap_err();
+    assert!(
+        missing.to_string().contains("missing field `listen`"),
+        "an option the schema declares is named: {missing}"
+    );
+}
+
+/// The gate-reuse configuration's `signer` and `repos` name a workflow and
+/// repositories, and a value that doesn't parse as one is refused by the one
+/// loader, without the value: a token command's credential written there,
+/// in an otherwise good file, reaches no error, and no listing prints it, as
+/// conaryd starts, as it reads the file again, or as `cn flow settings`
+/// lists it.
+#[test]
+fn a_gate_reuse_option_that_doesnt_parse_is_refused_without_its_value() {
+    let secret = "env KEY=hunter2 conary-token";
+    let good = json!({
+        "listen": "127.0.0.1:8091",
+        "repos": ["o/r"],
+        "token_command": "conary-token",
+        "signer": "o/ci/.github/workflows/gate.yml",
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate-reuse.json");
+    std::fs::write(&path, good.to_string()).unwrap();
+    let live = schema::Live::<reuse::Settings>::open(&path).unwrap();
+    let mut bads = Vec::new();
+    for (name, value) in [
+        ("signer", json!(secret)),
+        ("signer", json!("o/ci/hunter2.yml")),
+        ("repos", json!([secret])),
+        ("repos", json!(["o/r", "hunter2"])),
+    ] {
+        let mut bad = good.clone();
+        bad[name] = value;
+        bads.push(bad);
+    }
+    for bad in bads {
+        let bytes = bad.to_string().into_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        let errors = [
+            schema::load::<reuse::Settings>(&bytes)
+                .err()
+                .map(|e| e.to_string()),
+            schema::effective::<reuse::Settings>(&bytes)
+                .err()
+                .map(|e| e.to_string()),
+            schema::Live::<reuse::Settings>::open(&path)
+                .err()
+                .map(|e| e.to_string()),
+            live.read().err().map(|e| e.to_string()),
+            reuse::Lookup::open(&path).err(),
+        ];
+        for error in errors {
+            let error = error.unwrap_or_else(|| panic!("{bad}: refused"));
+            assert!(!error.contains("hunter2"), "{bad}: {error}");
+        }
+    }
+    std::fs::write(&path, good.to_string()).unwrap();
+    assert!(live.read().is_ok());
 }
 
 #[test]

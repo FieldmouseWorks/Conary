@@ -60,7 +60,8 @@ The optional `--gate-reuse-config PATH` (`CONARY_GATE_REUSE_CONFIG`) starts
 another HTTP listener, which answers whether CI already attested a pass of a
 gate on a tree ([gate reuse](gate-reuse.md) says what counts and how it's
 configured). It reads GitHub, as the train does, and the ledger, and
-records nothing. Its requests are bounded like the webhook's: a head of
+records nothing. Its configuration is read again at each lookup, all but
+its address live. Its requests are bounded like the webhook's: a head of
 16 KiB, a body of 64 KiB, five seconds for the whole request, 16 at once.
 
 ## Verified flow events

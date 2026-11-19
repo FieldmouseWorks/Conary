@@ -203,4 +203,100 @@ fn conaryd_answers_lookups_from_the_machines_configuration() {
     assert!(refused(Some("Bearer x"), &request("example/other")).starts_with("HTTP/1.1 403"));
     assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 401"));
     assert!(daemon.0.try_wait().unwrap().is_none());
+
+    // The configuration is read again at each lookup: another repository
+    // listed is answered for at once, while a new address waits for a
+    // restart and the started one keeps answering.
+    let mut changed = config.clone();
+    changed["repos"] = json!(["example/project", "example/other"]);
+    changed["listen"] = json!(nothing.to_string());
+    std::fs::write(root.join("gate-reuse.json"), changed.to_string()).unwrap();
+    assert!(refused(None, &request("example/other")).starts_with("HTTP/1.1 401"));
+    // A file that doesn't read trusts no one: the gate runs.
+    std::fs::write(root.join("gate-reuse.json"), b"{").unwrap();
+    assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 503"));
+    // Nor does its log repeat what it refused: a token command's
+    // credential, written as the whole file, stays out of it.
+    std::fs::write(
+        root.join("gate-reuse.json"),
+        json!("env KEY=hunter2 conary-token").to_string(),
+    )
+    .unwrap();
+    assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 503"));
+    // Nor written, in an otherwise good file, as the workflow or a
+    // repository: a value that doesn't parse is refused, not quoted.
+    for (name, value) in [
+        ("signer", json!("env KEY=hunter2 conary-token")),
+        (
+            "repos",
+            json!(["example/project", "env KEY=hunter2 conary-token"]),
+        ),
+    ] {
+        let mut bad = config.clone();
+        bad[name] = value;
+        std::fs::write(root.join("gate-reuse.json"), bad.to_string()).unwrap();
+        assert!(
+            refused(None, &request("example/project")).starts_with("HTTP/1.1 503"),
+            "{name}"
+        );
+    }
+    std::fs::write(root.join("gate-reuse.json"), config.to_string()).unwrap();
+    assert!(refused(Some("Bearer x"), &request("example/other")).starts_with("HTTP/1.1 403"));
+    assert!(daemon.0.try_wait().unwrap().is_none());
+
+    daemon.0.kill().unwrap();
+    daemon.0.wait().unwrap();
+    let mut err = String::new();
+    daemon
+        .0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut err)
+        .unwrap();
+    assert!(
+        err.contains("listen changed in") && err.contains("until it restarts"),
+        "{err}"
+    );
+    assert!(
+        err.contains("the gate-reuse configuration doesn't read"),
+        "{err}"
+    );
+    assert!(!err.contains("hunter2"), "{err}");
+}
+
+/// conaryd doesn't start on a gate-reuse configuration whose `signer` or
+/// `repos` doesn't parse, and says why without the value: a token command's
+/// credential written there stays out of its log.
+#[test]
+fn conaryd_refuses_to_start_on_a_value_that_doesnt_parse_without_quoting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    ledger(&root.join("ledger"));
+    let good = json!({
+        "listen": "127.0.0.1:0",
+        "repos": ["example/project"],
+        "token_command": "echo token",
+        "signer": "example/ci/.github/workflows/gate.yml",
+    });
+    for (name, value) in [
+        ("signer", json!("env KEY=hunter2 conary-token")),
+        ("repos", json!(["env KEY=hunter2 conary-token"])),
+    ] {
+        let mut bad = good.clone();
+        bad[name] = value;
+        std::fs::write(root.join("gate-reuse.json"), bad.to_string()).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_conaryd"))
+            .arg("--ledger")
+            .arg(root.join("ledger"))
+            .arg("--socket")
+            .arg(root.join("run/conaryd.sock"))
+            .arg("--gate-reuse-config")
+            .arg(root.join("gate-reuse.json"))
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{name}: it started\n{err}");
+        assert!(!err.contains("hunter2"), "{name}: {err}");
+    }
 }

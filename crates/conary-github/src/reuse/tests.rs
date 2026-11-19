@@ -719,7 +719,7 @@ fn the_machines_settings_read_into_a_config() {
         "signer": testing::SIGNER,
     }))
     .unwrap();
-    let c = settings.config().unwrap();
+    let c = settings.config();
     assert_eq!(c.repos, [repo()]);
     assert_eq!(c.trust.signer, testing::signer());
     assert_eq!(c.trust.fresh, None);
@@ -729,7 +729,10 @@ fn the_machines_settings_read_into_a_config() {
     let unknown = json!({"listen": "127.0.0.1:1", "repos": [], "token_command": "x",
                          "signer": testing::SIGNER, "producers": "/etc/keys"});
     assert!(serde_json::from_value::<Settings>(unknown).is_err());
-    let mut bad = settings.clone();
-    bad.signer = "Acme/ci/gate.yml".into();
-    assert!(bad.config().is_err());
+    let bad = json!({"listen": "127.0.0.1:1", "repos": [REPO], "token_command": "x",
+                     "signer": "Acme/ci/gate.yml"});
+    assert!(serde_json::from_value::<Settings>(bad).is_err());
+    let bad = json!({"listen": "127.0.0.1:1", "repos": ["Acme"], "token_command": "x",
+                     "signer": testing::SIGNER});
+    assert!(serde_json::from_value::<Settings>(bad).is_err());
 }

@@ -14,8 +14,9 @@ pub enum FlowCommand {
     /// A dry pass beside what the steward running the repository says of
     /// each PR now: one JSON line per PR, disagreements first, then a tally.
     Compare(Args),
-    /// Every option of the flow's configuration and conaryd's events
-    /// configuration: their schema, or what a machine's files set.
+    /// Every option of the flow's configuration and conaryd's events and
+    /// gate-reuse configurations: their schema, or what a machine's files
+    /// set.
     Settings(SettingsArgs),
     /// Pause the repository: the next decision stops every worker its PRs
     /// have running and starts nothing, until it's resumed. Needs no
@@ -55,7 +56,7 @@ pub struct ResumeArgs {
 }
 #[derive(clap::Args)]
 pub struct SettingsArgs {
-    /// Print the schema of both configurations: each option's type, allowed
+    /// Print the schema of all three configurations: each option's type, allowed
     /// values, default, description, whether it starts paid work and
     /// whether it's live. No configuration file is read.
     #[arg(long)]
@@ -68,6 +69,10 @@ pub struct SettingsArgs {
     /// take effect only at a restart listed apart.
     #[arg(long, env = "CONARY_EVENTS_CONFIG")]
     events_config: Option<PathBuf>,
+    /// conaryd's gate-reuse configuration whose options to print, the ones
+    /// that take effect only at a restart listed apart.
+    #[arg(long, env = "CONARY_GATE_REUSE_CONFIG")]
+    gate_reuse_config: Option<PathBuf>,
 }
 #[derive(clap::Args)]
 pub struct Args {
@@ -192,11 +197,11 @@ fn settings(args: &SettingsArgs) -> super::Result<()> {
     if args.schema {
         out.insert("flow".into(), schema::flow().map_err(own)?);
         out.insert("events".into(), schema::events().map_err(own)?);
+        out.insert("gate_reuse".into(), schema::reuse().map_err(own)?);
     } else {
-        if args.config.is_none() && args.events_config.is_none() {
-            return Err(
-                "give --schema, or a configuration with --config or --events-config".into(),
-            );
+        if args.config.is_none() && args.events_config.is_none() && args.gate_reuse_config.is_none()
+        {
+            return Err("give --schema, or a configuration with --config, --events-config or --gate-reuse-config".into());
         }
         if let Some(path) = &args.config {
             let listing = schema::effective::<Config>(&std::fs::read(path)?).map_err(own)?;
@@ -205,6 +210,12 @@ fn settings(args: &SettingsArgs) -> super::Result<()> {
         if let Some(path) = &args.events_config {
             let listing = schema::effective::<Runtime>(&std::fs::read(path)?).map_err(own)?;
             out.insert("events".into(), serde_json::to_value(listing)?);
+        }
+        if let Some(path) = &args.gate_reuse_config {
+            let listing =
+                schema::effective::<conary_github::reuse::Settings>(&std::fs::read(path)?)
+                    .map_err(own)?;
+            out.insert("gate_reuse".into(), serde_json::to_value(listing)?);
         }
     }
     println!("{}", serde_json::to_string_pretty(&out)?);
