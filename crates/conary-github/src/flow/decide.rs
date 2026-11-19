@@ -652,7 +652,7 @@ fn failure_stage(kind: Failure) -> Stage {
     }
 }
 
-fn by_train(f: &Facts) -> bool {
+pub(super) fn by_train(f: &Facts) -> bool {
     f.settings.train && f.revision.base == f.default_branch
 }
 

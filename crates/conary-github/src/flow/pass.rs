@@ -325,7 +325,7 @@ impl Pass<'_> {
                     {
                         Err("landing permission requires an anchored ledger".into())
                     } else {
-                        super::evidence::authorize(self, github, &facts, &mut looked)
+                        super::evidence::authorize(self, github, &facts, &next.step, &mut looked)
                     }
                 {
                     if let Some(cant) = why.downcast_ref::<super::evidence::CantTell>() {

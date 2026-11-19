@@ -22,7 +22,9 @@ pub struct Evidence {
     /// GitHub-hosted ones. `null` accepts GitHub-hosted jobs only.
     #[schemars(extend("x-spender" = false))]
     pub fresh: Option<String>,
-    /// The checks whose attested results a landing needs.
+    /// The checks whose attested results a landing needs, on the tree that
+    /// lands: the head's, for a PR that lands itself, and the candidate's,
+    /// as the train's gate asks them, for one that lands through the train.
     #[schemars(extend("x-spender" = false))]
     pub require: Vec<String>,
     /// The check whose attested negative run a new test needs.
@@ -137,10 +139,22 @@ fn told<T>(check: &str, read: Result<T>) -> Result<T> {
 }
 /// Whether every attested result a landing needs holds. Each check whose
 /// lookup told yes or no, rather than couldn't tell, goes in `looked`.
+/// Whether `grant` puts the head in the merge train, rather than landing
+/// it: a train PR's join, or its seated wait. The train lands only a
+/// candidate whose own gate passed `evidence.require` attested, on the tree
+/// that lands (`train::step`), so its head isn't asked them: a repo's gate
+/// may run only on the candidate. A merge or settlement lands the head
+/// itself and is always asked them, on the head.
+fn joins_train(grant: &Step, f: &Facts) -> bool {
+    super::decide::by_train(f) && matches!(grant, Step::JoinTrain | Step::Wait { .. })
+}
+
+/// Whether the facts permit `grant`, one of the steps `pass::grants` names.
 pub(crate) fn authorize<G: Write>(
     pass: &Pass<'_>,
     github: &G,
     f: &Facts,
+    grant: &Step,
     looked: &mut std::collections::BTreeSet<String>,
 ) -> Result<()> {
     if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
@@ -174,11 +188,15 @@ pub(crate) fn authorize<G: Write>(
     let trust = evidence.trust()?;
     // Every check on the head must be green (`observations` holds that), but
     // producer attestation is asked only of what the machine names as
-    // evidence: its required checks and, unless the PR is docs-only, its
-    // proofs. Any other green check is a PR job's, whose token names
-    // GitHub's merge commit rather than the head, and a status can't attest.
+    // evidence: its required checks (unless the train asks them of its
+    // candidate instead) and, unless the PR is docs-only, its proofs. Any
+    // other green check is a PR job's, whose token names GitHub's merge
+    // commit rather than the head, and a status can't attest.
     let effective = observations(github, f, &f.revision.head)?;
-    let mut required: std::collections::BTreeSet<_> = evidence.require.iter().cloned().collect();
+    let mut required = std::collections::BTreeSet::new();
+    if !joins_train(grant, f) {
+        required.extend(evidence.require.iter().cloned());
+    }
     if !effective.docs {
         // Every effective spelling of a proof, since `check` reads runs by
         // exact name and GitHub's check names ignore case.

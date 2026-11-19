@@ -211,8 +211,14 @@ docs lane's name on a change to code. Any other green check counts as
 green alone, the way the train counts its candidate's checks beyond its
 `require`: a PR's own CI can't attest its head, since a `pull_request` job's
 token names GitHub's test merge and not the head, and a status can't attest
-at all. So `evidence.require` names only checks a producer can attest for a
-PR's head. Verification uses the CI reader's effective workflow
+at all. So `evidence.require` names only checks a producer can attest on
+the tree that lands. For a PR that lands itself that's its head. For one that
+lands through the merge train (`settings.train`, targeting the default
+branch) it's the candidate: the train's gate (`cn train step --require`,
+given the same checks) asks them of the candidate, attested on the tree
+that lands, so joining the train and
+waiting in it ask the head only for its proofs and negative, and a repo's
+gate may run on candidates alone. Verification uses the CI reader's effective workflow
 and target selection: replaced cancellations, obsolete target suites and
 skipped jobs are not reintroduced as evidence requirements. Producer receipts
 verify the latest effective issuance, including across workflow changes,

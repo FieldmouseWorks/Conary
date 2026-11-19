@@ -84,14 +84,14 @@ pub(crate) fn act<G: Write>(
             }
             // Every grant, including a seated train's Wait, revalidates
             // after preparatory calls and immediately before publication.
-            permission(pass, github, f, record)?;
+            permission(pass, github, f, &next.step, record)?;
             record.cleanup.insert(f.revision.head.clone());
             if next.step == Step::Settle {
                 record.landing = Some(super::ledger::intent(f, true)?);
             }
             data.save(f.number, record)?;
             github.status(&repo, &f.revision.head, true, &next.description)?;
-            permission(pass, github, f, record)?;
+            permission(pass, github, f, &next.step, record)?;
         }
         Ok(())
     };
@@ -103,7 +103,7 @@ pub(crate) fn act<G: Write>(
         let repo = f.repo.to_string();
         match &next.step {
             Step::Wait { .. } | Step::Retry { .. } => {}
-            Step::Settle => permission(pass, github, f, record)?,
+            Step::Settle => permission(pass, github, f, &next.step, record)?,
 
             Step::AskReview(why) => {
                 github.comment(&repo, f.number, &super::reviews::ask(why))?;
@@ -224,7 +224,7 @@ pub(crate) fn act<G: Write>(
                 }) {
                     return Err("review-settled permission was not observed".into());
                 }
-                permission(pass, github, f, record)?;
+                permission(pass, github, f, &next.step, record)?;
                 // The commits its merge squashes, whose trailers its landing
                 // commit says, read before the intent is saved. One whose
                 // trailers can't all be read isn't merged without them.
@@ -278,7 +278,7 @@ pub(crate) fn act<G: Write>(
                 )?;
             }
             Step::JoinTrain => {
-                permission(pass, github, f, record)?;
+                permission(pass, github, f, &next.step, record)?;
                 let store = store
                     .as_deref_mut()
                     .ok_or("train needs an anchored ledger")?;
@@ -414,12 +414,18 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
     })
 }
 
-fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts, record: &Record) -> Result<()> {
+fn permission<G: Write>(
+    pass: &Pass<'_>,
+    github: &G,
+    f: &Facts,
+    step: &Step,
+    record: &Record,
+) -> Result<()> {
     let result = super::scope::current(pass, github, f, record)
         .and_then(|()| {
             // Read again only to act on: what it can't tell was recorded
             // when the decision was made, and fails the effect here.
-            super::evidence::authorize(pass, github, f, &mut Default::default())
+            super::evidence::authorize(pass, github, f, step, &mut Default::default())
         })
         .and_then(|()| super::scope::current(pass, github, f, record))
         .and_then(|()| {
