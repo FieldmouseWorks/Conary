@@ -118,10 +118,13 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// A sync as `cn sync` runs one: gathered, then recorded.
+/// A sync as `cn sync` runs one, gathered, then recorded, that refused
+/// nothing: what it recorded.
 fn synced(store: &mut Store, f: &Hub) -> Result<Vec<Ingested>, IngestError> {
     let gathered = gather(f, &config(), &repo(), store.lock().dir())?;
-    sync(store, f, gathered)
+    let got = sync(store, f, gathered)?;
+    assert_eq!(got.refused, []);
+    Ok(got.ingested)
 }
 
 fn sha(s: &str) -> CommitId {
@@ -299,7 +302,7 @@ fn backfill_takes_every_pr_and_who_made_it() {
     f.put_pull(REPO, person);
 
     let got = backfill(&mut store, &f, &config(), &repo()).unwrap();
-    assert_eq!(got.len(), 3);
+    assert_eq!(got.ingested.len(), 3);
     let kind = |n| store.ledger().by_pr(&repo(), n).unwrap().author.kind;
     assert_eq!(
         (kind(9), kind(10), kind(11)),

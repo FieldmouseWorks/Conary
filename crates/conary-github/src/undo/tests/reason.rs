@@ -1,4 +1,5 @@
 use super::*;
+use crate::ingest::{Refusal, Refused, Synced};
 
 const REASON: &str = "Red run https://github.com/o/r/actions/runs/123: check / build failed.\nerror[E0425]: cannot find value `missing` in this scope";
 
@@ -230,10 +231,7 @@ fn reasonless_markers_are_refused_before_recording_instead_of_becoming_ordinary_
         });
         let head = store.head();
         let err = ingest::pull(&mut store, &hub, &config(), &repo(), pr).unwrap_err();
-        assert!(matches!(
-            err,
-            IngestError::Store(StoreError::Invalid(Invalid::UndoReason))
-        ));
+        assert!(matches!(err, IngestError::Undo(Refusal::Reason)));
         assert_eq!(store.head(), head);
         assert!(store.ledger().by_pr(&repo(), pr).is_none());
         // A new request refuses this occupied branch too, before opening anything.
@@ -268,17 +266,19 @@ fn malformed_reasons_are_refused_before_recording_instead_of_becoming_ordinary_p
             let marker = marker_line(x, reason);
             hub.edit_pull(REMI, pr, |p| p["body"] = marker.clone().into());
             let head = store.head();
-            let malformed = |e: &IngestError| matches!(e, IngestError::Malformed(_));
+            let malformed = |e: &IngestError| matches!(e, IngestError::Undo(Refusal::Marker(_)));
+            // A sync refuses it alone, and says so.
+            let alone = |got: Synced| {
+                got.ingested.is_empty()
+                    && matches!(&got.refused[..], [r] if r.pr == pr && matches!(r.why, Refusal::Marker(_)))
+            };
             let refused = match how {
                 "pull" => ingest::pull(&mut store, &hub, &config(), &repo(), pr)
                     .is_err_and(|e| malformed(&e)),
-                "sync" => {
-                    let dir = store.lock().dir().to_owned();
-                    let gathered = ingest::gather(&hub, &config(), &repo(), &dir).unwrap();
-                    ingest::sync(&mut store, &hub, gathered).is_err_and(|e| malformed(&e))
+                "sync" => alone(synced(&mut store, &hub)),
+                "backfill" => {
+                    alone(ingest::backfill(&mut store, &hub, &config(), &repo()).unwrap())
                 }
-                "backfill" => ingest::backfill(&mut store, &hub, &config(), &repo())
-                    .is_err_and(|e| malformed(&e)),
                 // A new request takes up the stray it finds, and refuses it.
                 _ => undo(&mut store, &hub, &hub, &config(), x, REASON)
                     .is_err_and(|s| matches!(&*s.error, UndoError::Ingest(e) if malformed(e))),
@@ -292,6 +292,74 @@ fn malformed_reasons_are_refused_before_recording_instead_of_becoming_ordinary_p
             assert_eq!(pulls(&hub), 1, "{how} {reason}");
         }
     }
+}
+
+/// A sync as `cn sync` runs one: gathered, then recorded.
+fn synced(store: &mut Store, hub: &Hub) -> Synced {
+    let dir = store.lock().dir().to_owned();
+    let gathered = ingest::gather(hub, &config(), &repo(), &dir).unwrap();
+    ingest::sync(store, hub, gathered).unwrap()
+}
+
+#[test]
+fn a_sync_refuses_an_unreadable_undo_alone_and_records_the_repo_s_other_prs() {
+    let reasonless = [r#","reason":"""#, ""];
+    for how in ["sync", "backfill"] {
+        for closed in [false, true] {
+            for reason in reasonless.into_iter().chain(MALFORMED) {
+                let case = format!("{how}, closed {closed}, {reason}");
+                let dir = tempfile::tempdir().unwrap();
+                let mut store = store(&dir);
+                let hub = github();
+                let x = landed(&mut store, None);
+                // The undo is listed first, before an ordinary PR.
+                let undo = stopped(&hub, x);
+                let marker = marker_line(x, reason);
+                hub.edit_pull(REMI, undo, |p| p["body"] = marker.clone().into());
+                hub.create_branch(REMI, "tools/later", TRUNK).unwrap();
+                let plain = hub
+                    .open_pull(REMI, "tools/later", "main", "tools: later", "")
+                    .unwrap();
+                assert!(undo < plain, "{case}");
+                if closed {
+                    hub.close(REMI, undo);
+                    hub.close(REMI, plain);
+                }
+                let got = match how {
+                    "sync" => synced(&mut store, &hub),
+                    _ => ingest::backfill(&mut store, &hub, &config(), &repo()).unwrap(),
+                };
+                assert_eq!(got.refused.len(), 1, "{case}: {:?}", got.refused);
+                assert_eq!(got.refused[0].pr, undo, "{case}");
+                let why = &got.refused[0].why;
+                if reasonless.contains(&reason) {
+                    assert_eq!(why, &Refusal::Reason, "{case}");
+                } else {
+                    assert!(matches!(why, Refusal::Marker(_)), "{case}: {why:?}");
+                }
+                assert!(store.ledger().by_pr(&repo(), undo).is_none(), "{case}");
+                let recorded = store.ledger().by_pr(&repo(), plain).expect(&case);
+                assert_eq!(got.ingested.len(), 1, "{case}");
+                assert_eq!(got.ingested[0].change, recorded.id, "{case}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_refusal_is_one_pr_s_and_any_other_failure_still_stops_the_sync() {
+    let mut got = Synced::default();
+    assert!(got.take(4, Err(IngestError::Undo(Refusal::Reason))).is_ok());
+    let other = IngestError::Malformed("a merged PR with no merge commit".into());
+    assert!(matches!(
+        got.take(5, Err(other)),
+        Err(IngestError::Malformed(_))
+    ));
+    let only = Refused {
+        pr: 4,
+        why: Refusal::Reason,
+    };
+    assert_eq!(got.refused, [only]);
 }
 
 #[test]

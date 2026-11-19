@@ -112,7 +112,7 @@ fn sync_reads_open_prs_before_the_lock_and_records_them_under_it() {
     let got = sync(&mut store, &watch, gathered).unwrap();
     assert_eq!(watch.locked(), Vec::<String>::new());
     // Recorded from what was gathered: 9's evidence as reading it now gets.
-    assert_eq!(got.len(), 2);
+    assert_eq!(got.ingested.len(), 2);
     let c = store.ledger().by_pr(&repo(), 9).unwrap();
     assert_eq!(c.evidence.len(), 5);
 }
@@ -145,7 +145,7 @@ fn sync_reads_again_under_the_lock_what_changed_since_it_gathered() {
     watch.locked();
 
     let got = sync(&mut store, &watch, gathered).unwrap();
-    assert_eq!(got.len(), 3);
+    assert_eq!(got.ingested.len(), 3);
     let c = store.ledger().by_pr(&repo(), 9).unwrap();
     let heads: Vec<_> = c.revisions.iter().map(|r| r.head.as_str()).collect();
     assert_eq!(heads, [HEAD2]);

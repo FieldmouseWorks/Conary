@@ -13,9 +13,50 @@ use conary_core::ledger::{Change, Ledger, Status};
 use conary_core::op::Repo;
 use conary_core::{RevisionId, Store};
 
-use super::{Config, IngestError, Ingested, Read, Results, commit, record};
+use super::{Config, IngestError, Ingested, Read, Refusal, Results, commit, record};
 use crate::api::{Event, PullRequest, Pulls, Source};
 use crate::bases::MergeBases;
+
+/// What a [`sync`] or [`backfill`](super::backfill) of a repo did.
+#[derive(Debug, Default)]
+pub struct Synced {
+    /// The PRs it recorded, in the order it read them.
+    pub ingested: Vec<Ingested>,
+    /// The undo PRs it refused, each alone: nothing of them was recorded,
+    /// and the repo's other PRs were synced all the same.
+    pub refused: Vec<Refused>,
+}
+
+/// An undo PR a sync refused, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub pr: u64,
+    pub why: Refusal,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let why = IngestError::Undo(self.why.clone());
+        write!(f, "PR #{} refused: {why}", self.pr)
+    }
+}
+
+impl Synced {
+    /// Takes one PR's ingest: what it recorded, or its refusal as an undo,
+    /// which is that PR's alone. Any other failure stops the sync.
+    pub(crate) fn take(
+        &mut self,
+        pr: u64,
+        got: Result<Ingested, IngestError>,
+    ) -> Result<(), IngestError> {
+        match got {
+            Ok(got) => self.ingested.push(got),
+            Err(IngestError::Undo(why)) => self.refused.push(Refused { pr, why }),
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+}
 
 /// What a sync read of a repo's open PRs before it took the ledger's lock.
 pub struct Gathered {
@@ -51,7 +92,8 @@ const SETTLED_FOR: Duration = Duration::from_secs(60);
 /// ledger: run it before the lock is taken, so other writers wait only for
 /// the recording. A PR that can't be read now is read again under the lock,
 /// where a failure stops the sync once the PRs before it are recorded, as
-/// it would have with nothing gathered; so are the ones after it.
+/// it would have with nothing gathered; so are the ones after it. An undo
+/// PR refused there is refused alone.
 ///
 /// Each PR's merge base, what tells [`sync`] whether the results are still
 /// the revision's it records, comes from the cache beside the ledger in
@@ -132,11 +174,16 @@ fn settled_by(at: &str, asked: SystemTime) -> bool {
 /// timeline was gathered, so a result from before its latest retarget is
 /// left out, however many there were since the gather and wherever they
 /// went.
+///
+/// An unrecorded PR on an own undo branch whose marker can't be read or
+/// gives no reason is never read as an ordinary PR: it's refused, alone, in
+/// [`Synced::refused`], and the repo's other PRs are synced all the same.
+/// Any other failure stops the sync.
 pub fn sync(
     store: &mut Store,
     source: &dyn Source,
     gathered: Gathered,
-) -> Result<Vec<Ingested>, IngestError> {
+) -> Result<Synced, IngestError> {
     let Gathered {
         config,
         repo,
@@ -147,7 +194,7 @@ pub fn sync(
     let full = repo.to_string();
     let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
     bases.keep(asked).map_err(IngestError::Cache)?;
-    let mut got = Vec::new();
+    let mut got = Synced::default();
     for pr in source.pulls(&full, Pulls::Open)? {
         let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
         let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
@@ -161,7 +208,10 @@ pub fn sync(
             },
             _ => Read::of(source, &full, &pr)?,
         };
-        got.push(record(store, source, &config, &repo, &pr, base, read)?);
+        got.take(
+            pr.number,
+            record(store, source, &config, &repo, &pr, base, read),
+        )?;
     }
     for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
         let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
@@ -172,7 +222,10 @@ pub fn sync(
             .is_some_and(|c| settled(ledger, c, pr, revision));
         if !settled {
             let read = Read::of(source, &full, pr)?;
-            got.push(record(store, source, &config, &repo, pr, base, read)?);
+            got.take(
+                pr.number,
+                record(store, source, &config, &repo, pr, base, read),
+            )?;
         }
     }
     Ok(got)
