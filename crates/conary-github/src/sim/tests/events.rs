@@ -39,6 +39,7 @@ fn report(at: u64) -> Report {
             wait_on: None,
             on_usage: false,
             owner_notice: None,
+            switches: vec![],
         }),
         error: None,
         owner_approval: None,

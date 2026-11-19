@@ -147,8 +147,8 @@ id = "switches-show-their-effect"
 lesson = "A switch isn't real until something enforces it and a status shows it in effect, with what it holds."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/647", "https://github.com/FieldmouseWorks/remi/issues/979"]
 applies = ["flow", "cn flow", "M6 slice 5d"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "https://github.com/FieldmouseWorks/Conary/issues/314"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/313", "https://github.com/FieldmouseWorks/Conary/issues/314", "docs/flow.md#switches", "crates/conary-github/src/sim/tests/flow_switches.rs", "crates/cn/tests/flow_status.rs"]
 
 [[lessons]]
 id = "limits-are-design-bugs"

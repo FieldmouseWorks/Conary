@@ -155,6 +155,16 @@ impl Pass<'_> {
                 p.number,
             )
         });
+        if !self.dry_run {
+            super::switches::opened(
+                self.root,
+                repo,
+                &super::switches::Open {
+                    at: self.now,
+                    prs: pulls.iter().map(|p| p.number).collect(),
+                },
+            )?;
+        }
         let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls);
         occupancy.discover(
             self,
@@ -181,27 +191,29 @@ impl Pass<'_> {
                     Some(data) => data.load(pr)?,
                     None => Data::read(self.root, repo, pr)?,
                 };
-                let mut facts = read(
+                let read = read(
                     github,
                     repo,
                     pr,
                     self.policy,
                     self.config.settings.clone(),
                     &self.config.trusted_authors,
-                )?;
+                );
                 // Cancellation is independent of whichever intention wins
-                // below, and precedes hydration's deadline bookkeeping.
+                // below, and precedes hydration's deadline bookkeeping. A
+                // held PR is read in full, so a hold whose read fails still
+                // stops its work, by the label the open list showed.
+                let hold = &self.config.settings.hold_label;
+                let held = match &read {
+                    Ok(facts) => facts.labels.contains(hold),
+                    Err(_) => pull.labels.iter().any(|l| l.name == *hold),
+                };
                 if let Some(data) = &data
-                    && super::pause::cancel(
-                        self.root,
-                        repo,
-                        pr,
-                        &mut record,
-                        facts.labels.contains(&facts.settings.hold_label),
-                    )?
+                    && super::pause::cancel(self.root, repo, pr, &mut record, held)?
                 {
                     data.save(pr, &record)?;
                 }
+                let mut facts = read?;
                 report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
@@ -232,6 +244,8 @@ impl Pass<'_> {
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
+                next.switches =
+                    super::switches::holding(self, &facts, &record.memory, &next, self.now);
                 record.memory = memory;
                 if super::proofs::slotted(&next) {
                     let ahead = super::proofs::ahead(&facts);
@@ -452,7 +466,7 @@ impl Pass<'_> {
         Ok(())
     }
 }
-fn plugin_kind(step: &Step) -> Option<&'static str> {
+pub(super) fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
         Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),

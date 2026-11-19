@@ -1,7 +1,7 @@
 use conary_core::op::Repo;
 use conary_core::{Policy, log};
 use conary_github::events::Runtime;
-use conary_github::flow::{Config, Pass, Pause, Scope, jobs, pause, schema};
+use conary_github::flow::{self, Config, Pass, Pause, Scope, jobs, pause, schema};
 use conary_github::{Api, Tokens, anchor};
 use std::path::PathBuf;
 
@@ -24,6 +24,19 @@ pub enum FlowCommand {
     /// Lift the repository's pause: the next pass carries on from each PR's
     /// saved state.
     Resume(ResumeArgs),
+    /// Every switch in effect (the pause, holds, omitted plugins, the train
+    /// off, no person list, no evidence verifier) and the PRs and workers
+    /// each one holds. Reads the data directory and the configuration
+    /// alone: no GitHub, conaryd, token or lock.
+    Status(StatusArgs),
+}
+#[derive(clap::Args)]
+pub struct StatusArgs {
+    repo: Repo,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
+    #[arg(long, env = "CONARY_FLOW_CONFIG")]
+    config: PathBuf,
 }
 #[derive(clap::Args)]
 pub struct PauseArgs {
@@ -92,6 +105,12 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
             return Ok(());
         }
         FlowCommand::Resume(args) => return pause::resume(&args.data, &args.repo).map_err(own),
+        FlowCommand::Status(args) => {
+            let config = Config::load(&args.config).map_err(own)?;
+            let status = flow::status(&args.data, &args.repo, &config, jobs::now()).map_err(own)?;
+            println!("{}", serde_json::to_string_pretty(&status)?);
+            return Ok(());
+        }
         FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args) => args,
     };
     let compare = matches!(command, FlowCommand::Compare(_));

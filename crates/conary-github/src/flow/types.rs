@@ -781,4 +781,9 @@ pub struct Next {
     pub on_usage: bool,
     /// A digest decision, independent of the one executable intention.
     pub owner_notice: Option<OwnerNotice>,
+    /// Every switch in effect that stops this PR, whichever of them decided
+    /// its step, and what each one holds ([`super::switches`]). Left out
+    /// when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<super::Holding>,
 }
