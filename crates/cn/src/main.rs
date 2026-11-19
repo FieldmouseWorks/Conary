@@ -71,6 +71,14 @@ struct GithubArgs {
     /// Logins whose review markers are reviews: the steward's App's bot, SLUG[bot].
     #[arg(long = "reviewer", env = "CONARY_REVIEWERS", value_delimiter = ',')]
     reviewers: Vec<String>,
+    /// Logins whose posts are the reviewer's word, recorded unattested:
+    /// Codex's GitHub connector's bot.
+    #[arg(
+        long = "review-author",
+        env = "CONARY_REVIEW_AUTHORS",
+        value_delimiter = ','
+    )]
+    review_authors: Vec<String>,
     /// Status contexts that are the steward's own, not checks.
     #[arg(
         long = "own-context",
@@ -620,6 +628,7 @@ fn writer(cli: &Cli, github: &GithubArgs) -> Result<(Api, Config)> {
         Api::new(&github.remote.api, tokens(&github.remote)?).with_etags(Etags::open(&cli.ledger)?);
     let config = Config {
         reviewers: github.reviewers.clone(),
+        review_authors: github.review_authors.clone(),
         own_contexts: github.own_contexts.clone(),
     };
     Ok((api, config))

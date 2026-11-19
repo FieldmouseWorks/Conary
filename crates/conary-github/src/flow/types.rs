@@ -88,8 +88,8 @@ pub struct Reviewer {
     pub verdict: Option<Verdict>,
     /// When it said it, in Unix seconds (0 with nothing).
     pub at: u64,
-    /// The body of the post its verdict came from, which a receipt for it
-    /// would sign.
+    /// The body of the post its verdict came from, so a post rewritten
+    /// since the decision changes its scope (`scope::current`).
     pub source: Option<String>,
     /// Its reviews of the PR that had findings, at any head: each a round.
     pub rounds: u32,

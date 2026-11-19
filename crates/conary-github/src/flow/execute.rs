@@ -284,10 +284,7 @@ pub(crate) fn act<G: Write>(
                 let store = store
                     .as_deref_mut()
                     .ok_or("train needs an anchored ledger")?;
-                let config = crate::Config {
-                    reviewers: f.settings.flow_authors.iter().cloned().collect(),
-                    own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
-                };
+                let config = super::ledger::config(&f.settings);
                 super::pause::effect(pass.root, &f.repo, f.number)?;
                 let joined = crate::train::join(
                     store,

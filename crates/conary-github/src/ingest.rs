@@ -16,7 +16,8 @@ use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
 use crate::api::{
-    ApiError, CheckRun, Commit, Event, PullRequest, Pulls, Review, Source, Status as CommitStatus,
+    ApiError, CheckRun, Comment, Commit, Event, PullRequest, Pulls, Review, Source,
+    Status as CommitStatus,
 };
 use crate::bases::BasesError;
 use crate::undo::Marker as Undo;
@@ -26,10 +27,15 @@ use crate::undo::Marker as Undo;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// The steward's logins, as REST spells them: its GitHub App's bot,
-    /// `SLUG[bot]`, which no user's login can be. Their review markers are
-    /// recorded as reviews, and only their own statuses are its word.
-    /// Anyone else's marker is text in a comment.
+    /// `SLUG[bot]`, which no user's login can be. The review markers it put
+    /// on the reviews it posted, before the reviewer posted its own, are
+    /// recorded as reviews, and only its own statuses are its word. Anyone
+    /// else's marker is text in a comment.
     pub reviewers: Vec<String>,
+    /// The reviewer's logins: Codex's GitHub connector's bot. What they say
+    /// of a head is recorded as a review, never attested (DESIGN.md 4.3).
+    /// None records no reviewer's word.
+    pub review_authors: Vec<String>,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a
     /// landing only on a head it settled.
@@ -400,6 +406,7 @@ struct Results {
     check_runs: Vec<CheckRun>,
     statuses: Vec<CommitStatus>,
     reviews: Vec<Review>,
+    comments: Vec<Comment>,
 }
 
 impl Results {
@@ -409,6 +416,7 @@ impl Results {
             check_runs: source.check_runs(repo, head.as_str())?,
             statuses: source.statuses(repo, head.as_str())?,
             reviews: source.reviews(repo, pr.number)?,
+            comments: source.comments(repo, pr.number)?,
         })
     }
 }
@@ -468,6 +476,7 @@ fn record_with_submission(
                 check_runs,
                 statuses,
                 reviews,
+                comments,
             },
     } = read;
     let mut w = Writer {
@@ -603,11 +612,20 @@ fn record_with_submission(
             submissions,
         )?;
     }
-    for review in reviews {
+    for review in &reviews {
         if current(review.submitted_at.as_deref()) {
-            evidence.extend(review_marker(config, pr, change, revision, &review));
+            evidence.extend(review_marker(config, pr, change, revision, review));
         }
     }
+    evidence.extend(reviewer(
+        config,
+        pr,
+        change,
+        revision,
+        &reviews,
+        &comments,
+        since.as_deref(),
+    )?);
     for body in evidence {
         let c = w.store.ledger().change(change).expect("observed above");
         if !bound_elsewhere(c, revision, &head, &body) {
@@ -894,61 +912,8 @@ pub(crate) fn status_result(status: &CommitStatus) -> Option<Found> {
     })
 }
 
-static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<!-- (\w+)-review:v1 (\{.*?\}) -->").unwrap());
-
-#[derive(serde::Deserialize)]
-struct Marker {
-    commit_sha: String,
-    base: String,
-    findings: u64,
-}
-
-/// A reviewer's verdict, from the marker the steward puts on each review it
-/// posts: `<!-- codex-review:v1 {"commit_sha":…,"base":…,"findings":N} -->`.
-/// Only a marker on this head, against this base branch, counts as being
-/// about this revision: a retargeted PR is another change on the same head.
-fn review_marker(
-    config: &Config,
-    pr: &PullRequest,
-    change: ChangeId,
-    revision: RevisionId,
-    review: &Review,
-) -> Option<Body> {
-    let login = &review.user.as_ref()?.login;
-    if !config.reviewers.contains(login) {
-        return None;
-    }
-    let body = review
-        .body
-        .as_deref()?
-        .replace("&#123;", "{")
-        .replace("&#125;", "}");
-    let m = MARKER.captures(&body)?;
-    let said: Marker = serde_json::from_str(&m[2]).ok()?;
-    if said.commit_sha != pr.head.sha
-        || said.base != pr.base.name
-        || review.commit_id.as_deref() != Some(pr.head.sha.as_str())
-    {
-        return None;
-    }
-    Some(Body::Evidence {
-        change,
-        revision,
-        kind: CheckKind::Review,
-        check: m[1].to_owned(),
-        result: if said.findings == 0 {
-            Outcome::Pass
-        } else {
-            Outcome::Fail
-        },
-        source: review
-            .html_url
-            .clone()
-            .unwrap_or_else(|| format!("{} review by {login}", &m[1])),
-        attest: None,
-    })
-}
+mod review;
+use review::{review_marker, reviewer};
 
 #[cfg(test)]
 mod tests;

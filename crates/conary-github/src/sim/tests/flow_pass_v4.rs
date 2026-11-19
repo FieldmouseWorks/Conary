@@ -55,7 +55,7 @@ fn fixed_then_reviewed(c: &mut Case, now: u64) -> String {
     );
     c.pass(now + 3, false);
     c.pass(now + 3, false);
-    c.connector_clean(&head(4), true);
+    c.clean_review();
     unanswered
 }
 

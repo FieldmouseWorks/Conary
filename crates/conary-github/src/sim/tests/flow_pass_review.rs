@@ -20,27 +20,24 @@ fn pending(c: &Case) {
     assert!(!c.hub.pull(REPO, 3).unwrap().is_merged());
 }
 #[test]
-fn unsigned_checks_and_review_markers_cannot_grant_permission() {
-    for missing in ["check", "review"] {
-        let c = Case::new();
-        c.clean_review();
-        let name = if missing == "check" {
-            "check"
-        } else {
-            "conary/review/reviewer"
-        };
-        for run in c.hub.checks_on(&head(3)).iter().filter(|r| r.name == name) {
-            c.hub.forget_artifacts(Some(run.id));
-        }
-        let report = c.pass(crate::flow::jobs::now(), false);
-        assert_eq!(
-            report[0].next.as_ref().unwrap().step,
-            Step::Wait { until: None },
-            "{missing}"
-        );
-        pending(&c);
-        assert_eq!(c.hub.count(Call::Land), 0);
+fn unsigned_checks_cannot_grant_permission() {
+    let c = Case::new();
+    c.clean_review();
+    for run in c
+        .hub
+        .checks_on(&head(3))
+        .iter()
+        .filter(|r| r.name == "check")
+    {
+        c.hub.forget_artifacts(Some(run.id));
     }
+    let report = c.pass(crate::flow::jobs::now(), false);
+    assert_eq!(
+        report[0].next.as_ref().unwrap().step,
+        Step::Wait { until: None }
+    );
+    pending(&c);
+    assert_eq!(c.hub.count(Call::Land), 0);
 }
 #[test]
 fn a_signature_from_the_authoring_runner_cannot_grant_permission() {
@@ -60,25 +57,74 @@ fn a_signature_from_the_authoring_runner_cannot_grant_permission() {
     );
     pending(&c);
 }
+/// The reviewer's word is a gate, not evidence (DESIGN.md 4.3): a head
+/// the connector calls clean lands on its attested CI and negative, with no
+/// receipt asked of the review, and the ledger records the connector's word
+/// beside them, unattested.
 #[test]
-fn a_signed_review_for_another_result_cannot_grant_permission() {
+fn a_connector_clean_head_lands_on_attested_ci_and_the_ledger_records_its_word() {
     let c = Case::new();
     c.clean_review();
-    // Same head and independently signed, but a different producer log.
-    c.sign_check(
-        &head(3),
-        "conary/review/reviewer",
-        Some(b"a different review"),
+    assert!(
+        !c.hub
+            .checks_on(&head(3))
+            .iter()
+            .any(|r| r.name.starts_with("conary/review/")),
+        "no producer signs the connector's word"
     );
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = conary_core::Store::open(
+        conary_core::log::Lock::take(dir.path()).unwrap(),
+        ed25519_dalek::SigningKey::from_bytes(&[5; 32]),
+        None,
+    )
+    .unwrap();
+    let report = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: crate::flow::jobs::now(),
+        dry_run: false,
+        ledger: None,
+    }
+    .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store))
+    .unwrap();
+    assert_eq!(report[0].error, None);
+    assert!(c.hub.pull(REPO, 3).unwrap().is_merged());
+    let change = store.ledger().by_pr(&REPO.parse().unwrap(), 3).unwrap();
+    let reviews: Vec<_> = change
+        .evidence
+        .iter()
+        .filter(|e| e.kind == conary_core::op::CheckKind::Review)
+        .map(|e| (e.check.as_str(), e.result, e.attest.is_some()))
+        .collect();
+    assert_eq!(
+        reviews,
+        [("codex", conary_core::op::Outcome::Pass, false)],
+        "the connector's clean word, recorded and never attested"
+    );
+}
+#[test]
+fn a_clean_word_changed_after_the_decision_cannot_grant_permission() {
+    let c = Case::new();
+    c.clean_review();
+    // The summary the decision read is rewritten as permission is
+    // published: what's there now isn't the word decided on, so the
+    // decision's scope has changed.
+    let last = c.hub.comments(REPO, 3).unwrap().len() - 1;
+    let body = c.connector_summary(3);
+    c.hub
+        .race(On::from(Call::FlowStatus).mark(Mark::Landing), move |h| {
+            h.edit_flow_comment(REPO, 3, last, &format!("{body}\n\nLooked again."));
+        });
     let report = c.pass(crate::flow::jobs::now(), false);
     assert!(
+        report[0].error.as_ref().unwrap().contains("scope changed"),
+        "{:?}",
         report[0]
-            .next
-            .as_ref()
-            .unwrap()
-            .description
-            .contains("exact result")
     );
+    assert_eq!(c.hub.count(Call::Land), 0);
     pending(&c);
 }
 #[test]
@@ -216,7 +262,7 @@ fn pass_copies_live_choices_into_a_fresh_judge_invocation() {
         Some("owner@example.org"),
         Some("owner@example.org"),
     );
-    c.connector_clean(&head(4), true);
+    c.clean_review();
     let now = crate::flow::jobs::now();
     let choice = Choice {
         engine: "conary-example".into(),

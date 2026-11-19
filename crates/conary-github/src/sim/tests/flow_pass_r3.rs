@@ -75,15 +75,6 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
     let c = Case::new();
     c.clean_review();
     let first = c.judgment(1, Judgment::Pass, true);
-    let old_body = c.connector_summary(3);
-    // The connector looks again and rewrites its summary: the receipt over
-    // the first one is no longer current.
-    c.hub.flow_review(REPO, 3, Verdict::Clean, 4);
-    let last = c.hub.comments(REPO, 3).unwrap().len() - 1;
-    c.hub
-        .edit_flow_comment(REPO, 3, last, &format!("{old_body}\n\nLooked again."));
-    let body = c.connector_summary(3);
-    assert_ne!(body, old_body);
     let second = c.judgment(2, Judgment::Pass, true);
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     c.hub.remove_checks(&head(3));
@@ -97,13 +88,6 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
         legacy.workflow.as_mut().unwrap().id = "retired-receipts".into();
         s.suites.insert(10, legacy);
     });
-    check(
-        &c,
-        10,
-        "conary/review/reviewer",
-        "success",
-        Some(&review_receipt(&head(3), &old_body)),
-    );
     check(
         &c,
         10,
@@ -122,13 +106,6 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
     suite(&c, 3, "main");
     check(&c, 3, "check", "success", None);
     check(&c, 3, "unused / skipped", "skipped", None);
-    check(
-        &c,
-        3,
-        "conary/review/reviewer",
-        "success",
-        Some(&review_receipt(&head(3), &body)),
-    );
     check(
         &c,
         3,

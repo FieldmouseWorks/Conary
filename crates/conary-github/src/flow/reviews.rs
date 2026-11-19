@@ -88,31 +88,37 @@ static RECEIPT: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`").expect("pattern")
 });
 
-/// What the reviewer last said of `head`, for each of the settings'
-/// reviewers. Fails on a time GitHub gave that isn't one.
-pub(super) fn read(
+/// The name the reviewer goes by in its marks (`codex-review-state:v1`),
+/// and the check the ledger records its word under.
+pub(crate) const NAME: &str = "codex";
+
+/// One thing the reviewer said of a head: its verdict, when GitHub dates
+/// the post that says it (Unix seconds, 0 undated), the post's body, and
+/// its address when GitHub gave one.
+pub(crate) struct Word<'a> {
+    pub verdict: Verdict,
+    pub at: u64,
+    pub body: &'a str,
+    pub url: Option<&'a str>,
+}
+
+/// Everything the accounts `authors` admits said of `head`, its summary
+/// comments first and then its reviews, each as GitHub lists them, and the
+/// rounds it took: its reviews with findings, at any head. The flow
+/// ([`read`]) and the ledger (`ingest`) both read the reviewer through
+/// this. Fails on a time GitHub gave that isn't one.
+pub(crate) fn words<'a>(
     head: &str,
-    records: &[GithubReview],
-    comments: &[Comment],
-    since: Since,
-    settings: &Settings,
-) -> Result<BTreeMap<String, Reviewer>, ApiError> {
-    let theirs = |login: Option<&str>| login.is_some_and(|l| settings.review_authors.contains(l));
+    records: &'a [GithubReview],
+    comments: &'a [Comment],
+    authors: impl Fn(&str) -> bool,
+) -> Result<(Vec<Word<'a>>, u32), ApiError> {
+    let theirs = |login: Option<&str>| login.is_some_and(&authors);
     let when = |t: Option<&str>| match t {
         None | Some("") => Ok(0),
         Some(t) => timestamp(t),
     };
-    let mut said = Reviewer {
-        changed: since.changed(),
-        ..Reviewer::default()
-    };
-    let mut saw = |verdict, at: u64, body: &str| {
-        if at >= said.at {
-            said.verdict = Some(verdict);
-            said.at = at;
-            said.source = Some(body.to_owned());
-        }
-    };
+    let mut said = Vec::new();
     for c in comments {
         if !theirs(c.user.as_ref().map(|u| u.login.as_str())) {
             continue;
@@ -138,7 +144,12 @@ pub(super) fn read(
             // Begun, or a state this doesn't know: not a verdict yet.
             _ => Verdict::Running,
         };
-        saw(verdict, when(c.updated_at.as_deref())?, body);
+        said.push(Word {
+            verdict,
+            at: when(c.updated_at.as_deref())?,
+            body,
+            url: c.html_url.as_deref(),
+        });
     }
     let mut rounds = 0u32;
     for r in records {
@@ -156,10 +167,42 @@ pub(super) fn read(
         // the commit the review is on: findings there, never clean (the
         // summary says that).
         if r.commit_id.as_deref() == Some(head) && head.starts_with(&read[1]) {
-            saw(Verdict::Findings, when(r.submitted_at.as_deref())?, body);
+            said.push(Word {
+                verdict: Verdict::Findings,
+                at: when(r.submitted_at.as_deref())?,
+                body,
+                url: r.html_url.as_deref(),
+            });
         }
     }
-    said.rounds = rounds;
+    Ok((said, rounds))
+}
+
+/// What the reviewer last said of `head`, for each of the settings'
+/// reviewers: the newest of its [`words`]. Fails on a time GitHub gave
+/// that isn't one.
+pub(super) fn read(
+    head: &str,
+    records: &[GithubReview],
+    comments: &[Comment],
+    since: Since,
+    settings: &Settings,
+) -> Result<BTreeMap<String, Reviewer>, ApiError> {
+    let (words, rounds) = words(head, records, comments, |l| {
+        settings.review_authors.contains(l)
+    })?;
+    let mut said = Reviewer {
+        changed: since.changed(),
+        rounds,
+        ..Reviewer::default()
+    };
+    for w in words {
+        if w.at >= said.at {
+            said.verdict = Some(w.verdict);
+            said.at = w.at;
+            said.source = Some(w.body.to_owned());
+        }
+    }
     Ok(settings
         .reviewers
         .iter()
@@ -218,6 +261,7 @@ mod tests {
             )),
             created_at: Some(at.into()),
             updated_at: Some(at.into()),
+            html_url: None,
         }
     }
     /// The connector's review with findings on `on`, its receipt naming `named`.

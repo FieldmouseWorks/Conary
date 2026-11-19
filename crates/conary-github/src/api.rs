@@ -145,6 +145,7 @@ pub struct Comment {
     pub body: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub html_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

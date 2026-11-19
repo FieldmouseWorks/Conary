@@ -29,7 +29,7 @@ fn by_the_engine(c: &Case, sha: &str) {
 /// The connector reviews the head clean, and the flow asks a judge: the
 /// `context` its request carries.
 fn asked(c: &Case, now: u64, t: &mut u64) -> String {
-    c.connector_clean(&c.hub.pull(REPO, 3).unwrap().head.sha, true);
+    c.clean_review();
     for _ in 0..20 {
         *t += 60;
         if matches!(step(c, now + *t), Step::Judge(_)) {

@@ -1,6 +1,6 @@
 # Service producer attestations
 
-The machine can trust a review, proof, judgment or negative-run service's
+The machine can trust a proof, judgment or negative-run service's
 Ed25519 key alongside [CI attestations](ci-attestation.md). Flow and train
 use the same verifier. A plugin answer or a check's success alone grants
 no permission. This implements the service-key path in
@@ -13,9 +13,9 @@ The machine supplies a JSON file of public keys:
 ```json
 [
   {
-    "name": "review-service",
+    "name": "judgment-service",
     "key": "BASE64URL_ED25519_PUBLIC_KEY",
-    "checks": ["conary/review/*"]
+    "checks": ["conary/judgment"]
   }
 ]
 ```
@@ -53,7 +53,7 @@ A service posts the following exact UTF-8 bytes as the reporting check run's
 
 ```text
 conary service v1
-{"producer":"review-service","repository":"owner/repo","revision":{"base":null,"head":"COMMIT"},"tree":"TREE","check":"conary/review/reviewer","definition":null,"result":"pass","log":{"sha256":"LOG_SHA256"}}
+{"producer":"judgment-service","repository":"owner/repo","revision":{"base":null,"head":"COMMIT"},"tree":"TREE","check":"conary/judgment","definition":null,"result":"pass","log":{"sha256":"LOG_SHA256"}}
 ed25519 PUBLIC_KEY SIGNATURE
 ```
 
@@ -80,7 +80,7 @@ recipe, so a check the machine defines counts only from a service. Repository na
 compare exactly. For a commit result, `base` is null, `head` is the tested
 commit, `tree` is that commit's exact tree and `result` must be `pass`, with
 a successful, completed check run. The log hash is a lowercase hexadecimal
-SHA-256 digest. For a review or decision, it must equal the hash of the exact
+SHA-256 digest. For a decision, it must equal the hash of the exact
 [producer receipt](flow.md#producer-evidence) selected by flow. Ordinary
 proof logs are bound by their signed digest; Conary does not download them.
 

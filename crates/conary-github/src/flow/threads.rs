@@ -13,7 +13,7 @@ const FINDING: &str = "conary-finding:v1";
 const ANSWER: &str = "conary-answer:v1";
 
 /// One finding of one review publication. The publication is named by its
-/// issuance, `receipt_digest(review_receipt(head, body))`: unique per
+/// [`issuance`]: unique per
 /// publication, since the body holds the findings and their completion
 /// time. The finding is its index in that review marker's `problems`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -54,9 +54,13 @@ pub struct Handed {
     pub target: Target,
 }
 
-/// The issuance a review's findings are named by.
+/// The issuance a review's findings are named by: the digest of the
+/// canonical JSON of its head and body.
 pub fn issuance(head: &str, body: &str) -> String {
-    super::receipt_digest(&super::review_receipt(head, body))
+    let publication =
+        serde_json::to_vec(&serde_json::json!({"kind":"review","head":head,"body":body}))
+            .expect("a publication is JSON");
+    super::receipt_digest(&publication)
 }
 
 /// A finding's target text: what it says, then its marker.

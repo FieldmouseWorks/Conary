@@ -70,9 +70,9 @@ pub struct Revision {
     pub head: String,
 }
 
-/// The SHA-256 of the run's output, in lowercase hex: for a review, a
-/// judgment or a dependency decision, its receipt
-/// ([`crate::flow::review_receipt`] and the rest).
+/// The SHA-256 of the run's output, in lowercase hex: for a judgment or a
+/// dependency decision, its receipt ([`crate::flow::judgment_receipt_by`]
+/// and the rest).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Log {

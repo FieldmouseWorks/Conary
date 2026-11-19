@@ -232,6 +232,7 @@ fn a_train_candidates_attested_pass_on_the_tree_is_a_hit() {
         Store::open(lock, ed25519_dalek::SigningKey::from_bytes(&[5; 32]), None).unwrap();
     let steward = crate::ingest::Config {
         reviewers: vec![crate::sim::STEWARD.into()],
+        review_authors: vec![],
         own_contexts: vec!["review-settled".into()],
     };
     let policy = Policy::parse(br#"{"r2": []}"#).unwrap();
