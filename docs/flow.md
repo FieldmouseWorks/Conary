@@ -412,15 +412,20 @@ paths it records:
   slot if it's a proof. The PR's decision waits on it, unless it's stopping
   work.
 - **An evidence lookup that can't tell** (`lookup`, with its `check`): a
-  read of GitHub that a landing's attested evidence needed didn't answer.
-  The landing isn't granted, and the PR waits at the proof stage. A lookup
-  that told no is no degradation: it's the check's own answer.
+  read of GitHub that one check's attested result needed didn't answer:
+  its runs, its tree or its attestation, the negative check's merge base
+  and verification, or a review's PR and carry. The landing isn't granted,
+  and the PR waits at the proof stage. A lookup that told no is no
+  degradation: it's the check's own answer. The reads every check shares
+  (the head's checks before any one is looked up, the PR's reviews) aren't
+  recorded yet: they fail the grant as before.
 
 A pass records each path once while it lasts, against the PR's revision as
 the ledger has it, and appends `restored` when the same path works again: a
 record or answer the next pass reads, a lookup that tells. A PR the ledger
 hasn't seen has nothing to record against, and its decision still names
-what degraded. A dry run records nothing and names the same. A decision
+what degraded. A dry run, or a pass with no ledger store, records nothing and names the
+same. A decision
 names a lookup the ledger still holds degraded until it's looked up again.
 
 `cn flow status` lists every open PR's degraded paths as `degraded`, each
