@@ -215,6 +215,14 @@ fn conaryd_answers_lookups_from_the_machines_configuration() {
     // A file that doesn't read trusts no one: the gate runs.
     std::fs::write(root.join("gate-reuse.json"), b"{").unwrap();
     assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 503"));
+    // Nor does its log repeat what it refused: a token command's
+    // credential, written as the whole file, stays out of it.
+    std::fs::write(
+        root.join("gate-reuse.json"),
+        json!("env KEY=hunter2 conary-token").to_string(),
+    )
+    .unwrap();
+    assert!(refused(None, &request("example/project")).starts_with("HTTP/1.1 503"));
     std::fs::write(root.join("gate-reuse.json"), config.to_string()).unwrap();
     assert!(refused(Some("Bearer x"), &request("example/other")).starts_with("HTTP/1.1 403"));
     assert!(daemon.0.try_wait().unwrap().is_none());
@@ -233,5 +241,9 @@ fn conaryd_answers_lookups_from_the_machines_configuration() {
         err.contains("listen changed in") && err.contains("until it restarts"),
         "{err}"
     );
-    assert!(!err.contains("echo token"), "{err}");
+    assert!(
+        err.contains("the gate-reuse configuration doesn't read"),
+        "{err}"
+    );
+    assert!(!err.contains("hunter2"), "{err}");
 }

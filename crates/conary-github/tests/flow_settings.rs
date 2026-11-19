@@ -332,6 +332,45 @@ fn only_listen_of_the_gate_reuse_configuration_keeps_its_started_value() {
     assert_eq!(restart, ["listen"]);
 }
 
+/// A configuration that doesn't read is refused without any of its values:
+/// a token command's credential, written where it doesn't belong, even as
+/// the whole file or as an option's name, never reaches an error, so
+/// neither conaryd's log nor `cn flow settings` prints it.
+#[test]
+fn no_reader_quotes_a_value_of_a_file_it_refuses() {
+    let secret = "env KEY=hunter2 conary-token";
+    let files = [
+        json!(secret),
+        json!([secret]),
+        json!({"token_command": secret, "repos": secret}),
+        json!({"token_command": secret, "listen": secret}),
+        json!({"token_command": secret, "fresh": [secret]}),
+        json!({secret: 1}),
+        json!({"settings": {"train": secret}}),
+        json!({"settings": {secret: true}}),
+    ];
+    for file in files {
+        let bytes = file.to_string().into_bytes();
+        let errors = [
+            schema::load::<reuse::Settings>(&bytes).err(),
+            schema::load::<Runtime>(&bytes).err(),
+            schema::load::<Config>(&bytes).err(),
+            schema::effective::<reuse::Settings>(&bytes).err(),
+            schema::effective::<Runtime>(&bytes).err(),
+            schema::effective::<Config>(&bytes).err(),
+        ];
+        for error in errors {
+            let error = error.expect("refused").to_string();
+            assert!(!error.contains("hunter2"), "{file}: {error}");
+        }
+    }
+    let missing = schema::load::<reuse::Settings>(b"{}").unwrap_err();
+    assert!(
+        missing.to_string().contains("missing field `listen`"),
+        "an option the schema declares is named: {missing}"
+    );
+}
+
 #[test]
 fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     let dir = tempfile::tempdir().unwrap();

@@ -203,7 +203,7 @@ impl<T: JsonSchema + Serialize + DeserializeOwned> Live<T> {
                 };
             }
         }
-        let value = serde_json::from_value(now)?;
+        let value = serde_json::from_value(now).map_err(quiet)?;
         let mut noted = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
         if *noted != waiting {
             if !waiting.is_empty() {
@@ -257,13 +257,39 @@ pub struct Listing {
 /// a duplicate or unknown key is refused, and with every struct in it
 /// written as an object, the one form the schema describes (serde would
 /// also take a struct as a positional array). Returns the file as JSON too.
+/// Its errors never quote a value: see [`quiet`].
 pub fn load<T: JsonSchema + DeserializeOwned>(file: &[u8]) -> Result<(T, Value)> {
-    let loaded: T = serde_json::from_slice(file)?;
-    let raw: Value = serde_json::from_slice(file)?;
+    let loaded: T = serde_json::from_slice(file).map_err(quiet)?;
+    let raw: Value = serde_json::from_slice(file).map_err(quiet)?;
     let schema = of::<T>()?;
     objects(&schema, &schema, &raw, "")?;
     Ok((loaded, raw))
 }
+/// Why a configuration file doesn't read, without any of its values: serde
+/// quotes a value of the wrong type or form, and a secret's value (a token
+/// command's credential) may be the one quoted, even as the whole document.
+/// So only what names the schema's own options, one missing or given twice,
+/// is said as serde says it; anything else, an option it doesn't know
+/// included (its name is the file's), is said by its kind and place.
+fn quiet(e: serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let at = format!("at line {} column {}", e.line(), e.column());
+    match e.classify() {
+        Category::Io => format!("it can't be read {at}"),
+        Category::Syntax | Category::Eof => format!("it isn't JSON {at}"),
+        Category::Data => {
+            let said = e.to_string();
+            if said.starts_with("missing field `") || said.starts_with("duplicate field `") {
+                said
+            } else if said.starts_with("unknown field `") {
+                format!("it names an option the schema doesn't declare {at}")
+            } else {
+                format!("a value isn't of the type or form its option takes {at}")
+            }
+        }
+    }
+}
+
 /// Whether each struct `raw` holds where `owner` says, at `path`, is an object.
 fn objects(schema: &Value, owner: &Value, raw: &Value, path: &str) -> Result<()> {
     let Some(fields) = raw.as_object() else {
