@@ -88,9 +88,14 @@ pub(super) fn reviewer(
     let (words, _) = reviews::words(&pr.head.sha, reviews, comments, |login| {
         config.review_authors.iter().any(|a| a == login)
     })?;
-    Ok(words
+    let mut words: Vec<_> = words
         .into_iter()
         .filter(|w| since.is_none_or(|s| w.at >= s))
+        .collect();
+    // Oldest first, so the ledger's last record of it is its last word.
+    words.sort_by_key(|w| w.at);
+    Ok(words
+        .into_iter()
         .filter_map(|w| {
             let result = match w.verdict {
                 Verdict::Clean => Outcome::Pass,

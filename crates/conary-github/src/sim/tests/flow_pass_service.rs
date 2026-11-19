@@ -189,6 +189,60 @@ fn altered_unknown_or_author_controlled_service_evidence_cannot_grant_permission
 }
 
 #[test]
+fn a_services_judgment_counts_only_for_its_exact_receipt() {
+    for (why, exact) in [
+        ("its exact receipt", true),
+        ("a log of another judgment", false),
+    ] {
+        let file = producers_file(&[(
+            PRODUCER,
+            &producer_key(),
+            &[PROOF, "negative", "conary/judgment"],
+        )]);
+        let (c, _keys) = case(&file);
+        proof(&c, &producer_key(), |_| {}, |t| t);
+        negative(&c, "fail");
+        // The judge's issuance, its receipt signed by the service alone.
+        let basis = c.judgment(1, Judgment::Pass, false);
+        let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
+        let receipt = judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&basis),
+        );
+        let log = if exact {
+            receipt_digest(&receipt)
+        } else {
+            receipt_digest(b"another judgment")
+        };
+        let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+        let s = testing::service_statement(REPO, &head(3), &tree, "conary/judgment", &log);
+        post(
+            &c,
+            &head(3),
+            "conary/judgment",
+            "success",
+            &sign(&s, &producer_key()),
+        );
+        let reports = c.pass(jobs::now(), false);
+        if exact {
+            assert_eq!(reports[0].error, None, "{why}");
+            assert!(landed(&c), "{why}: {:?}", reports[0].next);
+        } else {
+            let next = reports[0].next.as_ref().unwrap();
+            assert!(
+                next.description.contains("does not bind this exact result"),
+                "{why}: {}",
+                next.description
+            );
+            pending(&c, why);
+        }
+    }
+}
+
+#[test]
 fn service_evidence_counts_only_under_the_machines_own_producer_keys() {
     // A producer the machine trusts for negatives alone signs no proof.
     let negatives_only = producers_file(&[(PRODUCER, &producer_key(), &["negative"])]);

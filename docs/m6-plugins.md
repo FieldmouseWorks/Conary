@@ -176,8 +176,7 @@ Burrow's half is the same for every producer, and
 ## Who produces what
 
 The receipts and check names are the existing ones
-([flow.md](flow.md#producer-evidence)). `ROLE` is the review role as the
-flow settings name it.
+([flow.md](flow.md#producer-evidence)).
 
 | Plugin | Producer posts | Signed check run, and its log | Key's check scope |
 | --- | --- | --- | --- |

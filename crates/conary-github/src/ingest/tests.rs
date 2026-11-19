@@ -857,17 +857,18 @@ fn the_reviewers_word_on_the_head_is_recorded_as_a_review_never_attested() {
         .collect();
     assert_eq!(
         reviews,
+        // Oldest first: its findings at 11:10, then its clean word at 11:20.
         [
-            (
-                "codex",
-                Outcome::Pass,
-                "https://github.com/x/y/pull/9#issuecomment-1",
-                false
-            ),
             (
                 "codex",
                 Outcome::Fail,
                 "https://github.com/x/y/pull/9#pullrequestreview-11",
+                false
+            ),
+            (
+                "codex",
+                Outcome::Pass,
+                "https://github.com/x/y/pull/9#issuecomment-1",
                 false
             ),
         ]
