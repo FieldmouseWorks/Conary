@@ -1,5 +1,8 @@
 //! Permission is based on independently attested producer records, never
-//! controller-posted assertions. Plugins remain a work protocol.
+//! controller-posted assertions. Plugins remain a work protocol. The
+//! reviewer's word is a gate, not evidence (DESIGN.md 4.3), so nothing here
+//! asks for it: the flow's decision waits for it, and `scope::current`
+//! refuses permission when it changed since.
 use super::persist::Result;
 use super::*;
 use crate::attest::service::Producers;
@@ -56,12 +59,6 @@ impl Evidence {
             trust,
         })
     }
-}
-/// Canonical producer log. Its digest must be in the signed commit predicate's
-/// existing log.sha256 field. This does not extend the plugin wire contract.
-pub fn review_receipt(head: &str, body: &str) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({"kind":"review","head":head,"body":body}))
-        .expect("receipt")
 }
 pub fn judgment_receipt(
     revision: &Revision,
@@ -158,13 +155,8 @@ pub(crate) fn authorize<G: Write>(
         return Err("no required attested gate is configured".into());
     }
     let repo = f.repo.to_string();
-    let mut receipts: std::collections::BTreeSet<String> = f
-        .settings
-        .reviewers
-        .iter()
-        .map(|role| format!("conary/review/{role}"))
-        .collect();
-    receipts.extend(["conary/judgment".into(), "conary/major".into()]);
+    let receipts: std::collections::BTreeSet<String> =
+        ["conary/judgment".into(), "conary/major".into()].into();
     if evidence
         .require
         .iter()
@@ -229,41 +221,6 @@ pub(crate) fn authorize<G: Write>(
     let records = github.reviews(&repo, f.number)?;
     if super::reviews::changes_requested(&records) {
         return Err("Review changes were requested before permission was used".into());
-    }
-    // A clean word counts only with its producer's receipt over the post
-    // it came from, read again here so a post edited since the decision
-    // can't stand in for the one decided on.
-    let clean: Vec<_> = f
-        .reviewers
-        .iter()
-        .filter(|(_, r)| r.verdict == Some(Verdict::Clean))
-        .collect();
-    if !clean.is_empty() {
-        let comments = github.comments(&repo, f.number)?;
-        let again = super::reviews::read(
-            &f.revision.head,
-            &records,
-            &comments,
-            super::reviews::Since::default(),
-            &f.settings,
-        )?;
-        for (role, reviewer) in clean {
-            let body = reviewer.source.as_deref().ok_or("review source missing")?;
-            if again.get(role).is_none_or(|r| {
-                (r.verdict, r.at, &r.source) != (reviewer.verdict, reviewer.at, &reviewer.source)
-            }) {
-                return Err("review changed after the decision read".into());
-            }
-            check(
-                github,
-                f,
-                &trust,
-                &f.revision.head,
-                &format!("conary/review/{role}"),
-                Some(&review_receipt(&f.revision.head, body)),
-                looked,
-            )?;
-        }
     }
     if let Some(generation) = f.judgment_generation {
         // A conflict or unsupported tombstone cannot be made positive by a local result.

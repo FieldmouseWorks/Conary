@@ -1,5 +1,5 @@
 //! Service-key producer evidence (`docs/service-attestation.md`) through the
-//! real pass: a review and a negative a trusted service signed grant
+//! real pass: a proof and a negative a trusted service signed grant
 //! permission beside the CI gate's attestation, and nothing altered,
 //! unknown or author-controlled does.
 use super::flow_pass_case::{Case, REPO};
@@ -13,21 +13,29 @@ use crate::sim::Call;
 use ed25519_dalek::SigningKey;
 use serde_json::json;
 
-const REVIEW: &str = "conary/review/reviewer";
+const PROOF: &str = "proof";
 
-/// The case, with the machine trusting [`PRODUCER`] for reviews and
-/// negatives, as `trusted` says, in a producer keys file of its own.
+/// What the machine runs as the proof [`PROOF`].
+fn recipe() -> Recipe {
+    Recipe::Build("checks.tests".into())
+}
+
+/// The case, its machine running [`recipe`] as the proof [`PROOF`] and
+/// the reviewer clean on its head, with the machine trusting [`PRODUCER`]
+/// as `trusted` says, in a producer keys file of its own.
 fn case(trusted: &[u8]) -> (Case, tempfile::TempDir) {
     let mut c = Case::new();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("producers.json");
     std::fs::write(&path, trusted).unwrap();
     c.config.evidence.as_mut().unwrap().producers = Some(path);
+    c.config.settings.proofs.insert(PROOF.into(), recipe());
+    c.clean_review();
     (c, dir)
 }
 
 fn trusted() -> Vec<u8> {
-    producers_file(&[(PRODUCER, &producer_key(), &["conary/review/*", "negative"])])
+    producers_file(&[(PRODUCER, &producer_key(), &[PROOF, "negative"])])
 }
 
 /// A check run on `head` reporting `text`, as a service posts one.
@@ -40,23 +48,20 @@ fn post(c: &Case, head: &str, name: &str, conclusion: &str, text: &str) {
     );
 }
 
-/// A clean review, published, and the service's statement of it on the
-/// head, changed by `change` and signed with `key`; changed afterwards,
-/// as text, by `tamper`.
-fn review(
+/// The service's statement that the proof passed on the head, having run
+/// what the machine selects, changed by `change` and signed with `key`;
+/// changed afterwards, as text, by `tamper`.
+fn proof(
     c: &Case,
     key: &SigningKey,
     change: impl FnOnce(&mut Statement),
     tamper: impl FnOnce(String) -> String,
 ) {
-    c.hub.flow_review(REPO, 3, Verdict::Clean, 0);
-    let body = c.connector_summary(3);
-    let receipt = review_receipt(&head(3), &body);
     let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
-    let mut s =
-        testing::service_statement(REPO, &head(3), &tree, REVIEW, &receipt_digest(&receipt));
+    let mut s = testing::service_statement(REPO, &head(3), &tree, PROOF, &"0".repeat(64));
+    s.definition = Some(recipe_digest(&recipe()));
     change(&mut s);
-    post(c, &head(3), REVIEW, "success", &tamper(sign(&s, key)));
+    post(c, &head(3), PROOF, "success", &tamper(sign(&s, key)));
 }
 
 /// The service's negative of the head on its base, its CI one forgotten:
@@ -102,9 +107,9 @@ fn pending(c: &Case, why: &str) {
 }
 
 #[test]
-fn a_trusted_services_review_and_negative_grant_permission_beside_ci() {
+fn a_trusted_services_proof_and_negative_grant_permission_beside_ci() {
     let (c, _keys) = case(&trusted());
-    review(&c, &producer_key(), |_| {}, |t| t);
+    proof(&c, &producer_key(), |_| {}, |t| t);
     negative(&c, "fail");
     let reports = c.pass(jobs::now(), false);
     assert_eq!(reports[0].error, None);
@@ -123,12 +128,6 @@ fn altered_unknown_or_author_controlled_service_evidence_cannot_grant_permission
             producer_key(),
             Box::new(|s| s.result = "fail".into()),
             Box::new(|t| t.replacen(r#""result":"fail""#, r#""result":"pass""#, 1)),
-        ),
-        (
-            ("a log of another review", "does not bind this exact result"),
-            producer_key(),
-            Box::new(|s| s.log.sha256 = receipt_digest(b"another review")),
-            keep(),
         ),
         (
             ("another revision", "its statement is about 4444"),
@@ -175,7 +174,7 @@ fn altered_unknown_or_author_controlled_service_evidence_cannot_grant_permission
     ];
     for ((why, says), key, change, tamper) in cases {
         let (c, _keys) = case(&trusted());
-        review(&c, &key, change, tamper);
+        proof(&c, &key, change, tamper);
         negative(&c, "fail");
         let reports = c.pass(jobs::now(), false);
         let next = reports[0].next.as_ref().unwrap();
@@ -190,19 +189,72 @@ fn altered_unknown_or_author_controlled_service_evidence_cannot_grant_permission
 }
 
 #[test]
+fn a_services_judgment_counts_only_for_its_exact_receipt() {
+    for (why, exact) in [
+        ("its exact receipt", true),
+        ("a log of another judgment", false),
+    ] {
+        let file = producers_file(&[(
+            PRODUCER,
+            &producer_key(),
+            &[PROOF, "negative", "conary/judgment"],
+        )]);
+        let (c, _keys) = case(&file);
+        proof(&c, &producer_key(), |_| {}, |t| t);
+        negative(&c, "fail");
+        // The judge's issuance, its receipt signed by the service alone.
+        let basis = c.judgment(1, Judgment::Pass, false);
+        let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
+        let receipt = judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&basis),
+        );
+        let log = if exact {
+            receipt_digest(&receipt)
+        } else {
+            receipt_digest(b"another judgment")
+        };
+        let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
+        let s = testing::service_statement(REPO, &head(3), &tree, "conary/judgment", &log);
+        post(
+            &c,
+            &head(3),
+            "conary/judgment",
+            "success",
+            &sign(&s, &producer_key()),
+        );
+        let reports = c.pass(jobs::now(), false);
+        if exact {
+            assert_eq!(reports[0].error, None, "{why}");
+            assert!(landed(&c), "{why}: {:?}", reports[0].next);
+        } else {
+            let next = reports[0].next.as_ref().unwrap();
+            assert!(
+                next.description.contains("does not bind this exact result"),
+                "{why}: {}",
+                next.description
+            );
+            pending(&c, why);
+        }
+    }
+}
+
+#[test]
 fn service_evidence_counts_only_under_the_machines_own_producer_keys() {
-    // A producer the machine trusts for proofs alone signs no review.
-    let proofs_only =
-        producers_file(&[(PRODUCER, &producer_key(), &["conary/proof/*", "negative"])]);
+    // A producer the machine trusts for negatives alone signs no proof.
+    let negatives_only = producers_file(&[(PRODUCER, &producer_key(), &["negative"])]);
     // An author's key the machine doesn't list counts for nothing, even
     // beside the trusted one.
     let unlisted = trusted();
     for (why, file, key) in [
-        ("out of its scope", proofs_only, producer_key()),
+        ("out of its scope", negatives_only, producer_key()),
         ("unlisted", unlisted, author_key()),
     ] {
         let (c, _keys) = case(&file);
-        review(&c, &key, |_| {}, |t| t);
+        proof(&c, &key, |_| {}, |t| t);
         negative(&c, "fail");
         c.pass(jobs::now(), false);
         pending(&c, why);
@@ -210,13 +262,13 @@ fn service_evidence_counts_only_under_the_machines_own_producer_keys() {
     // No producer keys, or a file that doesn't read: no service counts.
     let (mut c, _keys) = case(&trusted());
     c.config.evidence.as_mut().unwrap().producers = None;
-    review(&c, &producer_key(), |_| {}, |t| t);
+    proof(&c, &producer_key(), |_| {}, |t| t);
     negative(&c, "fail");
     c.pass(jobs::now(), false);
     pending(&c, "none configured");
     for broken in [&b"not json"[..], b"[]"] {
         let (c, _keys) = case(broken);
-        review(&c, &producer_key(), |_| {}, |t| t);
+        proof(&c, &producer_key(), |_| {}, |t| t);
         negative(&c, "fail");
         c.pass(jobs::now(), false);
         pending(&c, &String::from_utf8_lossy(broken));
@@ -226,28 +278,20 @@ fn service_evidence_counts_only_under_the_machines_own_producer_keys() {
 #[test]
 fn a_services_negative_must_say_the_new_tests_failed_on_the_old_code() {
     let (c, _keys) = case(&trusted());
-    review(&c, &producer_key(), |_| {}, |t| t);
+    proof(&c, &producer_key(), |_| {}, |t| t);
     negative(&c, "pass");
     c.pass(jobs::now(), false);
     pending(&c, "a passing negative");
 }
 
-const PROOF: &str = "proof";
-
-/// The case, its machine running `recipe` as the proof [`PROOF`] and
-/// trusting [`PRODUCER`] for it, with a clean review and a failing negative.
+/// The case, its machine running `recipe` as the proof [`PROOF`] instead,
+/// with a failing negative.
 fn proving(recipe: &Recipe) -> (Case, tempfile::TempDir) {
-    let file = producers_file(&[(
-        PRODUCER,
-        &producer_key(),
-        &["conary/review/*", "negative", PROOF],
-    )]);
-    let (mut c, keys) = case(&file);
+    let (mut c, keys) = case(&trusted());
     c.config
         .settings
         .proofs
         .insert(PROOF.into(), recipe.clone());
-    review(&c, &producer_key(), |_| {}, |t| t);
     negative(&c, "fail");
     (c, keys)
 }
@@ -339,17 +383,12 @@ fn every_spelling_of_a_proof_needs_the_services_statement() {
     let recipe = Recipe::Build("checks.tests".into());
     let definition = Some(recipe_digest(&recipe));
     for both in [false, true] {
-        let file = producers_file(&[(
-            PRODUCER,
-            &producer_key(),
-            &["conary/review/*", "negative", PROOF, "Proof"],
-        )]);
+        let file = producers_file(&[(PRODUCER, &producer_key(), &["negative", PROOF, "Proof"])]);
         let (mut c, _keys) = case(&file);
         c.config
             .settings
             .proofs
             .insert(PROOF.into(), recipe.clone());
-        review(&c, &producer_key(), |_| {}, |t| t);
         negative(&c, "fail");
         proved_as(&c, "Proof", definition.clone());
         if both {

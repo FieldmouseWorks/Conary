@@ -18,6 +18,7 @@ fn repo() -> Repo {
 fn config() -> Config {
     Config {
         reviewers: vec![STEWARD.into()],
+        review_authors: vec![],
         own_contexts: vec!["review-settled".into()],
     }
 }

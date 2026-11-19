@@ -266,10 +266,28 @@ Three rules make it trustworthy:
 
 1. **Agents don't grade their own work.** Evidence counts only when it was
    produced outside the authoring session's sandbox and carries its
-   producer's attestation: CI on a configured runner, the steward's
-   reviewers, or a proof or judge job Conary started. conaryd's signature on
-   the op that records a result doesn't stand in for that attestation.
-   Anything the authoring session posts itself is feedback, not evidence.
+   producer's attestation: CI on a configured runner, or a proof or judge
+   job Conary started. conaryd's signature on the op that records a result
+   doesn't stand in for that attestation. Anything the authoring session
+   posts itself is feedback, not evidence.
+
+   **A reviewer's word is a gate, not evidence.** The reviewer is Codex's
+   GitHub connector, another party's App. It attests nothing, and anyone
+   with write access to the repo can edit what it posts. A service of
+   remi's that signed what it read there would attest only that read, which
+   the flow makes itself, so it would be a signature standing in for an
+   attestation. So, in every class:
+   - The flow waits for the reviewer's clean word on the head before it
+     lands, as [section 2](#2-gates-and-what-replaces-them) sets out for
+     each class, and refuses permission when that word changed since the
+     decision.
+   - The ledger records each finished word as a `review` result with no
+     attestation (clean passes, findings fail), which never counts.
+   - What a landing counts is attested CI and negative evidence, the
+     receipts of whatever judged it, and for R2 a person's scoped approval
+     and evidence for the exact candidate tree. A revert undoes what an R0
+     or R1 review missed. An R2 change waits for a person, who reads the
+     review.
 2. **New tests must fail on the old code.** A change that adds a test needs a
    `negative` record: the new test run against the base's code, failing. A
    test is a file, by its path (`tests/**`, `**/tests.rs`, `**/test_*.py`
@@ -860,7 +878,7 @@ Targets on remi, warm cache, a year of ledger across every repo:
     can say only what that run's check run concluded. Root on a self-hosted
     runner's machine can still change what a job does, as it can read the
     steward's key (below).
-  - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
+  - Jobs on remi (proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
     [Service attestations](service-attestation.md) defines the signed format
@@ -870,8 +888,9 @@ Targets on remi, warm cache, a year of ledger across every repo:
 - The steward acts on GitHub as its own GitHub App, never as the owner's
   login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
   `review-settled` counts only from the App's bot
-  (`cn --reviewer SLUG[bot]`), the reviewer's reviews only from its own
-  (Codex's GitHub connector), and the repos' rules require that status, and
+  (`cn --reviewer SLUG[bot]`), the reviewer's word only from its own
+  (Codex's GitHub connector, `cn --review-author`), and the repos' rules
+  require that status, and
   in a train repo `conary/train`, from the App's integration ID, so a session holding the owner's token can't post
   one that counts, to Conary or to GitHub. The App's key reaches only the
   steward's units on the machine; a Claude running there as the machine

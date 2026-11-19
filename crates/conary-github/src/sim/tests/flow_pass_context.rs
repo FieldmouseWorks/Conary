@@ -5,7 +5,6 @@
 use super::flow_pass_case::{Case, REPO, example};
 use super::flow_pass_threads::{reviewed, step, threads, unchanged, until, until_review};
 use super::{TRUNK, head};
-use crate::api::Source;
 use crate::flow::{self, *};
 use conary_core::plugin::Task;
 
@@ -28,7 +27,7 @@ fn by_the_engine(c: &Case, sha: &str) {
 /// The connector reviews the head clean, after any findings, and the flow
 /// asks a judge: the `context` its request carries.
 fn asked(c: &Case, now: u64, t: &mut u64) -> String {
-    c.connector_clean_at(&c.hub.pull(REPO, 3).unwrap().head.sha, true, now + *t);
+    c.clean_review_at(now + *t);
     for _ in 0..20 {
         *t += 60;
         if matches!(step(c, now + *t), Step::Judge(_)) {

@@ -260,27 +260,13 @@ impl Case {
             "APPROVED",
         );
     }
-    /// The connector's clean review of head 3, and its producer's receipt
-    /// over the summary comment that says so.
+    /// The connector's clean review of head 3.
     pub(super) fn clean_review(&self) {
-        self.connector_clean(&head(3), true);
+        self.clean_review_at(0);
     }
-    /// The connector calls the PR's current head, `head`, clean; with
-    /// `attest`, its producer's receipt over that summary comment is signed.
-    pub(super) fn connector_clean(&self, head: &str, attest: bool) {
-        self.connector_clean_at(head, attest, 0);
-    }
-    /// [`Self::connector_clean`], its review finished at `at`.
-    pub(super) fn connector_clean_at(&self, head: &str, attest: bool, at: u64) {
+    /// [`Self::clean_review`], its review finished at `at`.
+    pub(super) fn clean_review_at(&self, at: u64) {
         self.hub.flow_review(REPO, 3, Verdict::Clean, at);
-        if attest {
-            let body = self.connector_summary(3);
-            self.sign_check(
-                head,
-                "conary/review/reviewer",
-                Some(&review_receipt(head, &body)),
-            );
-        }
     }
     /// The body of the connector's last summary comment on PR `pr`.
     pub(super) fn connector_summary(&self, pr: u64) -> String {

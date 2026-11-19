@@ -176,12 +176,11 @@ Burrow's half is the same for every producer, and
 ## Who produces what
 
 The receipts and check names are the existing ones
-([flow.md](flow.md#producer-evidence)). `ROLE` is the review role as the
-flow settings name it.
+([flow.md](flow.md#producer-evidence)).
 
 | Plugin | Producer posts | Signed check run, and its log | Key's check scope |
 | --- | --- | --- | --- |
-| Review | Nothing itself. The reviewer is Codex's GitHub connector, which posts its own review ([flow.md](flow.md#review)); a producer would sign the post the clean word came from. None does yet, so nothing counts | `conary/review/ROLE` on the head. The log is `review_receipt(head, body)` | `conary/review/ROLE` |
+| Review | Nothing itself. The reviewer is Codex's GitHub connector, which posts its own review ([flow.md](flow.md#review)). Its word is a gate, not evidence ([DESIGN.md](DESIGN.md#43-evidence)) | None | No key |
 | Fix | Its commits, pushed to the PR's branch | None. A fix is authorship, not evidence. The next review grades it. Its session becomes known from the validated plugin answer ([flow.md](flow.md#explicit-landing-passes)), so a later judge can't be that session | No key |
 | Judge | The sealed `autoland-judgment:v3` comment (`SealKey::judgment_by`), as an account in `settings.verdict_authors` | `conary/judgment` on the head. The log is `judgment_receipt_by(revision, generation, verdict, provenance, basis)` | `conary/judgment` |
 | Proof | A check run per proof, named as the proof is named in `settings.proofs` | That check run, with `definition` set to `recipe_digest(recipe)`. The log is the sha256 of the program's output | The exact names of the configured proofs |
@@ -280,8 +279,8 @@ thread to answer, and `Step::PostFix` fails. This task owns both halves.
 
 **Identity.** Every finding target and every answer carries a marker
 that names the review issuance and the finding inside it. The issuance is
-named by the digest of its receipt, `receipt_digest(review_receipt(head,
-body))`, which is unique per publication because the body holds the
+named by the digest of its head and body, which is unique per
+publication because the body holds the
 findings and `reviewed_at`. The finding is named by its index in that
 review marker's `problems`, and the role and head are named too. An answer
 also names the fix invocation it came from. So a second review on the same

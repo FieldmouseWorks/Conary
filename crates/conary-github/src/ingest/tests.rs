@@ -13,6 +13,7 @@ const REBASED: &str = "6666666666666666666666666666666666666666";
 const DEV: &str = "7777777777777777777777777777777777777777";
 const DEV_FORK: &str = "8888888888888888888888888888888888888888";
 const STEWARD: &str = "fieldmouse-steward";
+const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
 
 const REPO: &str = "FieldmouseWorks/burrow";
 
@@ -23,6 +24,7 @@ fn repo() -> Repo {
 fn config() -> Config {
     Config {
         reviewers: vec![STEWARD.into()],
+        review_authors: vec![CONNECTOR.into()],
         own_contexts: vec!["review-settled".into()],
     }
 }
@@ -750,3 +752,236 @@ fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
 
 mod sync;
 mod undo;
+
+/// The connector's summary comment `id`, by `login`, as it keeps it for a
+/// review of `of` that's `status`, last updated `at`.
+fn summary(
+    id: u64,
+    login: &str,
+    of: &str,
+    status: &str,
+    findings: Option<bool>,
+    at: &str,
+) -> Value {
+    let state = json!({
+        "code_review": {"commit_sha": of, "has_any_findings": findings, "status": status},
+        "security_review": {"commit_sha": null, "has_any_findings": null, "status": null},
+    });
+    json!({
+        "user": {"login": login, "type": "Bot"},
+        "body": format!("<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {state} -->\n\n## Codex Review Summary"),
+        "created_at": at,
+        "updated_at": at,
+        "html_url": format!("https://github.com/x/y/pull/9#issuecomment-{id}"),
+    })
+}
+
+/// The connector's review `id` with findings, on `on`, at `at`.
+fn findings(id: u64, on: &str, at: &str) -> Value {
+    let mut r = review(
+        id,
+        CONNECTOR,
+        on,
+        format!("### Codex Review\n\n**Reviewed commit:** `{}`\n", &on[..10]),
+    );
+    r["submitted_at"] = json!(at);
+    r
+}
+
+#[test]
+fn the_reviewers_word_on_the_head_is_recorded_as_a_review_never_attested() {
+    let (_dir, mut store) = open();
+    let f = fake();
+    f.put_reviews(
+        REPO,
+        9,
+        json!([
+            findings(11, HEAD, "2026-10-27T11:10:00Z"),
+            // On another head: about that one, not this.
+            findings(12, HEAD2, "2026-10-27T11:11:00Z"),
+            // Not the connector: text in a review, whatever it says.
+            review(
+                13,
+                "someone",
+                HEAD,
+                "**Reviewed commit:** `3333333333`".into()
+            ),
+        ]),
+    );
+    f.put_comments(
+        REPO,
+        9,
+        json!([
+            summary(
+                1,
+                CONNECTOR,
+                HEAD,
+                "completed",
+                Some(false),
+                "2026-10-27T11:20:00Z"
+            ),
+            summary(
+                2,
+                "someone",
+                HEAD,
+                "completed",
+                Some(false),
+                "2026-10-27T11:21:00Z"
+            ),
+            summary(
+                3,
+                CONNECTOR,
+                HEAD2,
+                "completed",
+                Some(false),
+                "2026-10-27T11:22:00Z"
+            ),
+            // Begun, not finished: no verdict yet.
+            summary(4, CONNECTOR, HEAD, "running", None, "2026-10-27T11:23:00Z"),
+        ]),
+    );
+    let got = pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    let reviews: Vec<_> = c
+        .evidence
+        .iter()
+        .filter(|e| e.kind == CheckKind::Review)
+        .map(|e| {
+            (
+                e.check.as_str(),
+                e.result,
+                e.source.as_str(),
+                e.attest.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        reviews,
+        // Oldest first: its findings at 11:10, then its clean word at 11:20.
+        [
+            (
+                "codex",
+                Outcome::Fail,
+                "https://github.com/x/y/pull/9#pullrequestreview-11 at 2026-10-27T11:10:00Z",
+                false
+            ),
+            (
+                "codex",
+                Outcome::Pass,
+                "https://github.com/x/y/pull/9#issuecomment-1 at 2026-10-27T11:20:00Z",
+                false
+            ),
+        ]
+    );
+    let revision = RevisionId::new(&sha(FORK), &sha(HEAD));
+    assert!(c.evidence.iter().all(|e| e.revision == revision));
+
+    // With no reviewer configured, nothing it says is recorded.
+    let (_dir, mut store) = open();
+    let none = Config {
+        review_authors: vec![],
+        ..config()
+    };
+    let got = pull(&mut store, &f, &none, &repo(), 9).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    assert!(!c.evidence.iter().any(|e| e.kind == CheckKind::Review));
+}
+
+#[test]
+fn the_reviewers_word_from_before_a_retarget_is_not_the_new_revisions() {
+    let (_dir, mut store) = open();
+    let f = fake();
+    f.put_reviews(REPO, 9, json!([]));
+    retarget(&f);
+    f.put_event(REPO, 9, "base_ref_changed", "2026-10-27T13:00:00Z");
+    // Its posts name the commit, not the base: one dated before the
+    // retarget may be about the old base.
+    f.put_comments(
+        REPO,
+        9,
+        json!([
+            summary(
+                1,
+                CONNECTOR,
+                HEAD,
+                "completed",
+                Some(true),
+                "2026-10-27T12:59:59Z"
+            ),
+            summary(
+                2,
+                CONNECTOR,
+                HEAD,
+                "completed",
+                Some(false),
+                "2026-10-27T13:00:01Z"
+            ),
+        ]),
+    );
+    let got = pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    let c = store.ledger().change(got.change).unwrap();
+    let reviews: Vec<_> = c
+        .evidence
+        .iter()
+        .filter(|e| e.kind == CheckKind::Review)
+        .map(|e| (e.result, e.source.as_str()))
+        .collect();
+    assert_eq!(
+        reviews,
+        [(
+            Outcome::Pass,
+            "https://github.com/x/y/pull/9#issuecomment-2 at 2026-10-27T13:00:01Z"
+        )]
+    );
+}
+
+#[test]
+fn each_rewrite_of_the_reviewers_summary_is_a_word_of_its_own() {
+    let (_dir, mut store) = open();
+    let f = fake();
+    let words = |store: &Store, change| -> Vec<Outcome> {
+        store
+            .ledger()
+            .change(change)
+            .unwrap()
+            .evidence
+            .iter()
+            .filter(|e| e.kind == CheckKind::Review)
+            .map(|e| e.result)
+            .collect()
+    };
+    f.put_reviews(REPO, 9, json!([]));
+    // Clean, then findings on another look at the same head, then clean
+    // again: the connector rewrites the one summary each time.
+    let clean = |at| json!([summary(1, CONNECTOR, HEAD, "completed", Some(false), at)]);
+    f.put_comments(REPO, 9, clean("2026-10-27T11:20:00Z"));
+    let change = pull(&mut store, &f, &config(), &repo(), 9).unwrap().change;
+    f.put_comments(
+        REPO,
+        9,
+        json!([summary(
+            1,
+            CONNECTOR,
+            HEAD,
+            "completed",
+            Some(true),
+            "2026-10-27T11:30:00Z"
+        )]),
+    );
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    f.put_comments(REPO, 9, clean("2026-10-27T11:40:00Z"));
+    pull(&mut store, &f, &config(), &repo(), 9).unwrap();
+    // The ledger's last word is the reviewer's last word.
+    assert_eq!(
+        words(&store, change),
+        [Outcome::Pass, Outcome::Fail, Outcome::Pass]
+    );
+    // Read again unchanged, it's the same word, recorded once.
+    assert_eq!(
+        pull(&mut store, &f, &config(), &repo(), 9)
+            .unwrap()
+            .recorded,
+        0
+    );
+    assert_eq!(words(&store, change).len(), 3);
+}

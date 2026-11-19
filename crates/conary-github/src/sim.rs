@@ -709,6 +709,13 @@ impl Hub {
         });
     }
 
+    pub(crate) fn put_comments(&self, repo: &str, number: u64, comments: Value) {
+        let comments = comments.as_array().unwrap().clone();
+        self.repo_mut(repo, |r| {
+            r.comments.insert(number, comments);
+        });
+    }
+
     // The log.
 
     /// What each call of this kind asked, in order.

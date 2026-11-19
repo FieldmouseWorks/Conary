@@ -7,6 +7,7 @@ use conary_core::{Ledger, Store};
 pub(crate) fn config(settings: &Settings) -> crate::Config {
     crate::Config {
         reviewers: settings.flow_authors.iter().cloned().collect(),
+        review_authors: settings.review_authors.iter().cloned().collect(),
         own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
     }
 }

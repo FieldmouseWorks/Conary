@@ -257,12 +257,6 @@ fn retargeted_uncertain_intents_use_original_scope_and_allow_revalidated_progres
     assert!(c.record().landing.as_ref().unwrap().retry);
     assert_eq!(c.record().landing.as_ref().unwrap().target, "main");
     c.hub.flow_review(REPO, 3, Verdict::Clean, 5);
-    let body = c.connector_summary(3);
-    c.sign_check(
-        &head(4),
-        "conary/review/reviewer",
-        Some(&review_receipt(&head(4), &body)),
-    );
     let root = c.dir.path().to_path_buf();
     c.hub.race(Call::Land, move |_| {
         let record = Data::read(&root, &REPO.parse().unwrap(), 3).unwrap();

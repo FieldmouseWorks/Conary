@@ -33,11 +33,6 @@ pub(super) fn another(c: &Case, n: u64) {
     c.hub.flow_snapshot(REPO, n, snapshot);
     c.good_ci(&head(n));
     c.hub.flow_review(REPO, n, Verdict::Clean, 0);
-    c.sign_check(
-        &head(n),
-        "conary/review/reviewer",
-        Some(&review_receipt(&head(n), &c.connector_summary(n))),
-    );
     c.hub
         .post_status(&head(n), json!({"context":"machine","state":"pending"}));
 }

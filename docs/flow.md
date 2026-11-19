@@ -227,13 +227,13 @@ An ordinary status cannot attest a result.
 prefix also accepts jobs on runners started for that job, as the existing
 attestation verifier requires. A result from the authoring runner is refused.
 
-For a review, a producer must attest the exact post the reviewer's clean
-word came from (its summary comment's body, read again before permission is
-used). The producer log is the canonical UTF-8 JSON returned by
-`flow::review_receipt(head, body)`; its SHA-256 goes in the existing signed
-commit predicate's or service statement's `log.sha256`. The check name is
-`conary/review/ROLE`. Codex's GitHub connector has no producer that attests
-its posts, so a landing that needs its word stays refused until one does.
+A review is not evidence ([DESIGN.md 4.3](DESIGN.md#43-evidence)): the
+reviewer's clean word is the decision's to wait for, and nothing attests it,
+so permission asks no producer for it. A post the decision read that's
+rewritten before permission is used changes the decision's scope, which
+refuses permission. The ledger records the reviewer's word as a `review`
+result with no attestation (`ingest`, from the same reader), which never
+counts.
 
 New judging producers use `Response::provenance()` with `SealKey::judgment_by`
 and `judgment_receipt_by(revision, generation, verdict, provenance, basis)`
