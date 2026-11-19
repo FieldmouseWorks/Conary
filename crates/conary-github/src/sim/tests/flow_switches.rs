@@ -283,6 +283,23 @@ fn landing_switches_hold_the_step_they_keep_off() {
     config.settings.train = true;
     assert_eq!(pass(&config, &f, Stage::Merge, Step::JoinTrain), [0; 0]);
 
+    // An R2 change the owner must approve, with no one whose approval
+    // counts, whether or not an owner label lists it.
+    config.settings.people.clear();
+    for label in [None, Some("needs-peter")] {
+        config.settings.owner_label = label.map(String::from);
+        assert_eq!(
+            pass(&config, &f, Stage::Owner, Step::Wait { until: None }),
+            ["no_people"],
+            "{label:?}"
+        );
+    }
+    // An owner's call no approval answers isn't the person list's.
+    let mut r0 = super::flow_case::Case::new().facts();
+    assert_ne!(r0.classified.class, conary_core::Class::R2);
+    r0.labels.clear();
+    assert_eq!(pass(&config, &r0, Stage::Owner, Step::ListOwner), [0; 0]);
+
     // The owner label, with no one whose approval counts.
     let mut f = f;
     config.settings.owner_label = Some("needs-peter".into());

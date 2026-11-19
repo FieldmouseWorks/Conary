@@ -344,7 +344,8 @@ names all three. A configuration switch names a PR only at the step it
 keeps off: an omitted plugin when the step is that plugin's work; the train
 off when an R2 change would merge (an R2 change lands only through the
 train); no person list when a landing step needs a person's approval, or
-the owner label hands the PR to the owner; no evidence verifier at any
+the PR waits on the owner for one (the owner label, an R2 change or a
+judge's owner verdict); no evidence verifier at any
 landing step. The PR's `description` stays the one its decision gives.
 
 A held PR is read as fully as any other, so its decision can say what the

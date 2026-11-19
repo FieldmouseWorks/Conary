@@ -101,13 +101,14 @@ pub(crate) fn holding(
     {
         switches.push((Switch::TrainOff, vec![]));
     }
-    let owner_decides = unswitched.stage == Stage::Owner
-        && f.trusted
-        && f.complete
-        && f.settings
+    // A person's approval is what the owner label, an R2 change or a
+    // judge's owner verdict waits on, at the owner or at a landing step.
+    let approval = super::approval::required(f)
+        || f.settings
             .owner_label
             .as_ref()
             .is_some_and(|l| f.labels.contains(l));
+    let owner_decides = unswitched.stage == Stage::Owner && f.trusted && f.complete && approval;
     if f.settings.people.is_empty() && (owner_decides || granting && super::approval::required(f)) {
         switches.push((Switch::NoPeople, vec![]));
     }
