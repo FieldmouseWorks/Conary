@@ -202,12 +202,11 @@ fn needs_judge(c: &mut Case) {
 }
 
 #[test]
-fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() {
+fn pass_copies_live_choices_into_a_fresh_judge_invocation() {
     use conary_core::plugin::{Choice, Kind as PluginKind, Task};
     let mut c = Case::new();
     needs_judge(&mut c);
-    // The example's head 4 has no finding, so the pass can reach judgment
-    // after posting a real validated review without starting a fixer.
+    // Head 4, reviewed clean by the connector: the pass reaches judgment.
     c.hub.push(REPO, 3, &head(4));
     c.hub.refresh_flow(REPO, 3);
     c.good_ci(&head(4));
@@ -217,11 +216,8 @@ fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() 
         Some("owner@example.org"),
         Some("owner@example.org"),
     );
+    c.connector_clean(&head(4), true);
     let now = crate::flow::jobs::now();
-    // Run and post the real configured reviewer, retaining its identity.
-    c.pass(now, false);
-    c.run_worker();
-    c.pass(now + 1, false);
     let choice = Choice {
         engine: "conary-example".into(),
         model: None,
@@ -245,11 +241,9 @@ fn pass_copies_live_choices_and_known_reviewers_into_a_fresh_judge_invocation() 
     let Task::Judge { reviewers, .. } = &invocation.task else {
         panic!("not a judge");
     };
-    assert!(
-        reviewers
-            .iter()
-            .any(|r| r.session.as_deref() == Some("example"))
-    );
+    // The reviewer is the connector, on GitHub: no job of the flow's
+    // answered as it.
+    assert!(reviewers.is_empty());
     crate::flow::jobs::worker(&work.path).unwrap();
     let answer = crate::flow::jobs::completion(work, now + 4)
         .unwrap()

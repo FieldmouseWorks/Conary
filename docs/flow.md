@@ -17,11 +17,11 @@ the same policy as `cn class`. A minimal configuration is:
   "trusted_authors": ["repository-owner"],
   "settings": {
     "people": ["maintainer"],
-    "reviewers": ["reviewer"],
-    "review_authors": ["landing-app[bot]"]
+    "reviewers": ["codex"],
+    "review_authors": ["chatgpt-codex-connector[bot]"],
+    "flow_authors": ["landing-app[bot]"]
   },
   "plugins": {
-    "review": "/absolute/path/to/reviewer",
     "fix": "/absolute/path/to/fixer",
     "judge": "/absolute/path/to/judge",
     "proof": "/absolute/path/to/proof"
@@ -42,8 +42,9 @@ so historical raises still apply. Dry runs use no writer and publish no anchor.
 
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
 The defaults name no machine, account, label or engine, and start no paid
-work, so a machine supplies its own: with no `review_authors` no review is
-queued, with no `owner_label` what the owner decides waits unlisted, and
+work, so a machine supplies its own: with no `review_authors` no review
+counts, with no `flow_authors` neither its own `review-settled` nor the
+train's status does, with no `owner_label` what the owner decides waits unlisted, and
 `proof_slots` defaults to `0`, which starts no proof and no preparation
 (`null` sets no limit).
 Execution choices are optional entries in the same machine-owned configuration:
@@ -53,7 +54,8 @@ Execution choices are optional entries in the same machine-owned configuration:
 ```
 
 Keys are plugin kinds (`review`, `fix`, `judge`, `proof`, `job`); the landing
-flow starts its four work kinds. Values select that configured executable's
+flow starts three of them (fix, judge and proof, a proof's preparation
+included): the reviewer reviews on its own ([Review](#review)). Values select that configured executable's
 engine and an offered model/effort; they do not install or choose a different
 executable. Change `plugins` and `execution` together to switch engines.
 Choices are copied into each durable invocation and verified by the worker.
@@ -226,13 +228,13 @@ An ordinary status cannot attest a result.
 prefix also accepts jobs on runners started for that job, as the existing
 attestation verifier requires. A result from the authoring runner is refused.
 
-For a review, the producer must attest the exact published review record.
-The producer log is the canonical UTF-8 JSON returned by
+For a review, a producer must attest the exact post the reviewer's clean
+word came from (its summary comment's body, read again before permission is
+used). The producer log is the canonical UTF-8 JSON returned by
 `flow::review_receipt(head, body)`; its SHA-256 goes in the existing signed
 commit predicate's or service statement's `log.sha256`. The check name is
-`conary/review/ROLE`. This binds the complete result, including the marker's
-head, target branch, description scope and completion time. The exported
-`review_body` helper owns that marker's formatting.
+`conary/review/ROLE`. Codex's GitHub connector has no producer that attests
+its posts, so a landing that needs its word stays refused until one does.
 
 New judging producers use `Response::provenance()` with `SealKey::judgment_by`
 and `judgment_receipt_by(revision, generation, verdict, provenance, basis)`
@@ -464,57 +466,57 @@ reservation, never an invented worker ID or a cancellation target. Old local
 records containing synthetic capacity cancellations are recovered without
 dropping cancellation state for real owned workers.
 
-Reviews published by flow include their structured findings, and each
-finding gets one target. The review goes up in one request
-(`POST /pulls/{n}/reviews`) with a line comment for each finding whose line
-is in one of the diff's hunks, placed from the PR's diff before it's sent.
-Every other finding (a line outside the hunks, a file outside the diff, or
-a diff GitHub won't give) gets a PR comment and has no thread to resolve.
-Each target ends in a `conary-finding:v1` marker naming the role, the
-reviewed head, the review's issuance (`flow::issuance`, the
-`receipt_digest` of its `review_receipt`) and the finding's index in the
-review marker's `problems`. So a second review on the same head, two
-findings on one line, or a carried review never share a marker. The review
-body and its receipt don't change. A lost or partial publication is
-reconciled before anything is sent again: the review by its exact body,
-each PR comment by its marker. Which findings get a line comment is
-planned once, before the review is first sent, and kept in the job's
-record. Every write is saved there before it's sent, and sent only while
-GitHub doesn't show it. One GitHub acknowledged is never sent again. One
-whose answer was lost, or that a crash left unanswered, may have gone up:
-it's waited for, and sent again only after GitHub has gone ten minutes
-without showing it, at most three times in all, after which the step fails
-instead. One GitHub refused went nowhere and may be sent again. Publication is
-complete only once the review and every finding's target are read back,
-and nothing is handed on before that. Waiting for GitHub to show a write
-spends no review attempt. A v2 review body sent twice counts as one
-round.
+## Review
 
-Only the flow's review accounts' markers count. A finding thread is
-recognised by its first comment's marker, on whichever review it started,
-including one carried from an earlier head. A finding is answered when its
-thread is resolved, or, with no thread, when an answer to its own marker is
-posted; a review is answered when all its findings are. Fixer requests use
-the selected current or carried GitHub review's unanswered findings, and any
-finding thread still open, rather than saved local review answers. Each
-problem keeps its finding's marker and target in the fix job's record.
-Unstructured reviews, threads the flow didn't start, native change requests,
-judgment and description failures wait explicitly: v1 cannot express their
-repair. Red checks and conflicts carry their observed check or exact base
-commit.
+The reviewer is Codex's GitHub connector, which reviews each push on its
+own and posts on the PR (`flow::reviews`, as burrow's steward reads it). Its
+word on a head is the newer of what its summary comment's
+`codex-review-state:v1` mark says of that exact commit (`completed` with no
+findings is clean, `completed` with findings is findings, anything else is
+under way) and a review on the head whose `**Reviewed commit:**` receipt
+names it (findings). Each review with a receipt, at any head, is a round.
+Only posts by `settings.review_authors` count, so nobody posing as the
+connector moves a PR. Its word binds only the commit: a PR retargeted or
+whose description was edited at or after its head's push (or at all, when
+GitHub can't say when the head was pushed: the earliest check suite on it)
+goes to a judge with the reason `changed` instead of landing on it.
+
+A head with no word yet waits in `review` for half an hour after the flow
+first saw it, then the flow asks for a look (`AskReview`): a PR comment,
+`@codex review` and why, at most once an hour per head, counted as asked
+only once GitHub took it. After two hours the owner hears of it. Findings
+with open threads go to a fix; findings whose every thread is answered on
+an unchanged head are asked for again once they've settled
+(`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops
+waiting for the reviewer: a judge decides with `round_limit`.
+
+The fixer protocol can't yet carry the connector's findings (threads the
+flow didn't start), so a fix for them waits, saying why. What's below is how
+the flow answers the findings it published itself, which only reviews
+published before it moved to the connector still carry.
+
+A finding thread is recognised by its first comment's `conary-finding:v1`
+marker, from `settings.flow_authors` only. Fixer requests use any finding
+thread still open. Each problem keeps its finding's marker and target in
+the fix job's record. Unstructured reviews, threads the flow didn't start,
+native change requests, judgment and description failures wait explicitly:
+v1 cannot express their repair. Red checks and conflicts carry their
+observed check or exact base commit.
 
 A v4 fix's answers are posted on the head it left, pushed or `unchanged`,
 and never on a head that moved past it. Each answer's `reply` goes on its
 finding's target with a `conary-answer:v1` marker that also names the fix
-invocation, as the flow's review account: a reply on the thread, which is
+invocation, as the flow's own account: a reply on the thread, which is
 then resolved, or a PR comment. A thread whose first comment no longer names
 that finding gets no reply. A lost write is reconciled by its exact body
-before it's posted again, and is sent under the same rules as a review's
-writes. Every thread of the finding is resolved, a duplicate's too. The fix
+before it's posted again: every write is saved in the job's record before
+it's sent, and sent only while GitHub doesn't show it; one whose answer was
+lost may have gone up, so it's waited for and sent again only after GitHub
+has gone ten minutes without showing it, at most three times. Every thread of the finding is resolved, a duplicate's too. The fix
 is done only once every reply and resolution is read back; it then counts
 as answered, never as a job that ended without its answer. Only the latest
 fix's answers go up: an earlier invocation's are dropped. An `unchanged` fix posts its replies and pushes
-nothing, and the reviewers then look again; the round is counted as before
+nothing, and the reviewer is then asked to look again; the round is counted as before
 ([review-loop.md](review-loop.md) owns what the answers mean).
 
 Before submitting a direct merge, flow persists its intent and the authenticated
@@ -597,7 +599,7 @@ before any repository is switched over.
 same dry run, then reads what the steward running the repository says of
 each PR now: the stage its `waiting: …` label names, and its newest
 `review-settled` status on the head, counted only from
-`settings.review_authors` (from anyone when that's empty). It prints one
+`settings.flow_authors` (from anyone when that's empty). It prints one
 JSON line per PR with `repo`, `pr`, `head`, `agree`, `flow` (`stage`,
 `step`, `description`, `switches`, `degraded`), `steward` (`stages`, `state`,
 `description`) and
@@ -618,26 +620,16 @@ against what GitHub shows for the PR. A kind where the flow was wrong is
 fixed and isn't listed. These are the rest. A disagreement of one of these
 kinds is accounted for; any other is a finding.
 
-**The steward settles on work the flow doesn't count.** The flow counts a
-review only by its scoped marker (head, base branch, title and body, and the
-review's completion time), and grants nothing on it without the producer's
-attestation ([Producer evidence](#producer-evidence)); a judgment only as a
-sealed issuance with its basis; and a job only one it started. The steward's
-reviews are `codex-review:v1` markers, whose fingerprint covers the body
-alone and which carry no completion time; its judgments are
-`autoland-judgment:` markers with no basis; nothing attests either. So where
-the steward has settled a PR on them, the flow still wants a review or a
-judge: stage `review`, step `LeaveTrain` for a PR in the train. Example:
-remi#1355 at f97d267, where Codex found nothing, every thread was resolved,
-`review-settled` was green and the steward had it gating in the train, and
-the flow said `review`/`LeaveTrain`. The same holds in the steward's other
-stages (remi#1314: steward `ci`, flow `review`), for its judge (remi#1301:
-the steward's judge said land, the flow asks a judge), and while the
-steward's own fix job has the branch. A dry run has no memory of when it
-first saw a head, so it gives this as "Waiting for the head or answered
-findings to settle" where a live pass would queue the review. It ends at S1,
-when the flow's own reviewer and judge publish what it counts; a PR still
-open then gets one fresh review.
+**The steward settles on work the flow doesn't count.** Both read the
+reviewer's word the same way ([Review](#review)), but the flow counts a
+judgment only as a sealed issuance with its basis, and a job only one it
+started. The steward's judgments are `autoland-judgment:` markers with no
+basis, and nothing attests them. So where the steward's judge settled a PR
+the flow still asks a judge (remi#1301: the steward's judge said land),
+and while the steward's own fix job has the branch the flow sees no job of
+its own. A dry run has no memory of when it first saw a head, so where the
+steward has already asked the reviewer for a look the flow still waits its
+half hour; both say `review`.
 
 **A switch the steward doesn't share.** A PR the flow's pause or a hold
 stops waits outside every stage, and one no evidence verifier, no person

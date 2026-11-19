@@ -305,7 +305,6 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
     }
     let plugins = &config.plugins;
     let configured = [
-        ("review", &plugins.review),
         ("fix", &plugins.fix),
         ("judge", &plugins.judge),
         ("proof", &plugins.proof),

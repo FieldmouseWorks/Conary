@@ -7,16 +7,10 @@ use conary_core::plugin::Problem;
 pub(crate) fn problems<G: Read>(
     github: &G,
     f: &Facts,
-    memory: &Memory,
     kind: Kind,
 ) -> Result<Vec<(Problem, Option<Handed>)>, String> {
     match kind {
         Kind::Findings => {
-            if memory.lost_on.iter().any(|(role, bases)| {
-                f.reviewers.contains_key(role) && bases.contains_key(&f.revision.base)
-            }) {
-                return Err("v1 fixer lacks the carried findings source lost from GitHub".into());
-            }
             if f.changes_requested {
                 return Err("v1 fixer cannot represent native review requests".into());
             }
@@ -58,43 +52,6 @@ pub(crate) fn problems<G: Read>(
                 problems.push((Problem::Finding { finding }, Some(Handed { mark, target })));
                 Ok(())
             };
-            for (role, reviewer) in &f.reviewers {
-                if !reviewer
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.verdict == Verdict::Findings)
-                    || reviewer.findings_answered
-                {
-                    continue;
-                }
-                let record = reviewer
-                    .record_id
-                    .and_then(|id| records.iter().find(|r| r.id == Some(id)))
-                    .ok_or("v1 fixer lacks the current GitHub findings source")?;
-                let publication = Publication::read(record, role, &f.settings)
-                    .ok_or("v1 fixer cannot represent unstructured GitHub findings")?;
-                let marker = &publication.marker;
-                let observed = reviewer.review.as_ref().expect("findings selected above");
-                if Some(publication.head.as_str()) != reviewer.reviewed_head.as_deref()
-                    || marker["commit_sha"].as_str() != Some(publication.head.as_str())
-                    || marker["base"].as_str() != Some(f.revision.base.as_str())
-                    || marker["scope"].as_str() != Some(f.revision.description.as_str())
-                    || marker["reviewed_at"].as_u64() != Some(observed.at)
-                {
-                    return Err("v1 fixer GitHub findings changed during handoff".into());
-                }
-                if publication.findings.is_empty()
-                    || publication.findings.iter().any(|f| !f.valid())
-                    || marker["findings"].as_u64() != Some(publication.findings.len() as u64)
-                {
-                    return Err("v1 fixer lacks complete current GitHub findings".into());
-                }
-                for index in 0..publication.findings.len() {
-                    if !targets.answered(&publication.mark(index)) {
-                        hand(&publication, index, &mut problems)?;
-                    }
-                }
-            }
             // An open finding thread is that finding, whichever review it's
             // on: one left open on an earlier head is still owed an answer.
             let open: Vec<FindingMark> = targets.open().cloned().collect();

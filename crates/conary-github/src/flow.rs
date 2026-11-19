@@ -29,7 +29,7 @@ pub use train::{Candidate, Seat, TrainState};
 pub use ci::{Suite, Workflow};
 pub use markers::SealKey;
 pub use read::{BaseObservation, Read, Snapshot, read};
-pub use reviews::fingerprint;
+pub use reviews::{Since, fingerprint};
 pub use state::next;
 pub use types::*;
 
@@ -78,7 +78,5 @@ mod handoff;
 
 pub(crate) mod publish;
 mod threads;
-pub use threads::{FindingMark, Handed, LineComment, Target, answer_body, finding_body, issuance};
+pub use threads::{FindingMark, Handed, Target, answer_body, finding_body, issuance};
 pub(crate) use threads::{Publication, Targets};
-#[cfg(test)]
-pub(crate) use threads::{hunks, placed};

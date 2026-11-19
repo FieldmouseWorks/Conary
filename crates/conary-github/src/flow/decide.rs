@@ -193,7 +193,9 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     }
     match super::review::look(f, m, now, f.dependency.is_none() || edited) {
         super::review::Look::Next(decision) => decision,
-        super::review::Look::Settled { capped } => after_review(f, m, now, ci, capped),
+        super::review::Look::Settled { capped, changed } => {
+            after_review(f, m, now, ci, capped, changed)
+        }
     }
 }
 
@@ -256,7 +258,14 @@ fn judgment(f: &Facts, why: &[Trigger]) -> Option<Judgment> {
         .map(|j| j.verdict)
 }
 
-fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> Decision {
+fn after_review(
+    f: &Facts,
+    m: &mut Memory,
+    now: u64,
+    ci: Ci,
+    capped: bool,
+    changed: bool,
+) -> Decision {
     // A partial failure may already make CI red. The remaining stored
     // verdicts must be published before handing that failure to a fix.
     if f.proof == Proof::Unposted {
@@ -269,7 +278,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
     }
-    let why = judge_why(f, ci, capped);
+    let why = judge_why(f, ci, capped, changed);
     let verdict = judgment(f, &why);
     if verdict == Some(Judgment::Misdescribed) {
         return hand(f, m, now, Kind::Description, false);
@@ -379,7 +388,7 @@ fn after_review(f: &Facts, m: &mut Memory, now: u64, ci: Ci, capped: bool) -> De
 
 /// Every reason the flow has to ask a judge now, in the plugin contract's
 /// words: the one place that list is made.
-pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool) -> Vec<Trigger> {
+pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool, changed: bool) -> Vec<Trigger> {
     [
         (f.classified.class == Class::R2, Trigger::R2),
         (f.needs_judge, Trigger::AuthorEngine),
@@ -387,6 +396,7 @@ pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool) -> Vec<Trigger> {
         (ci == Ci::None, Trigger::NoCi),
         (f.judge_asked, Trigger::Asked),
         (capped, Trigger::RoundLimit),
+        (changed, Trigger::Changed),
         (
             f.dependency == Some(Dependency::Major) && !f.renovate,
             Trigger::MajorDependency,

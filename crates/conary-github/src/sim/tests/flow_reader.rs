@@ -146,14 +146,12 @@ fn bot_history_counts_every_author_committer_and_coauthor() {
         );
         let f = facts(&hub, crate::sim::settings());
         assert_eq!(f.bot_edited, Some(edited));
-        assert_eq!(
-            next(&f, &m, 4000).0.step,
-            if edited {
-                Step::QueueReview("reviewer".into())
-            } else {
-                Step::Merge
-            }
-        );
+        let step = next(&f, &m, 4000).0.step;
+        if edited {
+            assert!(matches!(step, Step::AskReview(_)), "{step:?}");
+        } else {
+            assert_eq!(step, Step::Merge);
+        }
     }
 }
 
@@ -170,10 +168,10 @@ fn renovate_email_is_machine_configuration_not_the_branchs_claim() {
         Some("renovate@example.org"),
     );
     hub.remove_flow_reviews(REMI, 3);
-    assert_eq!(
+    assert!(matches!(
         decision(&hub, &m, crate::sim::settings()).step,
-        Step::QueueReview("reviewer".into())
-    );
+        Step::AskReview(_)
+    ));
     let settings = Settings {
         renovate_email: Some("renovate@example.org".into()),
         ..crate::sim::settings()
@@ -258,7 +256,7 @@ fn a_permanently_short_history_requires_a_judge_not_unread_authorship_retry() {
     hub.push(REMI, 3, &tip);
     hub.refresh_flow(REMI, 3);
     hub.ci(&tip, &[("check", "success")]);
-    hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+    hub.flow_review(REMI, 3, Verdict::Clean, 600);
     hub.short_history(TRUNK, &tip, 250);
     let f = facts(&hub, crate::sim::settings());
     assert!(f.authorship_known && f.needs_judge);
@@ -310,7 +308,7 @@ fn a_coauthor_on_the_251st_bot_commit_removes_the_ci_only_exemption() {
             assert_eq!(
                 next(&f, &c.memory, 700).0.step,
                 if edited {
-                    Step::QueueReview("reviewer".into())
+                    Step::Wait { until: Some(1800) }
                 } else {
                     Step::Merge
                 }

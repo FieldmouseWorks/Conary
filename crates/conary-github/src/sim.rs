@@ -52,13 +52,16 @@ pub(crate) use faults::{Call, On};
 
 /// The steward's App, whose `review-settled` statuses settle a head.
 pub(crate) const STEWARD: &str = "fieldmouseworks-steward[bot]";
+/// Codex's GitHub connector, whose posts are the reviewer's word.
+pub(crate) const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
 /// The flow settings of the machine the tests stand in for: Conary's own
 /// defaults name none of these.
 pub(crate) fn settings() -> crate::flow::Settings {
     crate::flow::Settings {
         proof_slots: None,
         judge_engines: ["codex".into()].into(),
-        review_authors: [STEWARD.into()].into(),
+        review_authors: [CONNECTOR.into()].into(),
+        flow_authors: [STEWARD.into()].into(),
         bot_emails: ["49699333+dependabot[bot]@users.noreply.github.com".into()].into(),
         owner_label: Some("needs-peter".into()),
         ..Default::default()

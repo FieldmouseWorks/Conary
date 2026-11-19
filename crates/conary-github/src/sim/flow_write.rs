@@ -2,7 +2,7 @@
 use super::faults::{Asked, Call};
 use super::{Hub, STEWARD};
 use crate::api::ApiError;
-use crate::flow::{LineComment, Stage, Write};
+use crate::flow::{Stage, Write};
 use serde_json::json;
 impl Write for Hub {
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError> {
@@ -41,64 +41,6 @@ impl Write for Hub {
                 Ok(())
             },
         )
-    }
-    fn review(
-        &self,
-        repo: &str,
-        pr: u64,
-        head: &str,
-        body: &str,
-        comments: &[LineComment],
-    ) -> Result<(), ApiError> {
-        let lines: Vec<String> = comments
-            .iter()
-            .map(|c| format!("{}:{}:{}", c.path, c.line, c.body))
-            .collect();
-        let number = pr.to_string();
-        let mut args = vec![repo, number.as_str(), head, body];
-        args.extend(lines.iter().map(String::as_str));
-        self.write(Asked::new(Call::FlowReview, repo).pr(pr), &args, || {
-            let mut world = self.world.borrow_mut();
-            // GitHub refuses the whole review when a comment's line isn't
-            // in the diff.
-            let hunks: Vec<_> = world
-                .diffs
-                .iter()
-                .filter(|((_, h), _)| h == head)
-                .map(|(_, d)| crate::flow::hunks(d))
-                .collect();
-            for c in comments {
-                let finding = conary_core::plugin::Finding {
-                    path: c.path.clone(),
-                    line: c.line,
-                    severity: conary_core::plugin::Severity::P3,
-                    text: "-".into(),
-                };
-                if !hunks.iter().any(|h| crate::flow::placed(h, &finding)) {
-                    return Err(ApiError::new("Unprocessable: line could not be resolved"));
-                }
-            }
-            let records = world.repos.get_mut(repo).unwrap().reviews.entry(pr).or_default();
-            let id = records.len() + 1;
-            records.push(json!({"id":id,"commit_id":head,"body":body,
-                "submitted_at":"2099-01-01T00:00:00Z","user":{"login":STEWARD,"type":"Bot"},"state":"COMMENTED"}));
-            if let Some(flow) = world.repos.get_mut(repo).unwrap().flow.get_mut(&pr) {
-                for (n, c) in comments.iter().enumerate() {
-                    flow.threads.insert(
-                        format!("PRRT_{id}_{n}"),
-                        crate::flow::ReviewThread {
-                            resolved: false,
-                            comments: vec![crate::flow::ThreadComment {
-                                author: Some(STEWARD.into()),
-                                body: c.body.clone(),
-                            }],
-                        },
-                    );
-                }
-                flow.open_threads = flow.threads.values().filter(|t| !t.resolved).count() as u32;
-            }
-            Ok(())
-        })
     }
     fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError> {
         self.write(

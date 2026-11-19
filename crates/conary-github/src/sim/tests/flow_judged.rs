@@ -38,7 +38,7 @@ fn capped() -> Case {
     for t in 1..=5 {
         c.review("primary", Verdict::Findings, t);
     }
-    c.answered("primary");
+    c.answered();
     c.hub
         .flow_comment(REMI, 3, STEWARD, &finding_body(&finding(), &mark(), true));
     assert_eq!(c.pass(4000).step, Step::Judge(vec![Trigger::RoundLimit]));

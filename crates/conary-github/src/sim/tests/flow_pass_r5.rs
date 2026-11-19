@@ -136,53 +136,39 @@ fn cleanup_cannot_invent_authorization_or_override_a_real_withdrawal() {
 #[test]
 fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
     use conary_core::plugin::{Finding, Severity, Task};
-    for mode in ["fresh", "stale-local", "carried"] {
+    for mode in ["fresh", "carried"] {
         let c = Case::new();
         let now = jobs::now();
-        if mode == "stale-local" {
-            c.pass(now, false);
-            c.run_worker();
-            c.pass(now + 1, false);
-        }
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-        for (id, text, at) in [
-            (10, "superseded", now + 2),
-            (11, "current blocker", now + 3),
+        // Two of the flow's own reviews, each with its finding's thread: the
+        // superseded one's answered and resolved, the current one's open.
+        for (id, text, at, resolved) in [
+            (10, "superseded", now + 2, true),
+            (11, "current blocker", now + 3, false),
         ] {
-            let body = review_body(
-                "reviewer",
-                &revision,
-                at,
-                &[Finding {
-                    path: "src/lib.rs".into(),
-                    line: 7,
-                    severity: Severity::P1,
-                    text: text.into(),
-                }],
-            );
-            let body = if mode == "carried" {
-                format!("{body}\n\n")
-            } else {
-                body
-            };
-            c.hub.world.borrow_mut().repos.get_mut(REPO).unwrap().reviews.entry(3).or_default().push(json!({"id":id, "user":{"login":STEWARD,"type":"Bot"},
-            "body":body,"commit_id":head(3),"submitted_at":"2099-01-01T00:00:00Z","state":"COMMENTED"}));
-            // Its finding's target, as the flow publishes one with no line
-            // in the diff.
-            let mark = FindingMark {
-                role: "reviewer".into(),
-                head: head(3),
-                issuance: issuance(&head(3), &body),
-                finding: 0,
-            };
             let finding = Finding {
                 path: "src/lib.rs".into(),
                 line: 7,
                 severity: Severity::P1,
                 text: text.into(),
             };
-            c.hub
-                .flow_comment(REPO, 3, STEWARD, &finding_body(&finding, &mark, true));
+            let body = review_body("reviewer", &revision, at, std::slice::from_ref(&finding));
+            c.hub.world.borrow_mut().repos.get_mut(REPO).unwrap().reviews.entry(3).or_default().push(json!({"id":id, "user":{"login":STEWARD,"type":"Bot"},
+            "body":body,"commit_id":head(3),"submitted_at":"2099-01-01T00:00:00Z","state":"COMMENTED"}));
+            let mark = FindingMark {
+                role: "reviewer".into(),
+                head: head(3),
+                issuance: issuance(&head(3), &body),
+                finding: 0,
+            };
+            let thread = format!("PRRT_{id}");
+            c.hub.flow_thread_comments(
+                REPO,
+                3,
+                &thread,
+                &[(STEWARD, &finding_body(&finding, &mark, false))],
+            );
+            c.hub.flow_thread(REPO, 3, &thread, resolved);
         }
         if mode == "carried" {
             let tip = c.hub.add(super::TRUNK, "trunk-only patch");
@@ -194,9 +180,7 @@ fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
             c.hub.refresh_flow(REPO, 3);
             c.good_ci(&head(4));
         }
-        if mode != "stale-local" {
-            c.pass(now + 4, false);
-        }
+        c.pass(now + 4, false);
         let reports = c.pass(now + 5, false);
         assert_eq!(reports[0].error, None);
         assert_eq!(
@@ -220,7 +204,6 @@ fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
 fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
     for blocker in [
         "unstructured",
-        "lost",
         "thread",
         "native",
         "judgment",
@@ -239,42 +222,18 @@ fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
                 true,
             );
         } else {
-            c.hub.flow_review(REPO, 3, "reviewer", Verdict::Findings, 1);
-            if blocker != "unstructured" {
-                let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-                let body = review_body(
-                    "reviewer",
-                    &revision,
-                    1,
-                    &[conary_core::plugin::Finding {
-                        path: "src/lib.rs".into(),
-                        line: 1,
-                        severity: conary_core::plugin::Severity::P1,
-                        text: "located blocker".into(),
-                    }],
+            if blocker == "unstructured" {
+                // The connector's findings are threads of its own, which
+                // say nothing a fix could answer by.
+                c.hub.flow_review(REPO, 3, Verdict::Findings, 1);
+                c.hub.flow_thread_comments(
+                    REPO,
+                    3,
+                    "connector-thread",
+                    &[(crate::sim::CONNECTOR, "**P1** located blocker")],
                 );
-                c.hub
-                    .world
-                    .borrow_mut()
-                    .repos
-                    .get_mut(REPO)
-                    .unwrap()
-                    .reviews
-                    .get_mut(&3)
-                    .unwrap()[0]["body"] = json!(body);
+                c.hub.flow_thread(REPO, 3, "connector-thread", false);
             }
-            if blocker == "lost" {
-                let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
-                let mut record = Record::default();
-                record
-                    .memory
-                    .lost_on
-                    .entry("reviewer".into())
-                    .or_default()
-                    .insert("main".into(), head(2).into());
-                data.save(3, &record).unwrap();
-            }
-
             if blocker == "native" {
                 c.hub.person_review(
                     REPO,

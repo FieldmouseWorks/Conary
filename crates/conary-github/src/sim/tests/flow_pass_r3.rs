@@ -75,25 +75,15 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
     let c = Case::new();
     c.clean_review();
     let first = c.judgment(1, Judgment::Pass, true);
-    let old_body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 4);
-    let body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
+    let old_body = c.connector_summary(3);
+    // The connector looks again and rewrites its summary: the receipt over
+    // the first one is no longer current.
+    c.hub.flow_review(REPO, 3, Verdict::Clean, 4);
+    let last = c.hub.comments(REPO, 3).unwrap().len() - 1;
+    c.hub
+        .edit_flow_comment(REPO, 3, last, &format!("{old_body}\n\nLooked again."));
+    let body = c.connector_summary(3);
+    assert_ne!(body, old_body);
     let second = c.judgment(2, Judgment::Pass, true);
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     c.hub.remove_checks(&head(3));
@@ -335,7 +325,7 @@ fn dry_run_with_a_writable_store_cannot_append_ledger_operations() {
         Call::Land,
         Call::FlowStatus,
         Call::FlowStage,
-        Call::FlowReview,
+        Call::FlowComment,
     ] {
         assert_eq!(c.hub.count(call), 0);
     }
@@ -363,12 +353,12 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     for dry in [true, false] {
         let reports = run(&c, Some(5), dry);
         assert_eq!(reports[0].error, None);
-        assert_eq!(
-            reports[0].next.as_ref().unwrap().step,
-            Step::QueueReview("reviewer".into())
-        );
+        // Its own decision: waiting on the connector's review of its push.
+        let next = reports[0].next.as_ref().unwrap();
+        assert_eq!(next.stage, Stage::Review);
+        assert!(matches!(next.step, Step::Wait { .. }), "{:?}", next.step);
     }
-    c.hub.flow_review(REPO, 5, "reviewer", Verdict::Clean, 0);
+    c.hub.flow_review(REPO, 5, Verdict::Clean, 0);
     c.hub
         .post_status(&head(5), json!({"context":"machine","state":"pending"}));
     run(&c, Some(5), false);

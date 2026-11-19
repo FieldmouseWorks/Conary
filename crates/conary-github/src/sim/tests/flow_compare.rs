@@ -63,7 +63,7 @@ fn compare_disagrees_on_another_stage_and_reads_nothing_it_would_write() {
     for call in [
         Call::FlowStatus,
         Call::FlowStage,
-        Call::FlowReview,
+        Call::FlowComment,
         Call::Land,
         Call::Mark,
         Call::FlowOwner,

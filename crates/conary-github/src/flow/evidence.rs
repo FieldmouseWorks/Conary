@@ -230,51 +230,40 @@ pub(crate) fn authorize<G: Write>(
     if super::reviews::changes_requested(&records) {
         return Err("Review changes were requested before permission was used".into());
     }
-    for (role, reviewer) in &f.reviewers {
-        let Some(review) = &reviewer.review else {
-            continue;
-        };
-        if review.revision != f.revision {
-            continue;
-        }
-        let record = records
-            .iter()
-            .find(|r| r.id.is_some() && r.id == reviewer.record_id)
-            .ok_or("review producer record disappeared")?;
-        let head = record.commit_id.as_deref().ok_or("review head missing")?;
-        let name = format!("conary/review/{role}");
-        let pull = told(&name, github.pull(&repo, f.number).map_err(Into::into))?;
-        let mut carried = std::collections::BTreeSet::new();
-        if head != f.revision.head {
-            let base = f.base_tip.as_deref().ok_or("review base missing")?;
-            let carries = github.carries(&repo, base, &f.revision.head, head);
-            if !told(&name, carries.map_err(Into::into))? {
-                return Err("review no longer covers this tree".into());
-            }
-            carried.insert(head.to_owned());
-        }
-        let parsed = super::reviews::read(
-            &pull,
-            std::slice::from_ref(record),
-            &Default::default(),
-            &Default::default(),
+    // A clean word counts only with its producer's receipt over the post
+    // it came from, read again here so a post edited since the decision
+    // can't stand in for the one decided on.
+    let clean: Vec<_> = f
+        .reviewers
+        .iter()
+        .filter(|(_, r)| r.verdict == Some(Verdict::Clean))
+        .collect();
+    if !clean.is_empty() {
+        let comments = github.comments(&repo, f.number)?;
+        let again = super::reviews::read(
+            &f.revision.head,
+            &records,
+            &comments,
+            super::reviews::Since::default(),
             &f.settings,
-            &carried,
         )?;
-        if parsed.get(role).and_then(|r| r.review.as_ref()) != Some(review) {
-            return Err("review changed after the decision read".into());
+        for (role, reviewer) in clean {
+            let body = reviewer.source.as_deref().ok_or("review source missing")?;
+            if again.get(role).is_none_or(|r| {
+                (r.verdict, r.at, &r.source) != (reviewer.verdict, reviewer.at, &reviewer.source)
+            }) {
+                return Err("review changed after the decision read".into());
+            }
+            check(
+                github,
+                f,
+                &trust,
+                &f.revision.head,
+                &format!("conary/review/{role}"),
+                Some(&review_receipt(&f.revision.head, body)),
+                looked,
+            )?;
         }
-
-        let body = record.body.as_deref().ok_or("review body missing")?;
-        check(
-            github,
-            f,
-            &trust,
-            head,
-            &format!("conary/review/{role}"),
-            Some(&review_receipt(head, body)),
-            looked,
-        )?;
     }
     if let Some(generation) = f.judgment_generation {
         // A conflict or unsupported tombstone cannot be made positive by a local result.

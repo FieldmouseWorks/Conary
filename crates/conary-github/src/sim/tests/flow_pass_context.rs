@@ -1,15 +1,14 @@
 //! What a judge request's `context` digests is what GitHub shows, read
 //! afresh: the flow and a judge producer call the same helper on the same
 //! reads, and nothing the flow's own job records say goes in. Through the
-//! real executor, for each place a finding or its answer lives.
+//! real executor, for each place a finding of the flow's own or its answer
+//! lives.
 use super::flow_pass_case::{Case, REPO, example};
-use super::flow_pass_threads::{
-    case, findings, respond, reviewed, step, threads, unchanged, until,
-};
+use super::flow_pass_threads::{findings, reviewed, step, threads, unchanged, until, until_review};
 use super::{TRUNK, head};
 use crate::api::Source;
 use crate::flow::{self, *};
-use conary_core::plugin::{Answer, Task};
+use conary_core::plugin::Task;
 
 /// A judge plugin, and an author engine that needs one.
 fn judging(c: &mut Case) {
@@ -27,10 +26,10 @@ fn by_the_engine(c: &Case, sha: &str) {
     );
 }
 
-/// The reviewer looks again and finds nothing, and the flow asks a judge:
-/// the `context` its request carries.
+/// The connector reviews the head clean, and the flow asks a judge: the
+/// `context` its request carries.
 fn asked(c: &Case, now: u64, t: &mut u64) -> String {
-    respond(c, now + *t, Answer::Review { findings: vec![] });
+    c.connector_clean(&c.hub.pull(REPO, 3).unwrap().head.sha, true);
     for _ in 0..20 {
         *t += 60;
         if matches!(step(c, now + *t), Step::Judge(_)) {
@@ -97,22 +96,36 @@ fn edit_thread(c: &Case, id: &str, index: usize, body: &str) {
     c.hub.flow_thread_comments(REPO, 3, id, &comments);
 }
 
-/// Reviewed with [`findings`], answered by a fix that changes nothing, and
-/// reviewed again clean: the context the judge the author's engine needs
+/// The flow's own findings, answered by a fix that changes nothing, and
+/// the head reviewed clean: the context the judge the author's engine needs
 /// is asked on.
 fn answered_unchanged(c: &Case, now: u64) -> String {
     reviewed(c, now);
-    assert_eq!(step(c, now + 2), Step::HandFix(Kind::Findings));
-    unchanged(c, now + 2, "kept because");
-    let mut t = 2;
-    until(c, now, &mut t, Step::QueueReview("reviewer".into()));
+    assert_eq!(step(c, now + 1), Step::HandFix(Kind::Findings));
+    unchanged(c, now + 1, "kept because");
+    let mut t = 0;
+    until_review(c, now, &mut t);
     by_the_engine(c, &head(3));
     asked(c, now, &mut t)
 }
 
+/// The flow's own [`findings`] as marked PR comments, each answered by a
+/// marked comment of its own saying `reply`.
+fn in_the_conversation(c: &Case, now: u64, reply: &str) {
+    let p = c.flow_findings(&findings(), 0, now);
+    for i in 0..findings().len() {
+        c.hub.flow_comment(
+            REPO,
+            3,
+            crate::sim::STEWARD,
+            &answer_body(&format!("{reply} {i}"), &p.mark(i), "3-1"),
+        );
+    }
+}
+
 #[test]
 fn a_reviews_thread_findings_and_their_unchanged_answers_are_read_from_github() {
-    let mut c = case(true);
+    let mut c = Case::new();
     judging(&mut c);
     let now = flow::jobs::now();
     let context = answered_unchanged(&c, now);
@@ -139,18 +152,18 @@ fn a_reviews_thread_findings_and_their_unchanged_answers_are_read_from_github() 
 }
 
 #[test]
-fn a_reviews_comment_findings_and_their_unchanged_answers_are_read_from_github() {
-    let mut c = case(false);
+fn a_reviews_comment_findings_and_their_answers_are_read_from_github() {
+    let mut c = Case::new();
     judging(&mut c);
     let now = flow::jobs::now();
-    let context = answered_unchanged(&c, now);
+    in_the_conversation(&c, now, "kept because");
+    by_the_engine(&c, &head(3));
+    let context = asked(&c, now, &mut 0);
     assert_eq!(context, on_github(&c));
     assert_eq!(context, read(&c).context());
-    // No diff: every finding and every answer is a marked PR comment.
+    // Every finding and every answer is a marked PR comment.
     assert!(threads(&c).is_empty());
     assert_eq!(read(&c).conversation.len(), 2 * findings().len());
-    rewrite_fix_records(&c, "kept because", "something else");
-    assert_eq!(read(&c).context(), context);
     // A finding edited, its marker kept, is another discussion.
     let comments = c.hub.comments(REPO, 3).unwrap();
     let at = comments
@@ -172,12 +185,12 @@ fn a_reviews_comment_findings_and_their_unchanged_answers_are_read_from_github()
 }
 
 #[test]
-fn a_carried_reviews_findings_and_answers_are_read_from_github() {
-    let mut c = case(true);
+fn an_earlier_heads_findings_and_answers_are_read_from_github() {
+    let mut c = Case::new();
     judging(&mut c);
     let now = flow::jobs::now();
     reviewed(&c, now);
-    // Trunk moves and is merged in: the review on head 3 carries to head 4.
+    // Trunk moves and is merged in: the threads on head 3 stay on head 4.
     let tip = c.hub.add(TRUNK, "trunk-only patch");
     c.hub.set_branch(REPO, "main", &tip);
     let mut patches = c.hub.patches(&tip);
@@ -186,10 +199,10 @@ fn a_carried_reviews_findings_and_answers_are_read_from_github() {
     c.hub.push(REPO, 3, &head(4));
     c.hub.refresh_flow(REPO, 3);
     c.good_ci(&head(4));
-    let mut t = 2;
+    let mut t = 0;
     until(&c, now, &mut t, Step::HandFix(Kind::Findings));
     unchanged(&c, now + t, "carried");
-    until(&c, now, &mut t, Step::QueueReview("reviewer".into()));
+    until_review(&c, now, &mut t);
     by_the_engine(&c, &head(4));
     let context = asked(&c, now, &mut t);
     assert_eq!(context, on_github(&c));
@@ -200,12 +213,8 @@ fn a_carried_reviews_findings_and_answers_are_read_from_github() {
 
 #[test]
 fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
-    let c = case(false);
-    let now = flow::jobs::now();
-    reviewed(&c, now);
-    assert_eq!(step(&c, now + 2), Step::HandFix(Kind::Findings));
-    unchanged(&c, now + 2, "answer");
-    until(&c, now, &mut 2, Step::QueueReview("reviewer".into()));
+    let c = Case::new();
+    in_the_conversation(&c, flow::jobs::now(), "answer");
     // What the flow reads: the conversation, and the context it makes,
     // which is the helper's over GitHub alone.
     let facts = || {
@@ -214,9 +223,9 @@ fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
         (f.conversation.clone(), f.context())
     };
     let (before, context) = facts();
-    // Four findings and four answers; a sealed verdict or a person's word
+    // Two findings and two answers; a sealed verdict or a person's word
     // isn't the findings' discussion.
-    assert_eq!(before.len(), 8);
+    assert_eq!(before.len(), 4);
     c.hub.flow_comment(REPO, 3, "someone", "just a comment");
     assert_eq!(facts(), (before.clone(), context.clone()));
     // An answer edited, its marker kept, is another discussion; so is one

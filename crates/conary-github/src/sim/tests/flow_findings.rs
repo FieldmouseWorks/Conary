@@ -85,12 +85,20 @@ fn a_title_edit_invalidates_reviews_and_judgments_without_rebinding_legacy_scope
         c.hub
             .edit_pull(REMI, 3, |p| p["title"] = json!("change: a different claim"));
         c.hub.refresh_flow(REMI, 3);
+        // GitHub dates the edit after the head's push.
+        c.hub.edit_flow(REMI, 3, |s| s.since.edited = Some(500));
         let f = c.facts();
-        assert!(f.reviewers["reviewer"].review.is_none());
+        assert!(f.reviewers["reviewer"].changed);
         if judged {
             assert!(f.judgment.is_none());
         }
-        assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+        // A judgment of the old title is one asked for again.
+        let why = if judged {
+            vec![Trigger::Asked, Trigger::Changed]
+        } else {
+            vec![Trigger::Changed]
+        };
+        assert_eq!(c.view(8000).step, Step::Judge(why));
     }
 }
 #[test]
@@ -115,39 +123,12 @@ fn dependency_landing_never_skips_existing_or_owed_reviewer_gates() {
             c.sweep("ok");
             c.judge("pass");
             c.roles(&["reviewer"]);
-            assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+            assert!(matches!(c.view(8000).step, Step::AskReview(_)));
             c.review("reviewer", Verdict::Findings, 600);
+            c.threads(1);
             assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));
-            c.review("reviewer", Verdict::Clean, 700);
-            let rev = c.scope();
-            c.service("reviewer").answer = Some(Review {
-                revision: rev.clone(),
-                verdict: Verdict::Findings,
-                at: 750,
-            });
-            assert_eq!(c.view(8000).step, Step::PostReview("reviewer".into()));
-            c.service("reviewer").answer = None;
-            c.memory
-                .lost_on
-                .entry("reviewer".into())
-                .or_default()
-                .insert("main".into(), rev.head.into());
-            c.service("reviewer").unavailable_until = Some(9000);
-            assert_eq!(c.view(8000).stage, Stage::Reviewer);
         }
     }
-}
-#[test]
-fn later_findings_on_an_equivalent_head_precede_an_older_carried_clean_review() {
-    let mut c = Case::new();
-    c.review("reviewer", Verdict::Clean, 100);
-    super::flow_carried::merge_base_into(&c, false);
-    c.review("reviewer", Verdict::Findings, 200);
-    super::flow_carried::merge_base_into(&c, false);
-    c.pass(0);
-    assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));
-    c.review("reviewer", Verdict::Clean, 300);
-    assert_eq!(c.view(8000).step, Step::Merge);
 }
 #[test]
 fn live_fix_ownership_blocks_landing_updates_and_competing_jobs_on_every_revision() {
@@ -256,14 +237,17 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         } else {
             c.judge("pass");
         }
-        let old = c.hub.comments(REMI, 3).unwrap()[0].body.clone().unwrap();
+        // The connector's summary comes before it.
+        let comments = c.hub.comments(REMI, 3).unwrap();
+        let first = comments.len() - 1;
+        let old = comments[first].body.clone().unwrap();
         if sweep {
             c.sweep("held");
         } else {
             c.judge("owner");
         }
         assert_eq!(c.pass(8000).step, Step::ListOwner);
-        c.hub.edit_flow_comment(REMI, 3, 1, &old);
+        c.hub.edit_flow_comment(REMI, 3, first + 1, &old);
         let n = c.pass(8100);
         assert_eq!(n.step, Step::ListOwner); // Keep the authenticated Owner/Held decision, not just its counter.
         assert!(!matches!(
@@ -301,13 +285,14 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     };
     let land = pass(9);
     let tampered = land.replace("\"generation\":9", "\"generation\":99");
+    let first = c.hub.comments(REMI, 3).unwrap().len();
     c.hub.flow_comment(REMI, 3, "owner", &tampered);
     assert!(c.facts().judgment.is_none());
     c.hub.flow_comment(REMI, 3, "owner", &land);
     let owner = key.decision(REMI, 3, "autoland-judgment", "owner", &c.scope(), 9);
     c.hub.flow_comment(REMI, 3, "owner", &owner);
     assert_eq!(c.pass(8000).step, Step::Judge(vec![Trigger::Asked]));
-    c.hub.edit_flow_comment(REMI, 3, 2, "");
+    c.hub.edit_flow_comment(REMI, 3, first + 2, "");
     assert_eq!(c.pass(8100).step, Step::Judge(vec![Trigger::Asked]));
     let newer = pass(10);
     c.hub.flow_comment(REMI, 3, "owner", &newer);
@@ -322,13 +307,9 @@ fn issuance_metadata_is_authenticated_and_conflicting_generations_fail_closed() 
     assert_eq!(c.pass(8400).step, Step::Merge);
 }
 #[test]
-fn legacy_body_only_review_marks_and_seals_are_not_upgraded_to_full_scope() {
+fn legacy_body_only_seals_are_not_upgraded_to_full_scope() {
     let mut c = Case::new();
     let scope = c.scope();
-    let mark = json!({"commit_sha":scope.head,"base":scope.base,"description":fingerprint(""),"findings":0});
-    c.hub.put_reviews(REMI,3,json!([{"id":99,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v1 {mark} -->"),"commit_id":scope.head,"submitted_at":"1970-01-01T00:00:00Z"}]));
-    assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
-    c.review("reviewer", Verdict::Clean, 600);
     let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
     c.settings.judge_key = Some(key.clone());
     c.settings.verdict_authors.insert("owner".into());
@@ -347,66 +328,6 @@ fn legacy_body_only_review_marks_and_seals_are_not_upgraded_to_full_scope() {
         &format!("<!-- autoland-judgment: land {} {tag} -->", scope.head),
     );
     assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::Asked]));
-}
-#[test]
-fn carried_clean_provenance_cannot_cover_later_losses_or_refused_findings() {
-    for refused in [false, true] {
-        let mut c = Case::new();
-        c.review("reviewer", Verdict::Clean, 100);
-        let original = c.scope();
-        super::flow_carried::merge_base_into(&c, false);
-        c.pass(0);
-        let middle = c.scope();
-        if !refused {
-            c.memory
-                .lost_on
-                .entry("reviewer".into())
-                .or_default()
-                .insert("main".into(), middle.head.clone().into());
-            c.service("reviewer").unavailable_until = Some(10000);
-        } else {
-            c.service("reviewer").answer = Some(Review {
-                revision: middle.clone(),
-                verdict: Verdict::Findings,
-                at: 900,
-            });
-            c.memory
-                .review_posts
-                .insert(("reviewer".into(), middle, 900), 3);
-        }
-        super::flow_carried::merge_base_into(&c, false);
-        c.pass(0);
-        assert_eq!(
-            c.facts().reviewers["reviewer"].reviewed_head,
-            Some(original.head)
-        );
-        let n = c.pass(8000);
-        assert!(!matches!(
-            n.step,
-            Step::Merge | Step::JoinTrain | Step::Settle
-        ));
-        if refused {
-            assert_eq!(n.step, Step::QueueReview("reviewer".into()));
-        } else {
-            assert_eq!(n.stage, Stage::Reviewer);
-        }
-    }
-}
-#[test]
-fn carried_reviews_also_bind_title_and_body_to_the_original_claim() {
-    for title in [false, true] {
-        let c = Case::new();
-        super::flow_carried::merge_base_into(&c, false);
-        c.hub.edit_pull(REMI, 3, |p| {
-            p[if title { "title" } else { "body" }] = json!("a different claim")
-        });
-        c.hub.refresh_flow(REMI, 3);
-        assert!(c.facts().reviewers["reviewer"].review.is_none());
-        assert!(!matches!(
-            c.view(8000).step,
-            Step::Merge | Step::JoinTrain | Step::Settle
-        ));
-    }
 }
 
 #[test]
@@ -464,53 +385,6 @@ fn judgments_bind_the_complete_claim_after_a_fresh_review_of_an_edit() {
 }
 
 #[test]
-fn legacy_findings_keep_the_round_cap_without_supplying_clean_coverage() {
-    let mut c = Case::new();
-    c.roles(&["reviewer"]);
-    let scope = c.scope();
-    let mark = json!({"commit_sha":scope.head,"base":scope.base,"description":fingerprint(""),"findings":1});
-    let reviews:Vec<_>=(1..=5).map(|id|json!({"id":id,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v1 {mark} -->"),"commit_id":scope.head,"submitted_at":"1970-01-01T00:00:00Z"})).collect();
-    c.hub.put_reviews(REMI, 3, json!(reviews));
-    let f = c.facts();
-    assert_eq!(f.reviewers["reviewer"].rounds, 5);
-    assert!(f.reviewers["reviewer"].review.is_none());
-    assert_eq!(c.view(8000).step, Step::Judge(vec![Trigger::RoundLimit]));
-    c.review("reviewer", Verdict::Clean, 600);
-    assert_eq!(c.view(8000).step, Step::Merge);
-}
-
-#[test]
-fn older_or_ambiguous_clean_cannot_discard_newer_refused_findings() {
-    for carried in [false, true] {
-        for clean_at in [100, 900, 901] {
-            let mut c = Case::new();
-            c.review("reviewer", Verdict::Clean, clean_at);
-            let revision = c.scope();
-            c.service("reviewer").answer = Some(Review {
-                revision: revision.clone(),
-                verdict: Verdict::Findings,
-                at: 900,
-            });
-            c.memory
-                .review_posts
-                .insert(("reviewer".into(), revision, 900), 3);
-            if carried {
-                super::flow_carried::merge_base_into(&c, false);
-            }
-            let n = c.pass(8000);
-            assert_eq!(
-                matches!(n.step, Step::Merge | Step::JoinTrain | Step::Settle),
-                clean_at > 900
-            );
-            if clean_at <= 900 {
-                c.review("reviewer", Verdict::Clean, 8001);
-                assert_eq!(c.pass(9000).step, Step::Merge);
-            }
-        }
-    }
-}
-
-#[test]
 fn rejected_sweep_remains_blocking_after_minor_reclassification() {
     for conflict in [false, true] {
         let mut c = Case::new();
@@ -531,6 +405,7 @@ fn rejected_sweep_remains_blocking_after_minor_reclassification() {
             &c.scope(),
             if conflict { 1 } else { 2 },
         );
+        let at = c.hub.comments(REMI, 3).unwrap().len();
         c.hub.flow_comment(REMI, 3, "owner", &marker);
         c.label(&["security"]);
         for time in [8100, 8200] {
@@ -538,36 +413,10 @@ fn rejected_sweep_remains_blocking_after_minor_reclassification() {
                 c.pass(time).step,
                 Step::Merge | Step::JoinTrain | Step::Settle
             ));
-            c.hub.edit_flow_comment(REMI, 3, 1, "");
+            c.hub.edit_flow_comment(REMI, 3, at, "");
         }
         c.sweep("ok");
         c.sweep("ok");
         assert_eq!(c.pass(9000).step, Step::Merge);
     }
-}
-
-#[test]
-fn a_different_rest_id_is_not_ordering_evidence_for_a_loss() {
-    let mut c = Case::new();
-    c.review("reviewer", Verdict::Clean, 100);
-    let revision = c.scope();
-    c.service("reviewer").answer = Some(Review {
-        revision: revision.clone(),
-        verdict: Verdict::Findings,
-        at: 900,
-    });
-    c.memory
-        .review_posts
-        .insert(("reviewer".into(), revision, 900), 3);
-    c.pass(8000);
-    c.service("reviewer").answer = None;
-    for time in [99, 899, 900] {
-        c.review("reviewer", Verdict::Clean, time);
-        assert!(!matches!(
-            c.pass(8100).step,
-            Step::Merge | Step::JoinTrain | Step::Settle
-        ));
-    }
-    c.review("reviewer", Verdict::Clean, 901);
-    assert_eq!(c.pass(8200).step, Step::Merge);
 }

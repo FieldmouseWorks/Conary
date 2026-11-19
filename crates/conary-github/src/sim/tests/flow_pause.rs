@@ -350,9 +350,14 @@ fn pause_blocks_seated_permission_renewal_races() {
 /// revisions can leave behind. Cancellation must not depend on which kind
 /// the decision would choose next.
 fn workers(c: &Case, now: u64) -> Vec<crate::flow::jobs::Work> {
-    start_workers(c, now, 5)
+    start_workers(c, now, 0..4)
 }
-fn start_workers(c: &Case, now: u64, count: usize) -> Vec<crate::flow::jobs::Work> {
+/// Start `which` of the workers, in the order fix, judge, prepare, proof.
+fn start_workers(
+    c: &Case,
+    now: u64,
+    which: std::ops::Range<usize>,
+) -> Vec<crate::flow::jobs::Work> {
     use conary_core::plugin::{Identity, Task};
     let facts = read(
         &c.hub,
@@ -371,16 +376,6 @@ fn start_workers(c: &Case, now: u64, count: usize) -> Vec<crate::flow::jobs::Wor
         session: None,
     };
     let tasks = [
-        (
-            Purpose::Review("reviewer".into()),
-            Task::Review {
-                repo: REPO.into(),
-                pr: 3,
-                base: super::TRUNK.into(),
-                head: facts.revision.head.clone(),
-                author: author.clone(),
-            },
-        ),
         (
             Purpose::Fix(Kind::Findings),
             Task::Fix {
@@ -431,7 +426,7 @@ fn start_workers(c: &Case, now: u64, count: usize) -> Vec<crate::flow::jobs::Wor
         dry_run: false,
         ledger: None,
     };
-    for (purpose, task) in tasks.into_iter().take(count) {
+    for (purpose, task) in tasks.into_iter().skip(which.start).take(which.len()) {
         pass.start(&facts, purpose, task, vec![], &mut record, &data)
             .unwrap();
     }
@@ -439,8 +434,8 @@ fn start_workers(c: &Case, now: u64, count: usize) -> Vec<crate::flow::jobs::Wor
 }
 fn worker_case() -> Case {
     let mut c = Case::new();
-    c.config.plugins.judge = c.config.plugins.review.clone();
-    c.config.plugins.proof = c.config.plugins.review.clone();
+    c.config.plugins.judge = c.config.plugins.fix.clone();
+    c.config.plugins.proof = c.config.plugins.fix.clone();
     c.clean_review();
     c
 }
@@ -478,7 +473,7 @@ fn cancellation_with_cleanup(cleanup: &str) {
         let now = crate::flow::jobs::now();
         let c = cleanup_case(cleanup, held, now);
         let running = workers(&c, now + 1);
-        assert_eq!(running.len(), 5);
+        assert_eq!(running.len(), 4);
         if held {
             c.hub.label(REPO, 3, &["hold"]);
         } else {
@@ -555,7 +550,10 @@ fn repository_pause_cancels_workers_after_the_pr_leaves_open() {
                     session: None,
                 },
                 execution: None,
-                answer: conary_core::plugin::Answer::Review { findings: vec![] },
+                answer: conary_core::plugin::Answer::Fix {
+                    result: conary_core::plugin::FixResult::Unchanged,
+                    answers: Some(vec![]),
+                },
             })),
         })
         .unwrap();
@@ -593,7 +591,7 @@ fn completion_during_cleanup(cleanup: &str) {
     use crate::train::Mark;
     for held in [false, true] {
         for call in [Call::FlowStatus, Call::FlowStage] {
-            for kind in 0..5 {
+            for kind in 0..4 {
                 let now = crate::flow::jobs::now();
                 let c = cleanup_case(cleanup, held, now);
                 let running = workers(&c, now + 1);
@@ -703,8 +701,9 @@ fn permission_still_rechecks_exiting_cancelled_workers() {
                 assert_eq!(step(&reports, 0).1, Step::JoinTrain);
             }
             // An independently attested clean review is already visible,
-            // while its owned invocation is still exiting after cancellation.
-            let work = start_workers(&c, now + 1, 1).pop().unwrap();
+            // while an owned proof, which holds no landing here, is still
+            // exiting after cancellation.
+            let work = start_workers(&c, now + 1, 3..4).pop().unwrap();
             crate::flow::jobs::cancel(&work, crate::flow::pause::Stop::Obsolete).unwrap();
             let finish = move |_: &crate::sim::Hub| {
                 crate::flow::jobs::worker(&work.path).unwrap();

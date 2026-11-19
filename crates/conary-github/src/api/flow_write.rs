@@ -1,6 +1,6 @@
 //! Effects for an explicitly requested flow pass.
 use super::*;
-use crate::flow::{LineComment, Stage, Write};
+use crate::flow::{Stage, Write};
 use serde_json::{Value, json};
 
 impl Api {
@@ -76,25 +76,6 @@ impl Write for Api {
         Ok(())
     }
 
-    fn review(
-        &self,
-        repo: &str,
-        pr: u64,
-        head: &str,
-        body: &str,
-        comments: &[LineComment],
-    ) -> Result<(), ApiError> {
-        let comments: Vec<Value> = comments
-            .iter()
-            .map(|c| json!({"path":c.path,"line":c.line,"side":"RIGHT","body":c.body}))
-            .collect();
-        let _: Value = self.send(
-            false,
-            &format!("/repos/{repo}/pulls/{pr}/reviews"),
-            &json!({"commit_id":head,"body":body,"event":"COMMENT","comments":comments}),
-        )?;
-        Ok(())
-    }
     fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError> {
         let _: Value = self.send(
             false,

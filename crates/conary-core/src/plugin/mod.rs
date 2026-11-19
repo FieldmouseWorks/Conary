@@ -71,6 +71,9 @@ pub enum Trigger {
     RoundLimit,
     /// A major dependency update not from the dependency bot.
     MajorDependency,
+    /// The PR was retargeted or its description edited after its head was
+    /// pushed: the reviewer's word binds only the commit.
+    Changed,
     /// A judge already started on this head and base stays owed, and the
     /// reasons it was asked for weren't recorded (it predates v4).
     Started,

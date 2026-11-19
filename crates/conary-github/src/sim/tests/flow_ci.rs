@@ -715,9 +715,10 @@ fn train_enabled_release_branch_lands_outside_the_train() {
             checks_complete: true,
             rebase_removed: Vec::new(),
             timeline_cut_at: None,
+            since: Default::default(),
         },
     );
-    s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 0);
+    s.hub.flow_review(REMI, 3, Verdict::Clean, 0);
     let mut f = s.read(&[Run::whole(1, "release", "success")], &[]);
     f.settings.train = true;
     assert_eq!(f.default_branch, "main");

@@ -54,14 +54,6 @@ pub struct Handed {
     pub target: Target,
 }
 
-/// A line comment a review is submitted with.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LineComment {
-    pub path: String,
-    pub line: u64,
-    pub body: String,
-}
-
 /// The issuance a review's findings are named by.
 pub fn issuance(head: &str, body: &str) -> String {
     super::receipt_digest(&super::review_receipt(head, body))
@@ -111,66 +103,6 @@ fn read<T: for<'a> Deserialize<'a>>(name: &str, body: &str) -> Option<T> {
         .and_then(|m| serde_json::from_str(m).ok())
 }
 
-/// Every new-side line range of the diff's hunks, by path: the lines a
-/// review comment can be placed on. A deleted file, a binary file or a path
-/// git had to quote has none.
-pub fn hunks(diff: &str) -> BTreeMap<String, Vec<(u64, u64)>> {
-    let header =
-        regex::Regex::new(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("constant regex");
-    let mut result = BTreeMap::<String, Vec<(u64, u64)>>::new();
-    let mut path: Option<String> = None;
-    // Lines left in the hunk being read, old side and new side. Its lines
-    // are content, whatever they start with.
-    let (mut old, mut new) = (0u64, 0u64);
-    for line in diff.lines() {
-        if old > 0 || new > 0 {
-            match line.as_bytes().first() {
-                Some(b'+') => new = new.saturating_sub(1),
-                Some(b'-') => old = old.saturating_sub(1),
-                Some(b'\\') => {}
-                _ => {
-                    old = old.saturating_sub(1);
-                    new = new.saturating_sub(1);
-                }
-            }
-            continue;
-        }
-        if line.starts_with("diff --git ") {
-            path = None;
-        } else if let Some(name) = line.strip_prefix("+++ ") {
-            let name = name.strip_suffix('\t').unwrap_or(name);
-            path = name.strip_prefix("b/").map(str::to_owned);
-        } else if let Some(c) = header.captures(line) {
-            let count =
-                |m: Option<regex::Match<'_>>| m.map_or(Some(1), |m| m.as_str().parse().ok());
-            let (Some(o), Ok(start), Some(n)) =
-                (count(c.get(1)), c[2].parse::<u64>(), count(c.get(3)))
-            else {
-                return BTreeMap::new();
-            };
-            (old, new) = (o, n);
-            if let Some(path) = &path
-                && n > 0
-            {
-                result
-                    .entry(path.clone())
-                    .or_default()
-                    .push((start, start.saturating_add(n)));
-            }
-        }
-    }
-    result
-}
-
-/// Whether a finding's line is in one of the diff's hunks.
-pub fn placed(hunks: &BTreeMap<String, Vec<(u64, u64)>>, finding: &Finding) -> bool {
-    hunks.get(&finding.path).is_some_and(|ranges| {
-        ranges
-            .iter()
-            .any(|(start, end)| (*start..*end).contains(&finding.line))
-    })
-}
-
 /// What GitHub shows of the flow's findings: each one's targets and whether
 /// it's answered. Only the flow's review accounts' comments count, so a
 /// marker quoted by anyone else names nothing.
@@ -193,7 +125,7 @@ impl Targets {
         comments: &[Comment],
         settings: &Settings,
     ) -> Self {
-        let ours = |login: Option<&str>| login.is_some_and(|l| settings.review_authors.contains(l));
+        let ours = |login: Option<&str>| login.is_some_and(|l| settings.flow_authors.contains(l));
         let mut result = Self::default();
         for (id, thread) in threads {
             let Some(first) = thread.comments.first() else {
@@ -239,14 +171,6 @@ impl Targets {
             self.comments.contains(mark).then_some(Target::Comment)
         }
     }
-    /// A finding is answered once its threads are resolved, or, with no
-    /// thread, once an answer to it is posted.
-    pub fn answered(&self, mark: &FindingMark) -> bool {
-        match self.threads.get(mark) {
-            Some(threads) => threads.iter().all(|(_, resolved)| *resolved),
-            None => self.answers.contains(mark),
-        }
-    }
     /// Every thread a finding has, and whether each is resolved.
     pub fn threads(&self, mark: &FindingMark) -> &[(String, bool)] {
         self.threads.get(mark).map_or(&[], Vec::as_slice)
@@ -268,7 +192,7 @@ impl Targets {
         first
             .author
             .as_deref()
-            .is_some_and(|l| settings.review_authors.contains(l))
+            .is_some_and(|l| settings.flow_authors.contains(l))
             .then(|| read(FINDING, &first.body))?
     }
 }
@@ -287,7 +211,6 @@ pub struct Publication {
     pub role: String,
     pub head: String,
     pub issuance: String,
-    pub marker: serde_json::Value,
     pub findings: Vec<Finding>,
 }
 impl Publication {
@@ -295,7 +218,7 @@ impl Publication {
         if !record
             .user
             .as_ref()
-            .is_some_and(|u| settings.review_authors.contains(&u.login))
+            .is_some_and(|u| settings.flow_authors.contains(&u.login))
         {
             return None;
         }
@@ -309,7 +232,6 @@ impl Publication {
             role: role.into(),
             issuance: issuance(&head, body),
             head,
-            marker,
             findings,
         })
     }
@@ -321,44 +243,11 @@ impl Publication {
             finding,
         }
     }
-    /// Whether every finding is answered on its own target. None until
-    /// every finding's target is on GitHub: publication isn't complete.
-    pub fn answered(&self, targets: &Targets) -> Option<bool> {
-        let marks: Vec<_> = (0..self.findings.len()).map(|i| self.mark(i)).collect();
-        marks
-            .iter()
-            .all(|m| targets.target(m).is_some())
-            .then(|| marks.iter().all(|m| targets.answered(m)))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const DIFF: &str = "diff --git a/src/lib.rs b/src/lib.rs
-index 1..2 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -1,3 +1,4 @@
- one
-+++ an added line that looks like a header
- two
--three
-+four
-@@ -10 +11,2 @@ fn x()
--a
-+b
-+c
-diff --git a/gone.rs b/gone.rs
-deleted file mode 100644
---- a/gone.rs
-+++ /dev/null
-@@ -1 +0,0 @@
--x
-diff --git a/img.png b/img.png
-Binary files a/img.png and b/img.png differ
-";
 
     fn at(path: &str, line: u64) -> Finding {
         Finding {
@@ -367,24 +256,6 @@ Binary files a/img.png and b/img.png differ
             severity: conary_core::plugin::Severity::P1,
             text: "t".into(),
         }
-    }
-
-    #[test]
-    fn places_only_new_side_lines_inside_hunks() {
-        let h = hunks(DIFF);
-        assert_eq!(h["src/lib.rs"], [(1, 5), (11, 13)]);
-        assert!(!h.contains_key("gone.rs") && !h.contains_key("img.png"));
-        for (line, inside) in [
-            (1, true),
-            (4, true),
-            (5, false),
-            (10, false),
-            (12, true),
-            (13, false),
-        ] {
-            assert_eq!(placed(&h, &at("src/lib.rs", line)), inside, "line {line}");
-        }
-        assert!(!placed(&h, &at("other.rs", 1)));
     }
 
     #[test]

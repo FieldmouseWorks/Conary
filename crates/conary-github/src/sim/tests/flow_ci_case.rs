@@ -121,6 +121,7 @@ impl Scenario {
                 checks_complete: true,
                 rebase_removed: Vec::new(),
                 timeline_cut_at: None,
+                since: Default::default(),
             },
         );
         Self { hub, memory }

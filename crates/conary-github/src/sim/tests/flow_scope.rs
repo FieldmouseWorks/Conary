@@ -3,68 +3,6 @@ use crate::flow::*;
 use crate::sim::REMI;
 use serde_json::json;
 #[test]
-fn an_outages_underway_look_counts_only_on_its_own_base() {
-    // handle.py:329: an old-base look is another change, not a verdict still owed here.
-    let mut c = Case::new();
-    c.roles(&["available", "out"]);
-    c.review("available", Verdict::Clean, 600);
-    let mut old = c.scope();
-    old.base = "release".into();
-    c.service("out").unavailable_until = Some(86400);
-    c.service("out").under_way_on = Some(old);
-    assert_eq!(c.view(700).step, Step::Merge);
-    let mut old = c.scope();
-    old.head = "old-head".into();
-    c.service("out").under_way_on = Some(old);
-    assert_eq!(c.view(800).stage, Stage::Review);
-    assert!(matches!(c.view(800).step, Step::Wait { .. }));
-}
-#[test]
-fn returned_answers_post_before_a_new_description_is_reviewed() {
-    // handle.py:58: an in-flight answer is posted on what it read, then the edited description needs a new look.
-    let mut c = Case::new();
-    c.roles(&["reviewer"]);
-    let reviewed = c.scope();
-    c.service("reviewer").answer = Some(Review {
-        revision: reviewed,
-        verdict: Verdict::Clean,
-        at: 600,
-    });
-    c.description("Why not Rust: quicker to write", 650);
-    assert_eq!(c.pass(650).step, Step::PostReview("reviewer".into()));
-    c.service("reviewer").answer = None;
-    assert_eq!(c.pass(700).step, Step::QueueReview("reviewer".into()));
-    c.review("reviewer", Verdict::Clean, 710);
-    assert_eq!(c.pass(720).step, Step::Merge);
-}
-#[test]
-fn a_clean_new_head_covers_a_late_available_answer_but_docs_still_post_it() {
-    // handle.py:112 / 592: a new look supersedes old findings; docs get no new look, so findings must be posted.
-    for docs in [false, true] {
-        let mut c = Case::new();
-        c.roles(&["reviewer"]);
-        c.service("reviewer").answer = Some(Review {
-            revision: c.scope(),
-            verdict: Verdict::Findings,
-            at: 600,
-        });
-        c.push("head-after-look");
-        if docs {
-            c.hub.touch(&c.scope().head, &["docs/a.md"]);
-        } else {
-            c.review("reviewer", Verdict::Clean, 690);
-        }
-        assert_eq!(
-            c.view(700).step,
-            if docs {
-                Step::PostReview("reviewer".into())
-            } else {
-                Step::Merge
-            }
-        );
-    }
-}
-#[test]
 fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_changes() {
     // handle.py:800 / 849: ordinary CI does not pass a judge already asked on this head and base.
     let mut c = Case::new();
@@ -140,7 +78,7 @@ fn documentation_policy_waives_only_the_review_round_not_findings_or_ci() {
         assert_eq!(
             c.view(700).step,
             if review {
-                Step::QueueReview("reviewer".into())
+                Step::Wait { until: Some(1800) }
             } else {
                 Step::Merge
             }
@@ -342,58 +280,77 @@ fn stacked_prs_wait_through_findings_red_ci_and_age_then_review_after_retarget()
         }
         c.hub.retarget(REMI, 3, "main");
         c.hub.refresh_flow(REMI, 3);
+        // GitHub dates the retarget after the head's push.
+        c.hub
+            .edit_flow(REMI, 3, |s| s.since.retargeted = Some(2 * 86400));
         c.threads(0);
         c.ci("success");
-        assert_eq!(
-            c.pass(2 * 86400 + 1).step,
-            Step::QueueReview("reviewer".into())
-        );
+        let retargeted = c.pass(2 * 86400 + 1).step;
+        if scenario == 0 {
+            // Its clean review read the diff against the base below.
+            assert_eq!(retargeted, Step::Judge(vec![Trigger::Changed]));
+        } else {
+            assert!(matches!(retargeted, Step::AskReview(_)));
+        }
         c.review("reviewer", Verdict::Clean, 2 * 86400 + 2);
-        assert_eq!(c.pass(2 * 86400 + 3).step, Step::Merge);
+        assert_eq!(
+            c.pass(2 * 86400 + 3).step,
+            Step::Judge(vec![Trigger::Changed])
+        );
+        c.judge("pass");
+        assert_eq!(c.pass(2 * 86400 + 4).step, Step::Merge);
         c.hub.set_branch(REMI, "release/1.x", super::TRUNK);
         c.hub.retarget(REMI, 3, "release/1.x");
         c.hub.refresh_flow(REMI, 3);
-        c.review("reviewer", Verdict::Clean, 2 * 86400 + 4);
-        assert_eq!(c.view(2 * 86400 + 5).step, Step::Merge);
+        c.hub
+            .edit_flow(REMI, 3, |s| s.since.retargeted = Some(2 * 86400 + 5));
+        // A release branch is an ordinary base, not a PR below: the new
+        // base is judged, not waited on.
+        assert_eq!(
+            c.view(2 * 86400 + 6).step,
+            Step::Judge(vec![Trigger::Changed])
+        );
+        c.judge("pass");
+        assert_eq!(c.view(2 * 86400 + 6).step, Step::Merge);
     }
 }
 
 #[test]
-fn only_the_configured_stewards_rest_login_can_supply_a_review_mark() {
-    // handle.py:356 / post.py:73: a person with the App's GraphQL name is not its REST [bot] identity.
-    for (who, kind, accepted) in [
-        ("fieldmouseworks-steward[bot]", "Bot", true),
-        ("mallory", "User", false),
-        ("fieldmouseworks-steward", "User", false),
+fn only_the_connectors_rest_login_can_supply_a_review() {
+    // review_step.py: a person with the App's GraphQL name is not its REST [bot] identity.
+    for (who, accepted) in [
+        (crate::sim::CONNECTOR, true),
+        ("mallory", false),
+        ("chatgpt-codex-connector", false),
     ] {
         let mut c = Case::new();
         c.roles(&["reviewer"]);
         let scope = c.scope();
-        let body = format!(
-            "<!-- reviewer-review:v2 {} -->",
-            json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
+        let state = json!({"code_review":{"commit_sha":scope.head,"has_any_findings":false,"status":"completed"}});
+        c.hub.flow_comment(
+            REMI,
+            3,
+            who,
+            &format!("<!-- codex-review-state:v1 {state} -->"),
         );
-        c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":who,"type":kind},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"2026-11-08T12:00:00Z"}]));
         assert_eq!(
             c.view(700).step,
             if accepted {
                 Step::Merge
             } else {
-                Step::QueueReview("reviewer".into())
-            }
+                Step::Wait { until: Some(1800) }
+            },
+            "{who}"
         );
     }
 }
 #[test]
-fn a_mark_with_an_invalid_time_stops_the_reader() {
-    // post.py:122: a malformed verdict timestamp is an error, never clean coverage.
+fn a_review_with_an_invalid_time_stops_the_reader() {
+    // reviews.rs: a malformed review time is an error, never clean coverage.
     let c = Case::new();
-    let scope = c.scope();
-    let body = format!(
-        "<!-- reviewer-review:v2 {} -->",
-        json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
-    );
-    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":"fieldmouseworks-steward[bot]","type":"Bot"},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"yesterday"}]));
+    let head = c.scope().head;
+    let body = format!("**Reviewed commit:** `{}`", &head[..10]);
+    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::CONNECTOR,"type":"Bot"},"body":body,"commit_id":head,"state":"COMMENTED","submitted_at":"yesterday"}]));
     assert!(
         read(
             &c.hub,

@@ -4,7 +4,7 @@ use super::flow_pass_case::{Case, REPO, example};
 use super::head;
 use crate::api::Source;
 use crate::flow::{self, *};
-use conary_core::plugin::{Answer, Problem, Task};
+use conary_core::plugin::{Answer, Finding, Problem, Severity, Task};
 
 fn invocation(work: &flow::jobs::Work) -> flow::jobs::Invocation {
     serde_json::from_slice(&std::fs::read(&work.path).unwrap()).unwrap()
@@ -15,23 +15,30 @@ fn context_now(c: &Case) -> String {
     read_judging_context(&c.hub, REPO, 3).unwrap()
 }
 
-/// The example finds one problem on head 3, its fix answers it and pushes
-/// head 4, and head 4's review is clean. The author's engine needs a judge,
-/// which the next pass asks for. Returns the context GitHub showed before the
-/// fix's answer went up.
+/// The finding the flow's own review left open on head 3, on its thread.
+fn finding() -> Finding {
+    Finding {
+        path: "src/lib.rs".into(),
+        line: 1,
+        severity: Severity::P1,
+        text: "Demonstration finding on the first simulated head".into(),
+    }
+}
+
+/// The flow's own review left one finding open on head 3, the example's fix
+/// answers it and pushes head 4, and the connector reviews head 4 clean.
+/// The author's engine needs a judge, which the next pass asks for. Returns
+/// the context GitHub showed before the fix's answer went up.
 fn fixed_then_reviewed(c: &mut Case, now: u64) -> String {
     c.config.plugins.judge = Some(example());
     c.config.settings.judge_engines = ["fixture-author".into()].into();
+    c.flow_findings(&[finding()], 1, now);
+    c.pass(now, false);
     assert_eq!(
-        c.pass(now, false)[0].next.as_ref().unwrap().step,
-        Step::QueueReview("reviewer".into())
-    );
-    c.run_worker();
-    c.pass(now + 1, false);
-    assert_eq!(
-        c.pass(now + 2, false)[0].next.as_ref().unwrap().step,
+        c.pass(now + 1, false)[0].next.as_ref().unwrap().step,
         Step::HandFix(Kind::Findings)
     );
+    let fix = format!("3-{}", c.record().sequence);
     c.run_worker();
     assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(4));
     c.hub.commit_details(
@@ -44,12 +51,11 @@ fn fixed_then_reviewed(c: &mut Case, now: u64) -> String {
     // Its answer goes up, the PR is read again, and head 4 is reviewed.
     assert_eq!(
         c.pass(now + 3, false)[0].next.as_ref().unwrap().step,
-        Step::PostFix("3-2".into())
+        Step::PostFix(fix)
     );
     c.pass(now + 3, false);
     c.pass(now + 3, false);
-    c.run_worker();
-    c.pass(now + 4, false);
+    c.connector_clean(&head(4), true);
     unanswered
 }
 
@@ -63,43 +69,31 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
         Step::Judge(vec![Trigger::AuthorEngine])
     );
     let record = c.record();
-    let mut findings = vec![];
+    let findings = [finding()];
     let mut answered = vec![];
     for work in &record.jobs {
         let completion = flow::jobs::inspect(work, now + 6).unwrap();
-        match (invocation(work).task, completion.result) {
-            (
-                Task::Review { pr, .. },
-                Some(Ok(conary_core::plugin::Response {
-                    answer: Answer::Review { findings: found },
-                    ..
-                })),
-            ) => {
-                assert_eq!(pr, 3);
-                findings.extend(found);
-            }
-            (
-                Task::Fix { pr, problems, .. },
-                Some(Ok(conary_core::plugin::Response {
-                    answer: Answer::Fix { answers, .. },
-                    ..
-                })),
-            ) => {
-                assert_eq!(pr, 3);
-                // The example speaks v4: one answer for its one finding.
-                let answers = answers.unwrap();
-                assert_eq!(answers.len(), 1);
-                let Problem::Finding { finding } = &problems[answers[0].problem] else {
-                    panic!("an answer to a finding");
-                };
-                // Handed with the review it came from named in its text.
-                assert!(finding.text.ends_with(&findings[0].text));
-                answered.extend(answers);
-            }
-            _ => {}
+        if let (
+            Task::Fix { pr, problems, .. },
+            Some(Ok(conary_core::plugin::Response {
+                answer: Answer::Fix { answers, .. },
+                ..
+            })),
+        ) = (invocation(work).task, completion.result)
+        {
+            assert_eq!(pr, 3);
+            // The example speaks v4: one answer for its one finding.
+            let answers = answers.unwrap();
+            assert_eq!(answers.len(), 1);
+            let Problem::Finding { finding } = &problems[answers[0].problem] else {
+                panic!("an answer to a finding");
+            };
+            // Handed with the review it came from named in its text.
+            assert!(finding.text.ends_with(&findings[0].text));
+            answered.extend(answers);
         }
     }
-    assert_eq!(findings.len(), 1);
+    assert_eq!(answered.len(), 1);
     let judge = record
         .jobs
         .iter()

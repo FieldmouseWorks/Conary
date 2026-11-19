@@ -42,6 +42,7 @@ fn every_reason() -> Vec<conary_core::plugin::Trigger> {
         Asked,
         RoundLimit,
         MajorDependency,
+        Changed,
     ]
 }
 
@@ -328,6 +329,7 @@ mod flow_gates;
 
 mod flow_case;
 
+mod flow_connector;
 mod flow_rounds;
 
 mod flow_jobs;
@@ -337,8 +339,6 @@ mod flow_renovate;
 mod flow_proofs;
 
 mod flow_answers;
-
-mod flow_carried;
 
 mod flow_waits;
 

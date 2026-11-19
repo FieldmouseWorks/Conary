@@ -6,15 +6,6 @@ pub const SETTLED: &str = "review-settled";
 pub trait Write: Read + crate::train::Forge {
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError>;
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError>;
-    /// Submit a review on `head` in one request, with its line comments.
-    fn review(
-        &self,
-        repo: &str,
-        pr: u64,
-        head: &str,
-        body: &str,
-        comments: &[LineComment],
-    ) -> Result<(), ApiError>;
     /// Post a comment in the PR's conversation.
     fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError>;
     /// Reply on review thread `thread`, by GitHub's id.
@@ -28,9 +19,8 @@ pub trait Write: Read + crate::train::Forge {
 }
 impl Stage {
     /// Every stage that has a label, in stages.py's order.
-    pub const LABELLED: [Stage; 11] = [
+    pub const LABELLED: [Stage; 10] = [
         Self::Review,
-        Self::Reviewer,
         Self::Fix,
         Self::Ci,
         Self::ProofSlot,
@@ -56,7 +46,6 @@ impl Stage {
     pub fn label(self) -> Option<&'static str> {
         Some(match self {
             Self::Review => "waiting: review",
-            Self::Reviewer => "waiting: reviewer",
             Self::Fix => "waiting: fix",
             Self::Ci => "waiting: CI",
             Self::ProofSlot => "waiting: proof slot",

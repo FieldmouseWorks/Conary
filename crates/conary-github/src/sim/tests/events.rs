@@ -247,18 +247,24 @@ fn signed_pull_event_runs_flow_against_hub() {
                 |work| {
                     assert_eq!(work.repo, REPO);
                     let reports = c.pass(now, false);
+                    // The flow first sees the head now: it waits for the
+                    // connector's review of the push.
+                    let next = reports[0].next.as_ref().unwrap();
                     assert_eq!(
-                        reports[0].next.as_ref().unwrap().step,
-                        Step::QueueReview("reviewer".into())
+                        next.step,
+                        Step::Wait {
+                            until: Some(now + 1800)
+                        }
                     );
+                    assert_eq!(next.wait_until, Some(now + 1800));
+                    assert_eq!(c.record().memory.seen, now, "the pass kept what it saw");
+                    // It wrote the PR's stage and status on the hub.
                     assert_eq!(
-                        reports[0].next.as_ref().unwrap().wait_until,
-                        Some(c.record().jobs[0].deadline)
-                    );
-                    assert_eq!(
-                        c.deferred.0.borrow().len(),
-                        1,
-                        "the pass executed its plugin launch"
+                        (
+                            c.hub.count(crate::sim::Call::FlowStage),
+                            c.hub.count(crate::sim::Call::FlowStatus)
+                        ),
+                        (1, 1)
                     );
                     Ok(reports)
                 }

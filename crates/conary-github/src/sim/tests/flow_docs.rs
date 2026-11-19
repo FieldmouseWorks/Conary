@@ -95,7 +95,7 @@ fn docs_runs_for_another_fork_or_base_never_prove_this_pr() {
         s.hub.set_branch(REMI, "next", TRUNK);
         s.hub.retarget(REMI, 3, "next");
         s.hub.refresh_flow(REMI, 3);
-        s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+        s.hub.flow_review(REMI, 3, Verdict::Clean, 600);
         let f = s.read(&[Run::docs(1, TRUNK, verdict)], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
         assert!(f.checks.iter().all(|c| c.state != Ci::Red));
@@ -107,7 +107,7 @@ fn on_base(base: &str) -> Scenario {
     s.hub.set_branch(REMI, base, TRUNK);
     s.hub.retarget(REMI, 3, base);
     s.hub.refresh_flow(REMI, 3);
-    s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+    s.hub.flow_review(REMI, 3, Verdict::Clean, 600);
     s
 }
 fn twin(r: Run) -> Run {

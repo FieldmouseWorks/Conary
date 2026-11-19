@@ -201,9 +201,9 @@ fn granted(c: &Case) -> usize {
         .filter(|s| s.context == SETTLED && s.state == "success")
         .count()
 }
-/// A reviewed PR, its review worker's answer posted and on disk, in the
-/// train (`seated`) or landing directly. Returns the answer's path.
-fn posted_review(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
+/// A reviewed PR, a fix worker's answer posted and on disk, in the train
+/// (`seated`) or landing directly. Returns the answer's path.
+fn posted_answer(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
     c.clean_review();
     c.config.settings.train = seated;
     if seated {
@@ -213,7 +213,7 @@ fn posted_review(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
     let mut record = c.record();
     let path = c.dir.path().join("3-90.job");
     record.jobs.push(jobs::Work {
-        purpose: jobs::Purpose::Review("reviewer".into()),
+        purpose: jobs::Purpose::Fix(Kind::Findings),
         job: Job {
             id: "3-90".into(),
             revision: Revision::from(&c.hub.pull(REPO, 3).unwrap()),
@@ -242,21 +242,24 @@ fn posted_review(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
                 session: None,
             },
             execution: None,
-            answer: conary_core::plugin::Answer::Review { findings: vec![] },
+            answer: conary_core::plugin::Answer::Fix {
+                result: conary_core::plugin::FixResult::Unchanged,
+                answers: Some(vec![]),
+            },
         })),
     };
     std::fs::write(&answer, serde_json::to_vec(&completion).unwrap()).unwrap();
     answer
 }
 
-/// A seated PR whose posted review worker's answer doesn't read: it
+/// A seated PR whose posted worker's answer doesn't read: it
 /// waits, named degraded, and its seat is granted nothing, where the train
 /// stage's wait granted it before.
 #[test]
 fn a_seated_pr_with_an_unreadable_answer_is_granted_nothing() {
     let mut c = Case::new();
     let now = jobs::now();
-    let answer = posted_review(&mut c, true, now);
+    let answer = posted_answer(&mut c, true, now);
     std::fs::write(&answer, b"corrupt completion").unwrap();
     let before = granted(&c);
     let reports = c.pass(now + 1, false);
@@ -281,7 +284,7 @@ fn an_answer_that_stops_reading_during_the_pass_is_granted_nothing() {
         for seated in [false, true] {
             let mut c = Case::new();
             let now = jobs::now();
-            let answer = posted_review(&mut c, seated, now);
+            let answer = posted_answer(&mut c, seated, now);
             let before = granted(&c);
             c.hub.race(crate::sim::On::from(on), move |_| {
                 std::fs::write(&answer, b"corrupt completion").unwrap();

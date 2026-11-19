@@ -146,6 +146,7 @@ A v4 judge request says why the flow asks, and what the judgment is on:
   | `asked` | someone asked for a judge |
   | `round_limit` | the review loop reached its round limit with findings open |
   | `major_dependency` | a major dependency update, not from the dependency bot |
+  | `changed` | the PR was retargeted or its description edited after its head was pushed, which the reviewer's word doesn't cover |
   | `started` | a judge already started on this head and base stays owed, and the reasons it was asked for weren't recorded |
 
 - `context` is the flow's digest of the review findings and their answers

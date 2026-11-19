@@ -49,9 +49,8 @@ fn review(
     change: impl FnOnce(&mut Statement),
     tamper: impl FnOnce(String) -> String,
 ) {
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
-    let records = c.hub.reviews(REPO, 3).unwrap();
-    let body = records.last().unwrap().body.clone().unwrap();
+    c.hub.flow_review(REPO, 3, Verdict::Clean, 0);
+    let body = c.connector_summary(3);
     let receipt = review_receipt(&head(3), &body);
     let tree = Branches::tree(&c.hub, REPO, &head(3)).unwrap();
     let mut s =

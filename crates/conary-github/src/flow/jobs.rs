@@ -9,7 +9,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Purpose {
-    Review(String),
     Fix(Kind),
     Judge,
     Proof,
@@ -21,7 +20,6 @@ impl Purpose {
     pub fn kind(&self) -> conary_core::plugin::Kind {
         use conary_core::plugin::Kind;
         match self {
-            Self::Review(_) => Kind::Review,
             Self::Fix(_) => Kind::Fix,
             Self::Judge => Kind::Judge,
             Self::Proof => Kind::Proof,
@@ -51,15 +49,11 @@ pub struct Work {
     pub sent: Sent,
 }
 
-/// A publication's progress. For a review: its plan, which findings get a
-/// line comment, fixed before the review is first sent. For a review or a
-/// fix: each of its writes, by what it is ("review", "finding 2",
-/// "answer 0"), saved before it's sent.
+/// A fix's publication progress: each of its writes, by what it is
+/// ("answer 0"), saved before it's sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sent {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inline: Option<Vec<bool>>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub writes: std::collections::BTreeMap<String, Attempt>,
 }

@@ -30,9 +30,10 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
             checks_complete: true,
             rebase_removed: Vec::new(),
             timeline_cut_at: None,
+            since: Default::default(),
         },
     );
-    hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 0);
+    hub.flow_review(REMI, 3, Verdict::Clean, 0);
     let f = read(
         &hub,
         &REMI.parse().unwrap(),
@@ -81,21 +82,23 @@ fn outside_and_unreadable_are_the_owners() {
 
 #[test]
 fn quiet_head_gets_one_review_intention() {
-    // handle.py: queue once the head has settled, then wait on its service.
+    // review_step.py: ask once the head has gone quiet, then wait on that ask.
     let mut c = Case::new();
     c.hub.remove_flow_reviews(REMI, 3);
-    assert_eq!(c.view(1).step, Step::Wait { until: Some(300) });
-    assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
-    c.service("reviewer").queued = true;
-    assert_eq!(c.view(4000).step, Step::Wait { until: None });
+    assert_eq!(c.view(1).step, Step::Wait { until: Some(1800) });
+    assert!(matches!(c.view(4000).step, Step::AskReview(_)));
+    c.memory.asked = Some((head(3), 4000));
+    assert_eq!(c.view(4000).step, Step::Wait { until: Some(7600) });
 }
 
 #[test]
 fn changed_description_does_not_reuse_review() {
-    // handle.py: the review mark binds the description it was shown.
+    // reviews.rs: the connector's word binds only the commit, so a
+    // description edited after the push goes to a judge.
     let c = Case::new();
     c.description("new reasons", 0);
-    assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
+    c.hub.edit_flow(REMI, 3, |s| s.since.edited = Some(100));
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::Changed]));
 }
 
 #[test]
@@ -126,31 +129,34 @@ fn current_changes_requested_prevents_merge() {
 
 #[test]
 fn stale_head_verdict_cannot_land() {
-    // handle.py: a mark on an old commit cannot cover this head.
+    // handle.py: a review of an old commit cannot cover this head.
     let c = Case::new();
-    old_review(&c, &head(2), "main");
-    assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
+    c.push(&head(4));
+    let n = c.view(4000);
+    assert_eq!(
+        (n.stage, n.step),
+        (
+            Stage::Review,
+            Step::Wait {
+                until: Some(4000 + 1800)
+            }
+        )
+    );
 }
 
 #[test]
 fn retargeted_verdict_cannot_land() {
-    // carried.py: a mark on another base cannot cover this diff.
+    // reviews.rs: a review of the push cannot cover a diff against the base
+    // it was retargeted to since.
     let c = Case::new();
-    old_review(&c, &head(3), "other");
-    assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
-}
-
-#[test]
-fn answer_is_posted_before_landing() {
-    // post.py / handle.py: the service's answer is posted before deciding again.
-    let mut c = Case::new();
-    let revision = c.scope();
-    c.service("reviewer").answer = Some(Review {
-        revision,
-        verdict: Verdict::Clean,
-        at: 4000,
+    c.hub.edit_flow(REMI, 3, |s| {
+        s.since = Since {
+            edited: None,
+            retargeted: Some(200),
+            pushed: Some(100),
+        }
     });
-    assert_eq!(c.view(4000).step, Step::PostReview("reviewer".into()));
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::Changed]));
 }
 
 #[test]
@@ -263,41 +269,14 @@ fn strikes_back_off_and_third_is_overdue() {
 }
 
 #[test]
-fn push_resets_strikes_but_keeps_lost_findings() {
-    // strikes.py / superseded.py: counters are per head; losses survive pushes.
+fn push_resets_strikes() {
+    // strikes.py: counters are per head.
     let mut c = Case::new();
     c.memory.strikes.insert(Failure::Merge, 3);
-    c.memory.lost_on.insert(
-        "absent".into(),
-        BTreeMap::from([("main".into(), head(2).into())]),
-    );
-    let lost = BTreeMap::from([(
-        "absent".into(),
-        BTreeMap::from([(
-            "main".into(),
-            LostReview::Legacy {
-                head: head(2),
-                after: Some(5000),
-            },
-        )]),
-    )]);
     c.push(&head(4));
     c.pass(5000);
     assert_eq!(c.memory.seen, 5000);
     assert!(c.memory.strikes.is_empty());
-    assert_eq!(c.memory.lost_on, lost);
-}
-
-#[test]
-fn lost_findings_from_unavailable_reviewer_hold_the_head() {
-    // lost.py: loss at the current head keeps an unavailable reviewer owed.
-    let mut c = Case::new();
-    c.service("reviewer").unavailable_until = Some(9000);
-    c.memory.lost_on.insert(
-        "reviewer".into(),
-        BTreeMap::from([("main".into(), head(3).into())]),
-    );
-    assert_eq!(c.view(4000).stage, Stage::Reviewer);
 }
 
 #[test]
@@ -412,7 +391,7 @@ fn red_ci_handoff_waits_for_session_quiet() {
     let c = Case::new();
     c.ci("failure");
     c.description("https://claude.ai/code/session_test", 3000);
-    c.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 3001);
+    c.hub.flow_review(REMI, 3, Verdict::Clean, 3001);
     assert_eq!(c.view(4000).step, Step::Wait { until: Some(10201) });
     assert_eq!(c.view(10201).step, Step::HandFix(Kind::Red));
 }
@@ -522,7 +501,6 @@ fn stage_strings_match_python() {
     // waiting.py: stages.py's exact keys are the label keys.
     for (stage, value) in [
         (Stage::Review, json!("review")),
-        (Stage::Reviewer, json!("reviewer")),
         (Stage::Fix, json!("fix")),
         (Stage::Ci, json!("ci")),
         (Stage::ProofSlot, json!("proofSlot")),
@@ -659,7 +637,7 @@ fn only_known_bot_history_skips_review() {
             if renovate { Step::Settle } else { Step::Merge }
         );
         c.hub.fail(crate::sim::Call::CompareCommits);
-        assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
+        assert!(matches!(c.view(4000).step, Step::AskReview(_)));
         c.hub.heal(crate::sim::Call::CompareCommits);
         c.hub.commit_details(
             &head(3),
@@ -667,7 +645,7 @@ fn only_known_bot_history_skips_review() {
             Some("owner@example.org"),
             Some(email),
         );
-        assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
+        assert!(matches!(c.view(4000).step, Step::AskReview(_)));
     }
 }
 
@@ -740,30 +718,6 @@ fn other_suites_failure_prevents_landing() {
 }
 
 #[test]
-fn current_verdicts_stand_while_their_reviewer_is_unavailable() {
-    // review finding: current findings/coverage stand during a service outage.
-    let mut c = Case::new();
-    c.review("absent", Verdict::Findings, 1);
-    c.service("absent").unavailable_until = Some(9000);
-    assert_eq!(c.view(4000).step, Step::HandFix(Kind::Findings));
-    c.settings.reviewers.remove("reviewer");
-    assert_eq!(c.view(4000).step, Step::HandFix(Kind::Findings));
-    c.service("absent").under_way = true;
-    assert!(!landing(&c.view(4000).step));
-    c.service("absent").under_way = false;
-    c.review("absent", Verdict::Clean, 2);
-    assert_eq!(c.view(4000).step, Step::Merge);
-    c.push(&head(4));
-    assert_eq!(c.view(4000).stage, Stage::Reviewer);
-    c.review("absent", Verdict::Clean, 3);
-    c.memory.lost_on.insert(
-        "absent".into(),
-        BTreeMap::from([("main".into(), head(4).into())]),
-    );
-    assert_eq!(c.view(4000).stage, Stage::Reviewer);
-}
-
-#[test]
 fn r2_land_is_released_by_the_owner_for_its_revision_only() {
     // Labels never authorize; an authenticated approval covers only its revision.
     for change in 0..3 {
@@ -807,10 +761,4 @@ fn label_without_an_owed_decision_is_not_approval() {
     c.judge("pass");
     c.pass(4001);
     assert!(!c.facts().owner_approved);
-}
-
-fn old_review(c: &Case, sha: &str, base: &str) {
-    let p = crate::api::Source::pull(&c.hub, REMI, 3).unwrap();
-    let mark = json!({"commit_sha":sha,"base":base,"findings":0,"scope":Revision::from(&p).description,"reviewed_at":0});
-    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::STEWARD,"type":"Bot"},"body":format!("<!-- reviewer-review:v2 {mark} -->"),"commit_id":sha,"submitted_at":"1970-01-01T00:00:00Z"}]));
 }

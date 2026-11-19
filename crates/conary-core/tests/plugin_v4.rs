@@ -356,6 +356,7 @@ fn a_judge_request_needs_its_pr_why_and_context() {
         Trigger::Asked,
         Trigger::RoundLimit,
         Trigger::MajorDependency,
+        Trigger::Changed,
         Trigger::Started,
     ];
     plugin.plugin().unwrap().call(judge(every)).unwrap();
@@ -369,6 +370,7 @@ fn a_judge_request_needs_its_pr_why_and_context() {
             "asked",
             "round_limit",
             "major_dependency",
+            "changed",
             "started"
         ])
     );

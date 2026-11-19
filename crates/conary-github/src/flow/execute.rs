@@ -105,28 +105,15 @@ pub(crate) fn act<G: Write>(
             Step::Wait { .. } | Step::Retry { .. } => {}
             Step::Settle => permission(pass, github, f, record)?,
 
-            Step::QueueReview(role) => {
-                let author = author(github, f, record)?;
-                pass.start(
-                    f,
-                    Purpose::Review(role.clone()),
-                    Task::Review {
-                        repo,
-                        pr: f.number,
-                        base: f.base_tip.clone().ok_or("base tip unknown")?,
-                        head: f.revision.head.clone(),
-                        author,
-                    },
-                    Vec::new(),
-                    record,
-                    data,
-                )?;
+            Step::AskReview(why) => {
+                github.comment(&repo, f.number, &super::reviews::ask(why))?;
+                // Asked only once GitHub took the comment.
+                record.memory.asked = Some((f.revision.head.clone(), pass.now));
             }
             Step::HandFix(kind) => {
-                let (problems, handed) =
-                    super::handoff::problems(github, f, &record.memory, *kind)?
-                        .into_iter()
-                        .unzip();
+                let (problems, handed) = super::handoff::problems(github, f, *kind)?
+                    .into_iter()
+                    .unzip();
                 pass.start(
                     f,
                     Purpose::Fix(*kind),
@@ -152,7 +139,8 @@ pub(crate) fn act<G: Write>(
                         head: f.revision.head.clone(),
                         against: format!("{}\n{}", f.title, f.description),
                         author,
-                        reviewers: reviewers(record)?,
+                        // The reviewer posts on GitHub; no job of the flow's answered as it.
+                        reviewers: Vec::new(),
                         why: super::judging::why(record, &f.revision, decided)?,
                         context: f.context(),
                     },
@@ -195,33 +183,6 @@ pub(crate) fn act<G: Write>(
                     data,
                 )?;
             }
-            Step::PostReview(role) => {
-                let at = record
-                    .jobs
-                    .iter()
-                    .rposition(|w| {
-                        matches!(&w.purpose, Purpose::Review(r) if r == role) && !w.posted
-                    })
-                    .ok_or("review answer missing")?;
-                let work = &record.jobs[at];
-                let completion = jobs::completion(work, pass.now)?;
-                let Some(Ok(plugin::Response {
-                    answer: plugin::Answer::Review { findings },
-                    ..
-                })) = completion.result
-                else {
-                    return Err("review answer invalid".into());
-                };
-                if work.job.revision != f.revision {
-                    return Err("review scope moved".into());
-                }
-                let body =
-                    super::write::review_body(role, &work.job.revision, completion.at, &findings);
-                super::publish::review(
-                    github, f, role, record, data, at, pass.now, &body, &findings,
-                )?;
-                record.jobs[at].posted = true;
-            }
             Step::PostFix(id) => {
                 if super::claims::superseded(f, id) {
                     return Err("a later fix superseded this one's answers".into());
@@ -261,7 +222,7 @@ pub(crate) fn act<G: Write>(
                     s.state == "success"
                         && s.creator
                             .as_ref()
-                            .is_some_and(|u| f.settings.review_authors.contains(&u.login))
+                            .is_some_and(|u| f.settings.flow_authors.contains(&u.login))
                 }) {
                     return Err("review-settled permission was not observed".into());
                 }
@@ -324,7 +285,7 @@ pub(crate) fn act<G: Write>(
                     .as_deref_mut()
                     .ok_or("train needs an anchored ledger")?;
                 let config = crate::Config {
-                    reviewers: f.settings.review_authors.iter().cloned().collect(),
+                    reviewers: f.settings.flow_authors.iter().cloned().collect(),
                     own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
                 };
                 super::pause::effect(pass.root, &f.repo, f.number)?;
@@ -397,26 +358,14 @@ fn failure(step: &Step) -> Failure {
         Step::UpdateBranch => Failure::Update,
         Step::Merge | Step::JoinTrain | Step::LeaveTrain => Failure::Merge,
         Step::CloseAlreadyLanded => Failure::Close,
-        Step::PostReview(_) => Failure::Post,
+        Step::AskReview(_) => Failure::Post,
         Step::PostFix(_) => Failure::Answer,
         Step::Prepare | Step::Prove | Step::PostProof => Failure::Build,
-        Step::QueueReview(_) | Step::HandFix(_) | Step::Judge(_) => Failure::Job,
+        Step::HandFix(_) | Step::Judge(_) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,
     }
 }
-fn reviewers(record: &Record) -> Result<Vec<plugin::Identity>> {
-    let mut reviewers = Vec::new();
-    for work in &record.jobs {
-        if matches!(work.purpose, Purpose::Review(_))
-            && let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
-        {
-            reviewers.push(response.by);
-        }
-    }
-    Ok(reviewers)
-}
-
 fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Identity> {
     for work in record.jobs.iter().rev() {
         if let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result

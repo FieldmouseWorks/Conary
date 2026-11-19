@@ -55,11 +55,11 @@ fn gate_edits_and_unread_diffs_need_review() {
     ] {
         let (n, f) = decision(diff, ".github/workflows/ci.yml");
         assert!(f.gate_edited);
-        assert_eq!(n.step, Step::QueueReview("reviewer".into()));
+        assert!(matches!(n.step, Step::AskReview(_)), "{:?}", n.step);
     }
     let (n, f) = decision(Some(PIN), ".github/CODEOWNERS");
     assert!(f.gate_edited);
-    assert_eq!(n.step, Step::QueueReview("reviewer".into()));
+    assert!(matches!(n.step, Step::AskReview(_)), "{:?}", n.step);
 }
 #[test]
 fn an_inserted_or_reordered_uses_line_is_an_edit_not_a_repin() {
@@ -86,10 +86,10 @@ fn several_action_steps_can_be_repinned_but_mode_changes_still_need_review() {
         Step::Merge
     );
     let mode = two.replace("@@ -5,2", "old mode 100644\nnew mode 100755\n@@ -5,2");
-    assert_eq!(
+    assert!(matches!(
         decision(Some(&mode), ".github/workflows/ci.yml").0.step,
-        Step::QueueReview("reviewer".into())
-    );
+        Step::AskReview(_)
+    ));
 }
 #[test]
 fn gate_renames_are_edits_but_a_rename_elsewhere_keeps_the_bots_exemption() {
@@ -115,13 +115,11 @@ fn gate_renames_are_edits_but_a_rename_elsewhere_keeps_the_bots_exemption() {
         c.hub.renamed_path(&c.scope().head, from, to);
         c.hub.flow_diff(TRUNK,&c.scope().head,&format!("diff --git a/{from} b/{to}\nsimilarity index 100%\nrename from {from}\nrename to {to}\n"));
         assert_eq!(c.facts().gate_edited, gated);
-        assert_eq!(
-            c.view(4000).step,
-            if gated {
-                Step::QueueReview("reviewer".into())
-            } else {
-                Step::Merge
-            }
-        );
+        let step = c.view(4000).step;
+        if gated {
+            assert!(matches!(step, Step::AskReview(_)), "{step:?}");
+        } else {
+            assert_eq!(step, Step::Merge);
+        }
     }
 }

@@ -1,5 +1,5 @@
-//! Publishing a review's findings, each on its own target, and a fix's
-//! answers on the targets of the findings it was handed.
+//! Publishing a fix's answers on the targets of the findings it was
+//! handed.
 //!
 //! Every write is saved in the job's record before it's sent
 //! ([`super::jobs::Sent`]), and is sent only while GitHub doesn't show it.
@@ -12,13 +12,13 @@
 //! lagging, and asking again later is the whole fix.
 use super::jobs;
 use super::persist::Result;
-use super::threads::{Targets, hunks, placed};
+use super::threads::Targets;
 use super::*;
 use crate::api::ApiError;
-use conary_core::plugin::{self, Finding};
+use conary_core::plugin;
 
 fn ours(f: &Facts, login: Option<&str>) -> bool {
-    login.is_some_and(|l| f.settings.review_authors.contains(l))
+    login.is_some_and(|l| f.settings.flow_authors.contains(l))
 }
 
 fn lagging(what: &str) -> Box<dyn std::error::Error + Send + Sync> {
@@ -84,113 +84,6 @@ fn write(
         }
         Err(e) => Err(e.into()),
     }
-}
-
-/// Job `at`'s review, `body` on its head, with a line comment for each
-/// finding whose line is in the diff's hunks and a marked PR comment for
-/// every other finding. Which finding gets which is planned once, before the
-/// review is first sent, and kept. Complete only once the review and every
-/// finding's target are read back.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn review<G: Write>(
-    github: &G,
-    f: &Facts,
-    role: &str,
-    record: &mut Record,
-    data: &Data,
-    at: usize,
-    now: u64,
-    body: &str,
-    findings: &[Finding],
-) -> Result<()> {
-    let repo = f.repo.to_string();
-    let head = record.jobs[at].job.revision.head.clone();
-    let issuance = super::threads::issuance(&head, body);
-    let mark = |finding| FindingMark {
-        role: role.into(),
-        head: head.clone(),
-        issuance: issuance.clone(),
-        finding,
-    };
-    // The exact review, by the flow's account, on its head.
-    let posted = || -> Result<bool> {
-        Ok(github.reviews(&repo, f.number)?.iter().any(|r| {
-            r.commit_id.as_deref() == Some(head.as_str())
-                && r.body.as_deref() == Some(body)
-                && ours(f, r.user.as_ref().map(|u| u.login.as_str()))
-        }))
-    };
-    let inline = match record.jobs[at].sent.inline.clone() {
-        Some(inline) if inline.len() == findings.len() => inline,
-        _ => {
-            // A diff GitHub won't give (too large, say) places no line:
-            // every finding then goes to the conversation. One it can't
-            // give just now is asked for again.
-            let hunks = if findings.is_empty() {
-                Default::default()
-            } else {
-                let base = f.base_tip.as_deref().ok_or("base tip unknown")?;
-                match github.diff(&repo, base, &head) {
-                    Ok(diff) => hunks(&diff),
-                    Err(e) if e.unavailable => return Err(e.into()),
-                    Err(_) => Default::default(),
-                }
-            };
-            let inline: Vec<bool> = findings.iter().map(|f| placed(&hunks, f)).collect();
-            record.jobs[at].sent.inline = Some(inline.clone());
-            data.save(f.number, record)?;
-            inline
-        }
-    };
-    // Its line comments come with it.
-    if !posted()? {
-        let comments: Vec<LineComment> = findings
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| inline[*i])
-            .map(|(i, finding)| LineComment {
-                path: finding.path.clone(),
-                line: finding.line,
-                body: finding_body(finding, &mark(i), false),
-            })
-            .collect();
-        write(record, data, f.number, at, "review", now, || {
-            github.review(&repo, f.number, &head, body, &comments)
-        })?;
-    }
-    if !posted()? {
-        return Err(lagging("the review isn't on GitHub yet"));
-    }
-    if findings.is_empty() {
-        return Ok(());
-    }
-    let targets = || -> Result<Targets> {
-        Ok(Targets::read(
-            &github.snapshot(&repo, f.number)?.threads,
-            &github.comments(&repo, f.number)?,
-            &f.settings,
-        ))
-    };
-    let before = targets()?;
-    for (i, finding) in findings.iter().enumerate() {
-        if !inline[i] && before.target(&mark(i)).is_none() {
-            let text = finding_body(finding, &mark(i), true);
-            write(
-                record,
-                data,
-                f.number,
-                at,
-                &format!("finding {i}"),
-                now,
-                || github.comment(&repo, f.number, &text),
-            )?;
-        }
-    }
-    let after = targets()?;
-    if (0..findings.len()).any(|i| after.target(&mark(i)).is_none()) {
-        return Err(lagging("not every finding's target is on GitHub yet"));
-    }
-    Ok(())
 }
 
 /// Job `at`'s fix answers, each on the target of the finding it answers, as

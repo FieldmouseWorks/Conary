@@ -17,7 +17,9 @@ impl flow::jobs::Launch for Deferred {
         path: &Path,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let invocation: flow::jobs::Invocation = serde_json::from_slice(&std::fs::read(path)?)?;
-        if let conary_core::plugin::Task::Review { pr, head, .. } = invocation.task {
+        if let conary_core::plugin::Task::Fix { pr, head, .. }
+        | conary_core::plugin::Task::Judge { pr, head, .. } = invocation.task
+        {
             let record: flow::Record = serde_json::from_slice(&std::fs::read(
                 path.parent().unwrap().join(format!("{pr}.json")),
             )?)?;
@@ -101,6 +103,7 @@ impl Case {
                 checks_complete: true,
                 rebase_removed: vec![],
                 timeline_cut_at: None,
+                since: Default::default(),
             },
         );
         let mut config = flow::Config {
@@ -111,7 +114,6 @@ impl Case {
         config.settings.people.insert("maintainer".into());
         config.settings.settle_delay = 0;
         config.settings.handoff_after = 0;
-        config.plugins.review = Some(example());
         config.plugins.fix = Some(example());
         config.evidence = Some(Evidence {
             signer: testing::SIGNER.into(),
@@ -184,22 +186,6 @@ impl Case {
                     self.hub.push(REPO, 3, head);
                     self.hub.refresh_flow(REPO, 3);
                     self.good_ci(head);
-                }
-                (
-                    conary_core::plugin::Task::Review { .. },
-                    Some(Ok(conary_core::plugin::Response {
-                        answer: conary_core::plugin::Answer::Review { findings },
-                        ..
-                    })),
-                ) => {
-                    let record = self.record();
-                    let work = record.jobs.iter().find(|w| w.path == path).unwrap();
-                    let body = review_body("reviewer", &work.job.revision, answer.at, findings);
-                    self.sign_check(
-                        &work.job.revision.head,
-                        "conary/review/reviewer",
-                        Some(&review_receipt(&work.job.revision.head, &body)),
-                    );
                 }
                 // The producer seals what the judge was asked on, at the
                 // next generation.
@@ -274,15 +260,82 @@ impl Case {
             "APPROVED",
         );
     }
+    /// The connector's clean review of head 3, and its producer's receipt
+    /// over the summary comment that says so.
     pub(super) fn clean_review(&self) {
-        self.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
-        let records = self.hub.reviews(REPO, 3).unwrap();
-        let r = records.last().unwrap();
-        self.sign_check(
-            &head(3),
-            "conary/review/reviewer",
-            Some(&review_receipt(&head(3), r.body.as_deref().unwrap())),
-        );
+        self.connector_clean(&head(3), true);
+    }
+    /// The connector calls the PR's current head, `head`, clean; with
+    /// `attest`, its producer's receipt over that summary comment is signed.
+    pub(super) fn connector_clean(&self, head: &str, attest: bool) {
+        self.hub.flow_review(REPO, 3, Verdict::Clean, 0);
+        if attest {
+            let body = self.connector_summary(3);
+            self.sign_check(
+                head,
+                "conary/review/reviewer",
+                Some(&review_receipt(head, &body)),
+            );
+        }
+    }
+    /// The body of the connector's last summary comment on PR `pr`.
+    pub(super) fn connector_summary(&self, pr: u64) -> String {
+        self.hub
+            .comments(REPO, pr)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|c| {
+                c.user
+                    .as_ref()
+                    .is_some_and(|u| u.login == crate::sim::CONNECTOR)
+            })
+            .and_then(|c| c.body)
+            .expect("the connector's summary comment")
+    }
+    /// Findings the flow published as its own review before the connector
+    /// was the reviewer, still on the PR's current head, found at `at`:
+    /// the first `threads` each a thread the flow's account opened, the
+    /// rest each a marked PR comment. Returns the publication read back.
+    pub(super) fn flow_findings(
+        &self,
+        findings: &[conary_core::plugin::Finding],
+        threads: usize,
+        at: u64,
+    ) -> Publication {
+        let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
+        let body = review_body("reviewer", &revision, at, findings);
+        let mark = |finding| FindingMark {
+            role: "reviewer".into(),
+            head: revision.head.clone(),
+            issuance: issuance(&revision.head, &body),
+            finding,
+        };
+        use crate::sim::STEWARD;
+        self.hub
+            .person_review(REPO, 3, STEWARD, "Bot", &revision.head, &body, "COMMENTED");
+        let id = self.hub.reviews(REPO, 3).unwrap().len();
+        for (i, f) in findings[..threads].iter().enumerate() {
+            let thread = format!("PRRT_{id}_{i}");
+            self.hub.flow_thread_comments(
+                REPO,
+                3,
+                &thread,
+                &[(STEWARD, &finding_body(f, &mark(i), false))],
+            );
+            self.hub.flow_thread(REPO, 3, &thread, false);
+        }
+        for (i, f) in findings.iter().enumerate().skip(threads) {
+            self.hub
+                .flow_comment(REPO, 3, STEWARD, &finding_body(f, &mark(i), true));
+        }
+        self.hub
+            .reviews(REPO, 3)
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|r| Publication::read(r, "reviewer", &self.config.settings))
+            .unwrap()
     }
     pub(super) fn sign_check(&self, head: &str, name: &str, receipt: Option<&[u8]>) -> u64 {
         let id = self.hub.run_id();

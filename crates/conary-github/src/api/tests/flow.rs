@@ -13,7 +13,9 @@ fn answer(v: Value) -> &'static str {
 fn snapshot() -> Value {
     json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base-tip","statusCheckRollup":{"state":"FAILURE"}}},"pullRequest":{
         "headRefOid":"h","baseRefName":"main","title":"t","body":"b","isDraft":false,"mergeStateStatus":"BEHIND","updatedAt":"2026-11-08T12:00:00Z",
+        "lastEditedAt":"2026-11-08T11:00:00Z",
         "timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},
+        "retargets":{"nodes":[{"createdAt":"2026-11-08T11:30:00Z"}]},
         "labels":{"pageInfo":{"hasNextPage":false}},
         "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[
             {"id":"open","isResolved":false,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[
@@ -22,8 +24,11 @@ fn snapshot() -> Value {
             {"id":"resolved","isResolved":true,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]},
         "reviews":{"totalCount":2},"comments":{"totalCount":3},
         "commits":{"nodes":[{"commit":{"oid":"h","checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{
-            "databaseId":11,"status":"IN_PROGRESS","conclusion":null,"app":{"slug":"github-actions"},
+            "databaseId":11,"createdAt":"2026-11-08T10:05:00Z","status":"IN_PROGRESS","conclusion":null,"app":{"slug":"github-actions"},
             "workflowRun":{"file":{"path":".github/workflows/flake.yml"},"workflow":{"id":"w","name":"flake"}}
+        },{
+            "databaseId":12,"createdAt":"2026-11-08T10:00:00Z","status":"QUEUED","conclusion":null,"app":{"slug":"other-ci"},
+            "workflowRun":null
         }]}}}]}
     }}}})
 }
@@ -58,6 +63,17 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     assert!(s.complete && s.checks_complete);
     assert_eq!(s.suites[&11].status, "in_progress");
     assert_eq!(s.suites[&11].workflow.as_ref().unwrap().id, "w");
+    // When the PR last changed without a push, and its push: the earliest
+    // check suite on its head, as the reviewer's word is read against them.
+    let at = |t: &str| t.parse::<jiff::Timestamp>().unwrap().as_second() as u64;
+    assert_eq!(
+        s.since,
+        crate::flow::Since {
+            edited: Some(at("2026-11-08T11:00:00Z")),
+            retargeted: Some(at("2026-11-08T11:30:00Z")),
+            pushed: Some(at("2026-11-08T10:00:00Z")),
+        }
+    );
     let request = requests.recv().unwrap();
     assert!(request.starts_with("post /graphql "));
     let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
@@ -204,36 +220,22 @@ fn timeout_annotation_reader_reads_past_the_first_page() {
     assert!(requests.recv().unwrap().contains("page=1"));
     assert!(requests.recv().unwrap().contains("page=2"));
 }
-/// A finding's targets and answers go out as GitHub's own requests: the
-/// review with its line comments in one request, a PR comment, and a
-/// thread's reply and resolution as GraphQL mutations, whose errors refuse.
+/// A finding's answers and an ask go out as GitHub's own requests: a PR
+/// comment, and a thread's reply and resolution as GraphQL mutations, whose
+/// errors refuse.
 #[test]
-fn publishes_findings_and_answers_in_githubs_own_requests() {
-    use crate::flow::{LineComment, Write};
+fn publishes_answers_and_comments_in_githubs_own_requests() {
+    use crate::flow::Write;
     let body = |request: &str| -> Value {
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
     };
     let (base, requests) = github(vec![
-        answer(json!({"id":1})),
         answer(json!({"id":2})),
         answer(json!({"data":{}})),
         answer(json!({"data":{}})),
         answer(json!({"errors":[{"message":"not a thread"}]})),
     ]);
     let api = Api::new(&base, Tokens::given("t"));
-    let comments = [LineComment {
-        path: "src/lib.rs".into(),
-        line: 2,
-        body: "a finding".into(),
-    }];
-    api.review("o/r", 7, "h", "the review", &comments).unwrap();
-    let request = requests.recv().unwrap();
-    assert!(request.starts_with("post /repos/o/r/pulls/7/reviews "));
-    assert_eq!(
-        body(&request),
-        json!({"commit_id":"h","body":"the review","event":"COMMENT",
-            "comments":[{"path":"src/lib.rs","line":2,"side":"RIGHT","body":"a finding"}]})
-    );
     api.comment("o/r", 7, "elsewhere").unwrap();
     let request = requests.recv().unwrap();
     assert!(request.starts_with("post /repos/o/r/issues/7/comments "));
