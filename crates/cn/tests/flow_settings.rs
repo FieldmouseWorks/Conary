@@ -70,3 +70,42 @@ fn the_gate_reuse_configuration_lists_its_options_and_listen_apart() {
     assert_eq!(api["value"], "https://api.github.com");
     assert_eq!(api["from"], "default");
 }
+
+/// A `signer` or `repos` that doesn't parse is refused, not listed, and the
+/// refusal doesn't quote it: a token command's credential written there
+/// stays out of what `cn` prints.
+#[test]
+fn the_gate_reuse_listing_refuses_a_value_that_doesnt_parse_without_quoting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate-reuse.json");
+    let good = serde_json::json!({
+        "listen": "127.0.0.1:8091",
+        "repos": ["example/project"],
+        "token_command": "conary-token",
+        "signer": "example/ci/.github/workflows/gate.yml",
+    });
+    for (name, value) in [
+        ("signer", serde_json::json!("env KEY=hunter2 conary-token")),
+        ("repos", serde_json::json!(["env KEY=hunter2 conary-token"])),
+    ] {
+        let mut bad = good.clone();
+        bad[name] = value;
+        std::fs::write(&path, bad.to_string()).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_cn"))
+            .args(["flow", "settings", "--gate-reuse-config"])
+            .arg(&path)
+            .env_remove("CONARY_FLOW_CONFIG")
+            .env_remove("CONARY_EVENTS_CONFIG")
+            .output()
+            .unwrap();
+        let (out, err) = (
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(!output.status.success(), "{name}: listed\n{out}");
+        assert!(
+            !out.contains("hunter2") && !err.contains("hunter2"),
+            "{name}: {out}{err}"
+        );
+    }
+}

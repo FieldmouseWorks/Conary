@@ -371,6 +371,61 @@ fn no_reader_quotes_a_value_of_a_file_it_refuses() {
     );
 }
 
+/// The gate-reuse configuration's `signer` and `repos` name a workflow and
+/// repositories, and a value that doesn't parse as one is refused by the one
+/// loader, without the value: a token command's credential written there,
+/// in an otherwise good file, reaches no error, and no listing prints it, as
+/// conaryd starts, as it reads the file again, or as `cn flow settings`
+/// lists it.
+#[test]
+fn a_gate_reuse_option_that_doesnt_parse_is_refused_without_its_value() {
+    let secret = "env KEY=hunter2 conary-token";
+    let good = json!({
+        "listen": "127.0.0.1:8091",
+        "repos": ["o/r"],
+        "token_command": "conary-token",
+        "signer": "o/ci/.github/workflows/gate.yml",
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate-reuse.json");
+    std::fs::write(&path, good.to_string()).unwrap();
+    let live = schema::Live::<reuse::Settings>::open(&path).unwrap();
+    let mut bads = Vec::new();
+    for (name, value) in [
+        ("signer", json!(secret)),
+        ("signer", json!("o/ci/hunter2.yml")),
+        ("repos", json!([secret])),
+        ("repos", json!(["o/r", "hunter2"])),
+    ] {
+        let mut bad = good.clone();
+        bad[name] = value;
+        bads.push(bad);
+    }
+    for bad in bads {
+        let bytes = bad.to_string().into_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        let errors = [
+            schema::load::<reuse::Settings>(&bytes)
+                .err()
+                .map(|e| e.to_string()),
+            schema::effective::<reuse::Settings>(&bytes)
+                .err()
+                .map(|e| e.to_string()),
+            schema::Live::<reuse::Settings>::open(&path)
+                .err()
+                .map(|e| e.to_string()),
+            live.read().err().map(|e| e.to_string()),
+            reuse::Lookup::open(&path).err(),
+        ];
+        for error in errors {
+            let error = error.unwrap_or_else(|| panic!("{bad}: refused"));
+            assert!(!error.contains("hunter2"), "{bad}: {error}");
+        }
+    }
+    std::fs::write(&path, good.to_string()).unwrap();
+    assert!(live.read().is_ok());
+}
+
 #[test]
 fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     let dir = tempfile::tempdir().unwrap();

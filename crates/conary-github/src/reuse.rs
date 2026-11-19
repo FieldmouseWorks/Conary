@@ -525,8 +525,9 @@ pub struct Settings {
     pub listen: std::net::SocketAddr,
     /// The repositories it answers for, as `OWNER/REPO`. Any other is
     /// refused.
-    #[schemars(extend("x-spender" = false))]
-    pub repos: Vec<String>,
+    #[serde(with = "named::each")]
+    #[schemars(with = "Vec<String>", extend("x-spender" = false))]
+    pub repos: Vec<Repo>,
     /// The program that prints a repository's GitHub token, as `cn`'s, run
     /// without a shell. Its arguments may carry a credential, so its value is
     /// never printed.
@@ -534,8 +535,9 @@ pub struct Settings {
     pub token_command: String,
     /// The signer workflow whose attestations count, as the train's,
     /// `OWNER/REPO/.github/workflows/FILE`.
-    #[schemars(extend("x-spender" = false))]
-    pub signer: String,
+    #[serde(with = "named")]
+    #[schemars(with = "String", extend("x-spender" = false))]
+    pub signer: Signer,
     /// What the names of self-hosted runners started fresh for one job start
     /// with, as the train's; `null` counts GitHub's hosted runners alone.
     #[serde(default)]
@@ -559,23 +561,58 @@ fn server() -> String {
     "https://github.com".into()
 }
 
+/// `signer` and `repos` as the file writes them, as strings, read into what
+/// they name, so the file's one loader refuses one that doesn't parse. The
+/// refusal never quotes it: a value there may be a credential written in
+/// the wrong place, and the types' own errors quote what they're given.
+mod named {
+    use serde::de::{Deserializer, Error};
+    use serde::{Deserialize, Serializer};
+    use std::fmt::Display;
+    use std::str::FromStr;
+
+    pub fn serialize<T: Display, S: Serializer>(value: &T, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(value)
+    }
+    pub fn deserialize<'de, T: FromStr, D: Deserializer<'de>>(d: D) -> Result<T, D::Error> {
+        parse(&String::deserialize(d)?)
+    }
+    fn parse<T: FromStr, E: Error>(text: &str) -> Result<T, E> {
+        text.parse()
+            .map_err(|_| E::custom("a value doesn't parse as what its option names"))
+    }
+
+    /// A list of them.
+    pub mod each {
+        use super::*;
+
+        pub fn serialize<T: Display, S: Serializer>(values: &[T], s: S) -> Result<S::Ok, S::Error> {
+            s.collect_seq(values.iter().map(ToString::to_string))
+        }
+        pub fn deserialize<'de, T: FromStr, D: Deserializer<'de>>(
+            d: D,
+        ) -> Result<Vec<T>, D::Error> {
+            Vec::<String>::deserialize(d)?
+                .iter()
+                .map(|text| parse(text))
+                .collect()
+        }
+    }
+}
+
 impl Settings {
     /// The lookup's configuration. Services' producers aren't trusted for
     /// a gate's tree: only CI's own attestation says it.
-    pub fn config(&self) -> Result<Config, String> {
-        Ok(Config {
-            repos: self
-                .repos
-                .iter()
-                .map(|r| r.parse().map_err(|_| format!("{r:?} isn't owner/name")))
-                .collect::<Result<_, _>>()?,
+    pub fn config(&self) -> Config {
+        Config {
+            repos: self.repos.clone(),
             trust: Trust {
-                signer: self.signer.parse()?,
+                signer: self.signer.clone(),
                 fresh: self.fresh.clone(),
                 producers: attest::service::Producers::default(),
             },
             server: self.server.clone(),
-        })
+        }
     }
 }
 
@@ -640,7 +677,7 @@ impl Lookup {
     /// `settings`' configuration, and the API to read GitHub through: the
     /// last one, unless its root or token command changed.
     fn configured(&self, settings: Settings) -> Result<(Config, Arc<Api>), String> {
-        let config = settings.config()?;
+        let config = settings.config();
         let mut kept = self.api.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((root, command, api)) = &*kept
             && *root == settings.api

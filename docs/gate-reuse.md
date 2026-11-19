@@ -117,8 +117,9 @@ are refused:
 conaryd reads the file again at each lookup, so a change to any option but
 `listen` takes effect at the next one. `listen` keeps the address conaryd
 bound as it started: a change to it is logged once, by its name, as
-waiting for a restart. While the file doesn't read, every lookup is
-refused with 503, its reason in conaryd's log, and the gate runs. The
+waiting for a restart. While the file doesn't read (a `signer` or a
+repository that doesn't parse included), every lookup is refused with 503,
+its reason in conaryd's log, never its values, and the gate runs. The
 [settings schema](flow.md#the-settings-schema) declares each option
 (`gate_reuse`), and `cn flow settings --gate-reuse-config PATH` lists a
 file's.
