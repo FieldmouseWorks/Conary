@@ -115,7 +115,7 @@ pub enum TrainError {
     /// That candidate isn't this repo's.
     NotHere(CandidateId),
     /// That PR's landing has started and no step has settled it: its merge
-    /// may be on trunk already, unseen.
+    /// may be on trunk already, not yet shown.
     Landing(u64),
     /// The trunk branch isn't there.
     NoTrunk(String),
@@ -329,7 +329,7 @@ pub enum Leaving {
 
 /// Takes a PR out of its repo's train, its head's train status pending
 /// first. Not while a landing is open, its head saying it's landing with
-/// the candidate it's next in, its merge maybe on trunk unseen: then every
+/// the candidate it's next in, its merge maybe on trunk, not yet shown: then every
 /// change the candidate in flight has left to land stays, since leaving
 /// would stop the candidate, and of one that stopped while landing, the
 /// change it was landing. Only a step settles that.

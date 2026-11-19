@@ -141,7 +141,6 @@ A v4 judge request says why the flow asks, and what the judgment is on:
   | --- | --- |
   | `r2` | the change is classed R2 |
   | `author_engine` | the head's history names an engine `settings.judge_engines` lists, or can't be read in full |
-  | `hidden_files` | the change touches files the policy hides from review |
   | `no_ci` | no CI reported on the head |
   | `asked` | someone asked for a judge |
   | `round_limit` | the review loop reached its round limit with findings open |

@@ -61,8 +61,6 @@ pub enum Trigger {
     /// The head's history names an engine the settings send to a judge, or
     /// can't be read in full.
     AuthorEngine,
-    /// The change touches files the policy hides from review.
-    HiddenFiles,
     /// No CI reported on the head.
     NoCi,
     /// Someone asked for a judge.

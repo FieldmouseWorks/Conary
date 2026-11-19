@@ -64,13 +64,12 @@ fn owner_label_holds_before_red_pending_ci_or_threads() {
 }
 #[test]
 fn documentation_policy_waives_only_the_review_round_not_findings_or_ci() {
-    // handle.py:526 / 533 / 571: docs-only can land, mixed/hidden/policy code must be reviewed.
+    // handle.py:526 / 533 / 571: docs-only can land, mixed/policy code must be reviewed.
     for (paths, review) in [
         (&["docs/a.md", "README.md"][..], false),
         (&["docs/a.md", "src/a.rs"][..], true),
         (&["docs/AGENTS.md"][..], true),
         (&["docs/DESIGN.md"][..], true),
-        (&["hidden/a.md"][..], true),
     ] {
         let mut c = Case::new();
         c.roles(&["reviewer"]);

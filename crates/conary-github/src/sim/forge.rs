@@ -188,7 +188,7 @@ impl Source for Hub {
                     .map(|t| json!({
                         "filename": t.path,
                         "previous_filename": t.from,
-                        "status": if t.from.is_some() {"renamed"} else if t.new { "added" } else { "modified" },
+                        "status": if t.from.is_some() {"renamed"} else { "modified" },
                     }))
                     .collect::<Vec<_>>()
             );

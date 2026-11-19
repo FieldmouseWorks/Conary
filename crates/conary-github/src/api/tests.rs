@@ -579,27 +579,22 @@ fn a_comparisons_files_are_read_with_where_renames_started_and_which_paths_are_n
             Touched {
                 path: "src/a.rs".into(),
                 from: None,
-                new: false,
             },
             Touched {
                 path: "CODEOWNERS.bak".into(),
                 from: Some("CODEOWNERS".into()),
-                new: true,
             },
             Touched {
                 path: "docs/new.md".into(),
                 from: None,
-                new: true,
             },
             Touched {
                 path: "docs/copy.md".into(),
                 from: Some("docs/a.md".into()),
-                new: true,
             },
             Touched {
                 path: "docs/gone.md".into(),
                 from: None,
-                new: false,
             }
         ]
     );

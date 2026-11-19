@@ -333,12 +333,7 @@ per-repo settings, moved into Conary (M5), and grows rules only when a real
 change needs one. It's a JSON file the machine gives Conary (`CONARY_POLICY`,
 `Policy` in [`policy.rs`](../crates/conary-core/src/policy.rs)): path
 regexes that make a change R2, that name its docs and that are never docs,
-what reviewers are never shown (`hidden`, never docs either, matched the way
-their snapshot hides a path: the path, its name without a final newline, or
-a directory holding it, with a trailing slash; where anything is hidden, a
-path new to the tree, added, renamed or copied, isn't docs, since the
-snapshot may pair it with a hidden source the comparison doesn't name), and whether landing goes
-live, for the machine and per repo. A repo's lists only add to the
+and whether landing goes live, for the machine and per repo. A repo's lists only add to the
 machine's, so no repo takes a path off R2. A change whose
 paths can't all be read (GitHub lists 300 files of a comparison and says
 nothing of the rest) is R2.
@@ -540,8 +535,8 @@ so the wait is one run, however many are waiting.
   green candidate is dropped, ahead of the ledger each time, and once it has
   landed, before the next head is marked or another candidate built, so a PR
   opened again at a landed head lands only through the train. While a landing
-  is open (its head says so, and its merge may be on trunk unseen), nothing
-  leaves the candidate and nothing drops it: a step settles that first. That
+  is open (its head says so, and its merge may be on trunk, not yet
+  shown), nothing leaves the candidate and nothing drops it: a step settles that first. That
   holds for a candidate stopped mid-landing too (a change of it left, closed
   or has a new head): before another is built, a merge GitHub shows is
   recorded through it, one it doesn't show yet is waited for, and only a merge

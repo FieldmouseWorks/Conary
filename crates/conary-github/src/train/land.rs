@@ -22,7 +22,7 @@ pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joi
 /// Lands a green candidate's next change, through its PR's merge at the head
 /// the candidate holds. The PR is read first, so a merge made since the last
 /// step is recorded rather than tried again, and so is one GitHub took but
-/// doesn't show yet ([`merge_unseen`]): the step waits for it. A candidate
+/// doesn't show yet ([`merge_unshown`]): the step waits for it. A candidate
 /// alone lands only while trunk is still its base: once trunk has moved
 /// it's dropped, to be built again on trunk as it is. A PR that targets
 /// another branch than trunk now is refused, since its merge would land
@@ -68,7 +68,7 @@ pub(super) fn land_next(
     let at = forge
         .branch(&full, trunk)?
         .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-    if merge_unseen(source, &full, pr, head.as_str(), c, &at)? {
+    if merge_unshown(source, &full, pr, head.as_str(), c, &at)? {
         return Ok(Some(landing(store, c)));
     }
     let drop = if c.green_unattested() {
@@ -229,7 +229,7 @@ fn landing_candidate(store: &Store, repo: &Repo) -> Option<Candidate> {
 /// The candidate the repo's train is landing ([`landing_candidate`]), and
 /// the PR whose landing it has started and no step has settled: that PR's
 /// head says it's landing with the candidate. Its merge may be on trunk,
-/// unseen, so nothing but a step may take it out meanwhile, nor stop a
+/// not yet shown, so nothing but a step may take it out meanwhile, nor stop a
 /// candidate in flight.
 pub(super) fn open_landing(
     store: &Store,
@@ -284,7 +284,7 @@ pub(super) fn stopped_landing(
                 let at = forge
                     .branch(&full, trunk)?
                     .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-                if pull.is_merged() || merge_unseen(source, &full, pr, head.as_str(), &c, &at)? {
+                if pull.is_merged() || merge_unshown(source, &full, pr, head.as_str(), &c, &at)? {
                     return Ok(Some(Now::Landing {
                         candidate: c.id,
                         landings: vec![Landing {
@@ -376,7 +376,7 @@ pub(super) fn landing_marked(
 
 /// How far back trunk is read for a merge GitHub hasn't shown: past any
 /// candidate's own landings and the few that land outside it meanwhile.
-const UNSEEN: usize = 50;
+const UNSHOWN: usize = 50;
 
 /// Whether the PR's merge is on trunk already though GitHub doesn't show
 /// the PR merged yet: a step took its merge and stopped, or GitHub's answer
@@ -384,7 +384,7 @@ const UNSEEN: usize = 50;
 /// it's landing with this candidate can have been merged by it, and then
 /// trunk, read back by first parents to the candidate's base, holds a
 /// commit GitHub links to the PR.
-pub(super) fn merge_unseen(
+pub(super) fn merge_unshown(
     source: &dyn Source,
     full: &str,
     pr: u64,
@@ -396,7 +396,7 @@ pub(super) fn merge_unseen(
         return Ok(false);
     }
     let mut sha = at.to_owned();
-    for _ in 0..UNSEEN {
+    for _ in 0..UNSHOWN {
         if sha == c.base.as_str() {
             return Ok(false);
         }

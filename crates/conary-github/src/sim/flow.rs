@@ -322,7 +322,6 @@ impl Hub {
             vec![conary_core::policy::Touched {
                 path: to.into(),
                 from: Some(from.into()),
-                new: true,
             }],
         );
     }

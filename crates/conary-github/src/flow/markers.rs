@@ -115,7 +115,11 @@ impl SealKey {
                 revision: revision.clone(),
                 verdict: verdict.word().into(),
                 provenance: Some(provenance),
-                why: Some(basis.why),
+                why: Some(
+                    serde_json::to_value(&basis.why)
+                        .and_then(serde_json::from_value)
+                        .expect("triggers are words"),
+                ),
                 context: Some(basis.context),
             },
         ))
@@ -183,9 +187,12 @@ struct Issued {
     verdict: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provenance: Option<conary_core::plugin::Provenance>,
-    /// v3 only.
+    /// v3 only. Words as sealed, not triggers: a word this Conary no
+    /// longer knows (a retired trigger's) must still authenticate, so its
+    /// issuance supersedes older ones as a tombstone ([`Issued::basis`])
+    /// instead of being skipped unread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    why: Option<Vec<super::Trigger>>,
+    why: Option<Vec<String>>,
     /// v3 only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<String>,
@@ -198,7 +205,11 @@ impl Issued {
             (Version::V2, None, None) => Ok(None),
             (Version::V3, Some(why), Some(context)) if self.provenance.is_some() => {
                 let basis = Basis {
-                    why: why.clone(),
+                    why: why
+                        .iter()
+                        .map(|w| serde_json::from_value(serde_json::Value::String(w.clone())))
+                        .collect::<Result<_, _>>()
+                        .map_err(|_| ())?,
                     context: context.clone(),
                 };
                 if basis.valid() {
