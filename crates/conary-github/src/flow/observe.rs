@@ -35,12 +35,16 @@ fn hydrate_with(
             // An answer that doesn't read is taken as still running, as
             // occupancy takes it: the pass has recorded it as degraded
             // ([`super::degraded`]), and the PR's decision waits on it.
+            // Any other failure is the pass's.
             let read = if dry_run {
                 jobs::inspect(work, now)
             } else {
                 jobs::completion(work, now)
             };
-            read.unwrap_or_default()
+            match read {
+                Err(e) if e.is::<jobs::Unreadable>() => Completion::default(),
+                read => read?,
+            }
         };
         let mut job = work.job.clone();
         // Stopped work, obsolete, paused or held, is neither an answer nor

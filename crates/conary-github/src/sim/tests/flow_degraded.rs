@@ -18,10 +18,22 @@ fn ops(c: &Case, op: &str) -> Vec<Value> {
         .filter(|v| v.pointer("/op/body/op").or(v.pointer("/body/op")) == Some(&json!(op)))
         .collect()
 }
+/// The PR's decision, as JSON. A degraded read is the PR's error too, so
+/// the pass is booked again to read it again; anything else is none.
 fn decided(reports: &[Report], pr: u64) -> Value {
     let report = reports.iter().find(|r| r.pr == pr).unwrap();
-    assert_eq!(report.error, None, "#{pr}");
-    serde_json::to_value(report.next.as_ref().unwrap()).unwrap()
+    let next = serde_json::to_value(report.next.as_ref().unwrap()).unwrap();
+    let read = next["degraded"]
+        .as_array()
+        .is_some_and(|d| d.iter().any(|d| d["path"] != "lookup"));
+    match &report.error {
+        Some(error) => assert!(
+            read && Some(error.as_str()) == next["description"].as_str(),
+            "#{pr}: {error}"
+        ),
+        None => assert!(!read, "#{pr}: {next}"),
+    }
+    next
 }
 fn record_path(c: &Case, pr: u64) -> std::path::PathBuf {
     c.dir
@@ -60,7 +72,10 @@ fn an_unreadable_record_is_recorded_once_counts_failed_and_is_named() {
         let five = decided(&reports, 5);
         assert_eq!(five["stage"], "proofSlot", "{five}");
         assert!(
-            five["description"].as_str().unwrap().contains("#3's work"),
+            five["description"]
+                .as_str()
+                .unwrap()
+                .contains("#3's record didn't read, so every slot is held"),
             "{five}"
         );
         // Recorded once while it lasts, never written over.

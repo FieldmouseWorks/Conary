@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 pub(crate) struct Occupancy {
     records: BTreeMap<u64, Record>,
-    unknown: std::collections::BTreeSet<u64>,
+    /// PRs whose work can't be told this pass, and why.
+    unknown: BTreeMap<u64, &'static str>,
     virtual_live: Vec<ProofHolder>,
     queued: std::collections::BTreeSet<u64>,
     /// Each open PR's unreadable record, or its workers' unreadable answers.
@@ -23,7 +24,7 @@ impl Occupancy {
         now: u64,
     ) -> Self {
         let mut records = BTreeMap::new();
-        let mut unknown = std::collections::BTreeSet::new();
+        let mut unknown = BTreeMap::new();
         let mut found = BTreeMap::new();
         for pull in pulls {
             let mut seen = Vec::new();
@@ -43,7 +44,7 @@ impl Occupancy {
                     records.insert(pull.number, record);
                 }
                 Err(e) => {
-                    unknown.insert(pull.number);
+                    unknown.insert(pull.number, "record didn't read");
                     seen.push(Degradation {
                         what: Degraded::Record,
                         why: degraded::why(&*e),
@@ -119,16 +120,21 @@ impl Occupancy {
                 }
                 Ok(false) => {}
                 Err(_) => {
-                    self.unknown.insert(*number);
+                    // Not a degraded path of its own: what failed is
+                    // GitHub's read or the pause's, which the PR's own
+                    // decision meets.
+                    self.unknown
+                        .entry(*number)
+                        .or_insert("state couldn't be read this pass");
                 }
             }
         }
     }
     pub(crate) fn apply(&self, f: &mut Facts, now: u64) -> Result<()> {
         f.proof_data.live.extend(self.virtual_live.clone());
-        let mut uncertain = self.unknown.first().copied();
+        let mut uncertain = self.unknown.first_key_value().map(|(n, why)| (*n, *why));
         for (number, record) in &self.records {
-            if self.unknown.contains(number) {
+            if self.unknown.contains_key(number) {
                 continue;
             }
             let mut holding = self.virtual_live.iter().any(|h| h.number == *number);
@@ -140,7 +146,7 @@ impl Occupancy {
                 match jobs::inspect(work, now) {
                     Err(_) => {
                         f.proof_data.live.truncate(start);
-                        uncertain.get_or_insert(*number);
+                        uncertain.get_or_insert((*number, "work didn't read"));
                         holding = true;
                         break;
                     }
@@ -158,9 +164,9 @@ impl Occupancy {
                 f.proof_data.waiting.push(ProofWaiting { number: *number });
             }
         }
-        if let Some(number) = uncertain {
+        if let Some(by) = uncertain {
             f.proof_data.reserved = f.settings.proof_slots.unwrap_or(0);
-            f.proof_data.reserved_by = Some(number);
+            f.proof_data.reserved_by = Some(by);
         }
         Ok(())
     }

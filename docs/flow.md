@@ -578,7 +578,8 @@ it uses only that Store's ledger observations.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice`, `priority` and, when
-any stop it, `switches` ([Switches](#switches)), and
+any stop it, `switches` ([Switches](#switches)), when any path half-worked,
+`degraded` ([Degraded paths](#degraded-paths)), and
 `revision` (`head`, `base`, `description`), the revision it was decided on;
 `error` reports a per-PR failure. Null deadlines remain explicit. These
 lines are suitable for comparing with the existing steward beside it,
@@ -590,7 +591,7 @@ each PR now: the stage its `waiting: …` label names, and its newest
 `review-settled` status on the head, counted only from
 `settings.review_authors` (from anyone when that's empty). It prints one
 JSON line per PR with `repo`, `pr`, `head`, `agree`, `flow` (`stage`,
-`step`, `description`, `switches`), `steward` (`stages`, `state`,
+`step`, `description`, `switches`, `degraded`), `steward` (`stages`, `state`,
 `description`) and
 `error`: disagreements first, then errors, then agreements, each by PR
 number. A last line tallies the repository: `prs`, `agree`, `disagree`,

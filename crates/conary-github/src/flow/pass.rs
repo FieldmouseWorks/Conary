@@ -172,7 +172,9 @@ impl Pass<'_> {
             && let Some(store) = store.as_deref_mut()
         {
             for pull in pulls.iter().filter(|p| only.is_some_and(|n| n != p.number)) {
-                occupancy.record(store, repo, pull.number)?;
+                if let Err(e) = occupancy.record(store, repo, pull.number) {
+                    recovery.push((pull.number, format!("recording what degraded: {e}")));
+                }
             }
         }
         let mut reports = Vec::new();
@@ -193,19 +195,24 @@ impl Pass<'_> {
                 if !occupancy.readable(pr) {
                     // Its record didn't read: nothing in it counts, and
                     // nothing is written over it.
-                    if !self.dry_run
-                        && let Some(store) = store.as_deref_mut()
-                    {
-                        occupancy.record(store, repo, pr)?;
-                    }
-                    report.revision = Some(Revision::from(&pull));
-                    report.next = Some(super::degraded::waiting(
+                    let recorded = match store.as_deref_mut() {
+                        Some(store) if !self.dry_run => occupancy.record(store, repo, pr),
+                        _ => Ok(()),
+                    };
+                    let next = super::degraded::waiting(
                         occupancy.degraded(pr),
                         super::Rank::of(&self.config.settings, &pull).level,
                         store.as_deref().map(Store::ledger).or(self.ledger),
                         repo,
                         pr,
-                    ));
+                    );
+                    report.revision = Some(Revision::from(&pull));
+                    // An error books the pass again, to read it again.
+                    report.error = Some(match recorded {
+                        Ok(()) => next.description.clone(),
+                        Err(e) => format!("{}; recording it failed: {e}", next.description),
+                    });
+                    report.next = Some(next);
                     return Ok(());
                 }
                 let mut record = match &data {
@@ -250,7 +257,9 @@ impl Pass<'_> {
                     && let Some(store) = store.as_deref_mut()
                 {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
-                    occupancy.record(store, repo, pr)?;
+                    if let Err(e) = occupancy.record(store, repo, pr) {
+                        report.error = Some(format!("recording what degraded: {e}"));
+                    }
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
                 // Read afresh before each PR's decision: a pause written
@@ -317,16 +326,12 @@ impl Pass<'_> {
                     next.stage = Stage::Proof;
                     next.description = why.to_string().chars().take(140).collect();
                 }
+                let again = |what: &super::Degraded| matches!(what, super::Degraded::Lookup { check } if looked.contains(check));
                 if !self.dry_run
                     && let Some(store) = store.as_deref_mut()
+                    && let Err(e) = super::degraded::record(store, repo, pr, &lookups, again)
                 {
-                    super::degraded::record(
-                        store,
-                        repo,
-                        pr,
-                        &lookups,
-                        |what| matches!(what, super::Degraded::Lookup { check } if looked.contains(check)),
-                    )?;
+                    report.error = Some(format!("recording what degraded: {e}"));
                 }
                 super::degraded::name(
                     &mut next,
@@ -337,6 +342,11 @@ impl Pass<'_> {
                     repo,
                     pr,
                 );
+                // A record or answer that didn't read books the pass again,
+                // to read it again.
+                if !occupancy.degraded(pr).is_empty() && report.error.is_none() {
+                    report.error = Some(next.description.clone());
+                }
                 if let Step::HandFix(kind) = next.step
                     && let Err(why) = super::handoff::problems(github, &facts, &record.memory, kind)
                 {

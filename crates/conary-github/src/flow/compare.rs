@@ -35,6 +35,11 @@ pub struct Decided {
     /// a disagreement with one is a switch the steward doesn't have, not a
     /// different reading of the PR.
     pub switches: Vec<super::Holding>,
+    /// The degraded paths its decision names ([`super::degraded`]): a
+    /// disagreement with one is a read that failed, not a different
+    /// reading of the PR. Left out when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<super::Degradation>,
 }
 
 /// What the steward says of the PR on GitHub.
@@ -79,6 +84,7 @@ pub fn beside<G: Source>(
                 step: next.step,
                 description: next.description,
                 switches: next.switches,
+                degraded: next.degraded,
             });
             let read = said(github, &report.repo.to_string(), report.pr, authors).and_then(
                 |(revision, said)| match &report.revision {

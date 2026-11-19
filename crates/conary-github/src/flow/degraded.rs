@@ -29,6 +29,10 @@ impl std::fmt::Display for Degradation {
 /// What failed, from the error's kind alone: never the text a file, a
 /// plugin or GitHub put in it, since the ledger keeps it for good.
 pub(crate) fn why(error: &(dyn std::error::Error + 'static)) -> String {
+    let error = match error.downcast_ref::<super::jobs::Unreadable>() {
+        Some(e) => &*e.0,
+        None => error,
+    };
     let why = if let Some(e) = error.downcast_ref::<serde_json::Error>() {
         format!(
             "it isn't what it should hold: {:?} error at line {}, column {}",
@@ -177,7 +181,6 @@ pub(crate) fn name(
         && !matches!(next.step, super::Step::StopJob(_))
     {
         next.step = super::Step::Wait { until: None };
-        next.wait_until = None;
         next.proof = None;
         next.description = match read.len() {
             1 => format!("Degraded: {first}"),

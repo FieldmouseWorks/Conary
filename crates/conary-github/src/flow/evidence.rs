@@ -207,13 +207,24 @@ pub(crate) fn authorize<G: Write>(
         check(github, f, &trust, &f.revision.head, &name, None, looked)?;
     }
     let negatives = evidence.negatives_under(trust.clone())?;
-    let base = github.merge_base(
-        &repo,
-        f.base_tip.as_deref().ok_or("negative base unknown")?,
-        &f.revision.head,
+    let negative = &evidence.negative;
+    let base = told(
+        negative,
+        github
+            .merge_base(
+                &repo,
+                f.base_tip.as_deref().ok_or("negative base unknown")?,
+                &f.revision.head,
+            )
+            .map_err(Into::into),
     )?;
-    crate::train::verify_negative(github, github, &f.repo, &base, &f.revision.head, &negatives)?
-        .map_err(|why| format!("negative evidence: {why}"))?;
+    let verdict = told(
+        negative,
+        crate::train::verify_negative(github, github, &f.repo, &base, &f.revision.head, &negatives)
+            .map_err(Into::into),
+    )?;
+    looked.insert(negative.clone());
+    verdict.map_err(|why| format!("negative evidence: {why}"))?;
 
     let records = github.reviews(&repo, f.number)?;
     if super::reviews::changes_requested(&records) {
@@ -231,15 +242,13 @@ pub(crate) fn authorize<G: Write>(
             .find(|r| r.id.is_some() && r.id == reviewer.record_id)
             .ok_or("review producer record disappeared")?;
         let head = record.commit_id.as_deref().ok_or("review head missing")?;
-        let pull = github.pull(&repo, f.number)?;
+        let name = format!("conary/review/{role}");
+        let pull = told(&name, github.pull(&repo, f.number).map_err(Into::into))?;
         let mut carried = std::collections::BTreeSet::new();
         if head != f.revision.head {
-            if !github.carries(
-                &repo,
-                f.base_tip.as_deref().ok_or("review base missing")?,
-                &f.revision.head,
-                head,
-            )? {
+            let base = f.base_tip.as_deref().ok_or("review base missing")?;
+            let carries = github.carries(&repo, base, &f.revision.head, head);
+            if !told(&name, carries.map_err(Into::into))? {
                 return Err("review no longer covers this tree".into());
             }
             carried.insert(head.to_owned());

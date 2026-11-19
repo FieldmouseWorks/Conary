@@ -231,8 +231,23 @@ pub fn completion(work: &Work, now: u64) -> Result<Completion> {
 pub fn inspect(work: &Work, now: u64) -> Result<Completion> {
     collect(work, now, false)
 }
+/// A worker's answer that's there and doesn't read: a degraded path
+/// ([`super::degraded`]), told apart from a failure to act on one.
+#[derive(Debug)]
+pub struct Unreadable(pub persist::Error);
+impl std::fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the worker's answer doesn't read: {}", self.0)
+    }
+}
+impl std::error::Error for Unreadable {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
 fn collect(work: &Work, now: u64, mutate: bool) -> Result<Completion> {
-    let answer: Completion = persist::load(&work.path.with_extension("answer"))?;
+    let answer: Completion =
+        persist::load(&work.path.with_extension("answer")).map_err(Unreadable)?;
     if (answer.result.is_none() && now >= work.deadline) || answer.at > work.deadline {
         let timed_out = Completion {
             at: work.deadline,
