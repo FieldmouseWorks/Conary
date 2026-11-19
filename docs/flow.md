@@ -570,10 +570,12 @@ findings to settle" where a live pass would queue the review. It ends at S1,
 when the flow's own reviewer and judge publish what it counts; a PR still
 open then gets one fresh review.
 
-**A switch the steward doesn't share.** A PR the flow's pause, a hold the
-steward doesn't read, or a switch in the flow's configuration stops
-disagrees with a steward that carries on. Its line's `flow.switches` names
-the switch, so it isn't read as the two seeing the PR differently.
+**A switch the steward doesn't share.** A PR the flow's pause or a hold
+stops waits outside every stage, and one no evidence verifier, no person
+list or the train off stops waits short of landing, while a steward without
+that switch carries on. Its line's `flow.switches` names the switch, so the
+stage it gives isn't read as the two seeing the PR differently. An omitted
+plugin leaves the stage as decided, so it explains no stage disagreement.
 
 **The steward is a pass behind.** Not a difference: the steward's next pass
 says what the flow said. Right after the steward posts a review with

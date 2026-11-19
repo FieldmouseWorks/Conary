@@ -224,9 +224,15 @@ fn landing_switches_hold_the_step_they_keep_off() {
         reports[0]["description"],
         "producer attestation verifier is not configured"
     );
+    let evidence = json!([{"switch": "no_evidence", "step": "Merge", "workers": []}]);
+    assert_eq!(reports[0]["switches"], evidence);
+    // The saved decision, a switch with no fields of its own, loads again.
+    let reports = printed(&c.pass(jobs::now() + 1, false));
+    assert_eq!(reports[0]["error"], Value::Null, "{}", reports[0]);
+    assert_eq!(reports[0]["switches"], evidence);
     assert_eq!(
-        reports[0]["switches"],
-        json!([{"switch": "no_evidence", "step": "Merge", "workers": []}])
+        c.record().decision.unwrap().switches[0].switch,
+        Switch::NoEvidence
     );
 
     let r2 = super::flow_case::Case::new();

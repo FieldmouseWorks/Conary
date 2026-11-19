@@ -235,7 +235,13 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
                     .switches
                     .iter()
                     .find(|h| h.switch == *switch)?;
-                Some(held(*pr, Some(holding.step.clone()), workers))
+                // Only a pause or a hold stops workers; the others keep
+                // work from starting.
+                let workers = match switch {
+                    Switch::Hold { .. } => workers.clone(),
+                    _ => Vec::new(),
+                };
+                Some(held(*pr, Some(holding.step.clone()), &workers))
             })
             .collect()
     };
