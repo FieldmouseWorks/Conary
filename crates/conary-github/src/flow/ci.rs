@@ -348,7 +348,7 @@ pub(super) fn checks(
         if train
             && !status.creator.as_ref().is_some_and(|u| {
                 settings
-                    .review_authors
+                    .flow_authors
                     .iter()
                     .any(|s| u.login.eq_ignore_ascii_case(s))
             })

@@ -79,7 +79,7 @@ fn a_red_edited_dependency_still_belongs_to_the_sweep() {
         Some("person@example.org"),
         Some("person@example.org"),
     );
-    c.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 700);
+    c.hub.flow_review(REMI, 3, Verdict::Clean, 700);
     c.ci("failure");
     assert_eq!(c.view(8000).stage, Stage::Fix);
     assert!(matches!(c.view(8000).step, Step::Wait { .. }));

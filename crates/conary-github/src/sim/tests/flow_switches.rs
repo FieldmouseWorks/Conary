@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 fn repo() -> conary_core::op::Repo {
     REPO.parse().unwrap()
 }
-/// PR 3 and PR 5, both trusted and green, both waiting on their review.
+/// PR 3 and PR 5, both trusted, green and reviewed clean, both with a
+/// description edited after their push: each needs a judge.
 fn two() -> Case {
-    let mut c = Case::new();
+    let c = Case::new();
     c.hub.pr(REPO, 5, &head(5));
     c.hub.edit_pull(REPO, 5, |p| {
         p["user"]["login"] = json!("owner");
@@ -24,7 +25,10 @@ fn two() -> Case {
     snapshot.revision = Revision::from(&c.hub.pull(REPO, 5).unwrap());
     c.hub.flow_snapshot(REPO, 5, snapshot);
     c.good_ci(&head(5));
-    c.config.plugins.review = None;
+    for pr in [3, 5] {
+        c.hub.flow_review(REPO, pr, Verdict::Clean, 0);
+        c.hub.edit_flow(REPO, pr, |s| s.since.edited = Some(1));
+    }
     c
 }
 fn printed(reports: &[Report]) -> Vec<Value> {
@@ -33,11 +37,11 @@ fn printed(reports: &[Report]) -> Vec<Value> {
         .map(|r| serde_json::to_value(r).unwrap())
         .collect()
 }
-fn review() -> Value {
-    json!({"QueueReview": "reviewer"})
+fn judge() -> Value {
+    serde_json::to_value(Step::Judge(vec![Trigger::Changed])).unwrap()
 }
 
-/// A paused repository with a held PR and no review plugin: each PR's
+/// A paused repository with a held PR and no judge plugin: each PR's
 /// decision names every switch that stops it, though the pause alone
 /// decided its step. Lifting the pause and the hold leaves the plugin.
 #[test]
@@ -46,10 +50,10 @@ fn a_pause_a_hold_and_an_omitted_plugin_each_name_what_they_stop() {
     let now = jobs::now();
     // Without a pause or a hold, the omitted plugin is what stops both.
     for report in printed(&c.pass(now, false)) {
-        assert_eq!(report["description"], "No plugin configured for review");
+        assert_eq!(report["description"], "No plugin configured for judge");
         assert_eq!(
             report["switches"],
-            json!([{"switch": "no_plugin", "kind": "review", "step": review(), "workers": []}]),
+            json!([{"switch": "no_plugin", "kind": "judge", "step": judge(), "workers": []}]),
             "{report}"
         );
     }
@@ -63,9 +67,9 @@ fn a_pause_a_hold_and_an_omitted_plugin_each_name_what_they_stop() {
     crate::flow::pause::pause(c.dir.path(), &repo(), &paused).unwrap();
     let reports = printed(&c.pass(now + 1, false));
     let pause = json!({"switch": "pause", "reason": "moving the machine", "at": 7,
-        "step": review(), "workers": []});
-    let hold = json!({"switch": "hold", "label": "hold", "step": review(), "workers": []});
-    let plugin = json!({"switch": "no_plugin", "kind": "review", "step": review(), "workers": []});
+        "step": judge(), "workers": []});
+    let hold = json!({"switch": "hold", "label": "hold", "step": judge(), "workers": []});
+    let plugin = json!({"switch": "no_plugin", "kind": "judge", "step": judge(), "workers": []});
     assert_eq!(reports[0]["pr"], 3);
     assert_eq!(reports[0]["description"], "Paused: moving the machine");
     assert_eq!(
@@ -132,7 +136,7 @@ fn status_lists_each_switch_with_the_prs_it_holds() {
     let pause = named(&status, "pause", ("reason", "moving the machine"));
     assert_eq!(pause["at"], 7);
     assert_eq!(prs(pause), [3, 5]);
-    assert_eq!(pause["prs"][0]["step"], review());
+    assert_eq!(pause["prs"][0]["step"], judge());
     let switches: Vec<_> = status["switches"]
         .as_array()
         .unwrap()
@@ -140,19 +144,18 @@ fn status_lists_each_switch_with_the_prs_it_holds() {
         .map(|s| (s["switch"].as_str().unwrap(), s["kind"].as_str()))
         .collect();
     // The case's configuration has a review author list, people and an
-    // evidence verifier, and no review, judge or proof plugin.
+    // evidence verifier, and no judge or proof plugin.
     assert_eq!(
         switches,
         [
             ("pause", None),
-            ("no_plugin", Some("review")),
             ("no_plugin", Some("judge")),
             ("no_plugin", Some("proof")),
             ("train_off", None),
         ]
     );
-    assert_eq!(prs(named(&status, "no_plugin", ("kind", "review"))), [3, 5]);
-    assert_eq!(prs(named(&status, "no_plugin", ("kind", "judge"))), [0; 0]);
+    assert_eq!(prs(named(&status, "no_plugin", ("kind", "judge"))), [3, 5]);
+    assert_eq!(prs(named(&status, "no_plugin", ("kind", "proof"))), [0; 0]);
 
     c.hub.label(REPO, 3, &["hold"]);
     c.pass(now + 1, false);
@@ -163,8 +166,8 @@ fn status_lists_each_switch_with_the_prs_it_holds() {
     );
     let hold = named(&status, "hold", ("label", "hold"));
     assert_eq!(prs(hold), [3]);
-    assert_eq!(hold["prs"][0]["step"], review());
-    assert_eq!(prs(named(&status, "no_plugin", ("kind", "review"))), [3, 5]);
+    assert_eq!(hold["prs"][0]["step"], judge());
+    assert_eq!(prs(named(&status, "no_plugin", ("kind", "judge"))), [3, 5]);
 
     c.hub.close(REPO, 5);
     c.pass(now + 2, false);
@@ -173,7 +176,7 @@ fn status_lists_each_switch_with_the_prs_it_holds() {
         prs(named(&status, "pause", ("reason", "moving the machine"))),
         [3]
     );
-    assert_eq!(prs(named(&status, "no_plugin", ("kind", "review"))), [3]);
+    assert_eq!(prs(named(&status, "no_plugin", ("kind", "judge"))), [3]);
 }
 
 /// A pause holds its PRs' running workers: the decision that stops them

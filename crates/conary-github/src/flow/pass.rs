@@ -13,9 +13,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Plugins {
-    /// The review plugin's executable.
-    #[schemars(extend("x-spender" = true))]
-    pub review: Option<PathBuf>,
     /// The fix plugin's executable.
     #[schemars(extend("x-spender" = true))]
     pub fix: Option<PathBuf>,
@@ -281,7 +278,6 @@ impl Pass<'_> {
                 }
                 super::observe::issuances(&mut facts, &record.memory);
                 facts.failed = record.failed.take();
-                facts.failed_review = record.failed_review.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
@@ -361,7 +357,7 @@ impl Pass<'_> {
                     report.error = Some(next.description.clone());
                 }
                 if let Step::HandFix(kind) = next.step
-                    && let Err(why) = super::handoff::problems(github, &facts, &record.memory, kind)
+                    && let Err(why) = super::handoff::problems(github, &facts, kind)
                 {
                     next.step = Step::Wait { until: None };
                     next.description = why;
@@ -400,18 +396,7 @@ impl Pass<'_> {
                             report.error = Some(error.to_string());
                         }
                         Err((kind, error)) => {
-                            if let Step::PostReview(role) = &next.step
-                                && kind == Failure::Post
-                            {
-                                record.failed_review = Some(FailedPost {
-                                    role: role.clone(),
-                                    unavailable: error
-                                        .downcast_ref::<crate::ApiError>()
-                                        .is_some_and(|e| e.unavailable),
-                                });
-                            } else {
-                                record.failed = Some(kind);
-                            }
+                            record.failed = Some(kind);
                             report.error = Some(error.to_string());
                         }
                     }
@@ -458,7 +443,6 @@ impl Pass<'_> {
     }
     pub(crate) fn path(&self, kind: &str) -> Option<&Path> {
         match kind {
-            "review" => self.config.plugins.review.as_deref(),
             "fix" => self.config.plugins.fix.as_deref(),
             "judge" => self.config.plugins.judge.as_deref(),
             "proof" => self.config.plugins.proof.as_deref(),
@@ -475,7 +459,6 @@ impl Pass<'_> {
         data: &Data,
     ) -> Result<()> {
         let kind = match purpose {
-            Purpose::Review(_) => "review",
             Purpose::Fix(_) => "fix",
             Purpose::Judge => "judge",
             // A proof's preparation is the proof plugin's to answer.
@@ -540,7 +523,6 @@ impl Pass<'_> {
 }
 pub(super) fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
-        Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),
         Step::Judge(_) => Some("judge"),
         Step::Prepare | Step::Prove => Some("proof"),

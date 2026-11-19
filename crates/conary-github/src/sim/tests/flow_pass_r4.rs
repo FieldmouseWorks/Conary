@@ -210,10 +210,10 @@ fn transient_discovery_failures_never_create_cancellable_jobs() {
         });
         let report = c.pass(jobs::now(), false);
         assert_eq!(report[0].error, None, "{:?}", report[0]);
-        assert_eq!(
-            report[0].next.as_ref().unwrap().step,
-            Step::QueueReview("reviewer".into())
-        );
+        // Its own decision: waiting on the connector's review of its push.
+        let next = report[0].next.as_ref().unwrap();
+        assert_eq!(next.stage, Stage::Review);
+        assert!(matches!(next.step, Step::Wait { .. }), "{:?}", next.step);
         assert!(c.record().memory.stopping.is_empty());
         c.pass(jobs::now() + 1, false);
         assert!(c.record().memory.stopping.is_empty());
@@ -256,16 +256,8 @@ fn retargeted_uncertain_intents_use_original_scope_and_allow_revalidated_progres
     );
     assert!(c.record().landing.as_ref().unwrap().retry);
     assert_eq!(c.record().landing.as_ref().unwrap().target, "main");
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 5);
-    let body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
+    c.hub.flow_review(REPO, 3, Verdict::Clean, 5);
+    let body = c.connector_summary(3);
     c.sign_check(
         &head(4),
         "conary/review/reviewer",
@@ -352,10 +344,11 @@ fn persisted_capacity_cancellation_from_an_older_pass_is_recovered() {
     drop(data);
     let report = c.pass(now, false);
     assert_eq!(report[0].error, None);
-    assert_eq!(
-        report[0].next.as_ref().unwrap().step,
-        Step::QueueReview("reviewer".into())
-    );
+    // Its own decision: the head has gone unreviewed since the record began,
+    // so the connector is asked for a look.
+    let next = report[0].next.as_ref().unwrap();
+    assert_eq!(next.stage, Stage::Review);
+    assert!(matches!(next.step, Step::AskReview(_)), "{:?}", next.step);
     assert!(c.record().memory.stopping.is_empty());
 }
 

@@ -869,8 +869,9 @@ Targets on remi, warm cache, a year of ledger across every repo:
     a missing or unverifiable one fails closed.
 - The steward acts on GitHub as its own GitHub App, never as the owner's
   login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
-  `review-settled` and the reviewers' reviews count only from the App's bot
-  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status, and
+  `review-settled` counts only from the App's bot
+  (`cn --reviewer SLUG[bot]`), the reviewer's reviews only from its own
+  (Codex's GitHub connector), and the repos' rules require that status, and
   in a train repo `conary/train`, from the App's integration ID, so a session holding the owner's token can't post
   one that counts, to Conary or to GitHub. The App's key reaches only the
   steward's units on the machine; a Claude running there as the machine

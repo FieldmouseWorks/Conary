@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub enum Stage {
     Review,
-    Reviewer,
     Fix,
     Ci,
     ProofSlot,
@@ -72,82 +71,33 @@ pub struct Revision {
     pub description: String,
 }
 
+/// What a reviewer last said of a PR's head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
+    /// A review of the head is under way, or in a state this doesn't know.
+    Running,
     Clean,
     Findings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Review {
-    pub revision: Revision,
-    pub verdict: Verdict,
-    /// Producer completion time, preserved across posting retries. Zero is unknown.
-    pub at: u64,
-}
-
-/// Findings whose posting/coverage was lost. Legacy state has no ordering
-/// evidence until this library observes it; a REST record ID supplies none.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LostReview {
-    Legacy { head: String, after: Option<u64> },
-    Findings { revision: Revision, at: u64 },
-}
-impl From<String> for LostReview {
-    fn from(head: String) -> Self {
-        Self::Legacy { head, after: None }
-    }
-}
-impl LostReview {
-    pub fn head(&self) -> &str {
-        match self {
-            Self::Legacy { head, .. } => head,
-            Self::Findings { revision, .. } => &revision.head,
-        }
-    }
-    pub(super) fn after(&self) -> Option<u64> {
-        match self {
-            Self::Legacy { after, .. } => *after,
-            Self::Findings { at, .. } => Some(*at),
-        }
-    }
-    pub(super) fn observe(&mut self, now: u64) {
-        if let Self::Legacy { after, .. } = self {
-            after.get_or_insert(now);
-        }
-    }
-    pub(super) fn findings(review: &Review, now: u64) -> Self {
-        if review.at == 0 {
-            Self::Legacy {
-                head: review.revision.head.clone(),
-                after: Some(now),
-            }
-        } else {
-            Self::Findings {
-                revision: review.revision.clone(),
-                at: review.at,
-            }
-        }
-    }
-}
-
+/// What a reviewer said of the PR as it is now, from its own posts on it
+/// ([`super::reviews`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reviewer {
-    pub review: Option<Review>,
+    /// What it last said of this head; None before it says anything.
+    pub verdict: Option<Verdict>,
+    /// When it said it, in Unix seconds (0 with nothing).
+    pub at: u64,
+    /// The body of the post its verdict came from, which a receipt for it
+    /// would sign.
+    pub source: Option<String>,
+    /// Its reviews of the PR that had findings, at any head: each a round.
     pub rounds: u32,
-    pub record_id: Option<u64>,
-    /// Original reviewed head, retained when equivalent-tree coverage carries.
-    pub reviewed_head: Option<String>,
-    pub findings_answered: bool,
-    pub unavailable_until: Option<u64>,
-    pub queued: bool,
-    /// An answer from the service which has not yet been posted to GitHub.
-    pub answer: Option<Review>,
-    /// A look already under way, even if its service is now unavailable.
-    pub under_way: Option<Revision>,
-    pub failed_at: Option<u64>,
-    pub queue_failed_at: Option<u64>,
-    pub missing: bool,
+    /// Whether the PR was retargeted or its description edited at or after
+    /// its head's push (or at all, when the push time isn't known): the
+    /// reviewer's word binds only the commit, so it can't settle the PR
+    /// alone.
+    pub changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -381,14 +331,20 @@ pub struct Settings {
     /// judge.
     #[schemars(extend("x-spender" = false))]
     pub judge_engines: BTreeSet<String>,
-    /// The reviewers whose reviews a PR needs, by the name in their marker.
+    /// The reviewers whose word a PR needs, by name. Each reads what the
+    /// review authors post.
     #[schemars(extend("x-spender" = false))]
     pub reviewers: BTreeSet<String>,
-    /// The accounts the flow posts as: its reviews, `review-settled` and
-    /// the train's status are read only from these. None set, no review is
-    /// queued.
+    /// The accounts the reviewer posts as (Codex's GitHub connector): its
+    /// summary comment and its reviews are read only from these. None set,
+    /// no review counts.
     #[schemars(extend("x-spender" = false))]
     pub review_authors: BTreeSet<String>,
+    /// The accounts the flow posts as: `review-settled`, the train's status
+    /// and its answers to findings are read only from these. None set, none
+    /// of them counts.
+    #[schemars(extend("x-spender" = false))]
+    pub flow_authors: BTreeSet<String>,
     /// The accounts whose sealed judge and dependency verdicts are read.
     #[schemars(extend("x-spender" = false))]
     pub verdict_authors: BTreeSet<String>,
@@ -502,6 +458,7 @@ impl Default for Settings {
             judge_engines: BTreeSet::new(),
             reviewers: BTreeSet::from(["reviewer".into()]),
             review_authors: BTreeSet::new(),
+            flow_authors: BTreeSet::new(),
             verdict_authors: BTreeSet::new(),
             judge_key: None,
             major_key: None,
@@ -532,13 +489,6 @@ impl Default for Settings {
             renovate_sweep: false,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FailedPost {
-    pub role: String,
-    /// A rate limit or transport outage does not spend a review attempt.
-    pub unavailable: bool,
 }
 
 /// A review thread as GitHub shows it: whether it's resolved, and its
@@ -644,7 +594,6 @@ pub struct Facts {
     /// The failed effect from the preceding execution, if any. Decisions
     /// never optimistically record an effect as having succeeded.
     pub failed: Option<Failure>,
-    pub failed_review: Option<FailedPost>,
     pub succeeded: BTreeSet<Failure>,
 }
 impl Facts {
@@ -697,29 +646,21 @@ pub struct Wait {
 pub struct Memory {
     pub head: String,
     pub raised: BTreeSet<String>,
-    #[serde(with = "super::persist::pairs")]
-    pub latest_reviews: BTreeMap<String, u64>,
     /// Authenticated issuance high-water marks, including same-generation conflicts.
     #[serde(with = "super::persist::judge_issuance")]
     pub judge_issuance: JudgeIssuance,
     #[serde(with = "super::persist::pairs")]
     pub major_issuance: BTreeMap<Revision, (u64, Option<Major>)>,
-    pub consumed_reviews: BTreeSet<(String, Revision, u64)>,
-    #[serde(with = "super::persist::pairs")]
-    pub review_posts: BTreeMap<(String, Revision, u64), u32>,
-    #[serde(with = "super::persist::pairs")]
-    pub review_failures: BTreeMap<(String, Revision), (u32, u64)>,
-    #[serde(with = "super::persist::pairs")]
-    pub missing_reviews: BTreeMap<(String, Revision), (u64, bool)>,
     pub seen: u64,
     pub no_checks_since: Option<u64>,
     pub update_requested: Option<(String, u64)>,
     #[serde(with = "super::persist::pairs")]
     pub strikes: BTreeMap<Failure, u32>,
     pub retry: Option<(Failure, u64)>,
-    /// Reviewer -> base -> the original findings and their ordering evidence.
-    #[serde(with = "super::persist::pairs")]
-    pub lost_on: BTreeMap<String, BTreeMap<String, LostReview>>,
+    /// The head the reviewer was last asked to look at, and when: asked
+    /// again for the same head only an hour later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<(String, u64)>,
     #[serde(with = "super::persist::pairs")]
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,
@@ -744,8 +685,8 @@ pub struct Memory {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Step {
-    QueueReview(String),
-    PostReview(String),
+    /// Ask the reviewer for a look at the head, saying why.
+    AskReview(String),
     PostFix(String),
     HandFix(Kind),
     StopJob(String),
@@ -786,9 +727,8 @@ pub enum WaitOn {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OwnerNotice {
     OpenOverDay,
+    /// No review of its head came hours after its push.
     NoReviewer,
-    ReviewFailures,
-    UnpostedReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

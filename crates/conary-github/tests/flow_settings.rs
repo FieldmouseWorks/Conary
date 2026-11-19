@@ -153,7 +153,6 @@ fn every_spender_defaults_off_and_a_new_one_that_starts_on_fails() {
             "Plugins.fix",
             "Plugins.judge",
             "Plugins.proof",
-            "Plugins.review",
             "Settings.proof_slots",
             "Settings.proofs",
             "Settings.renovate_sweep",
@@ -467,8 +466,7 @@ fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     );
 
     let key = "0".repeat(64);
-    let flow =
-        json!({"settings": {"proof_slots": 2, "judge_key": key}, "plugins": {"review": "/r"}});
+    let flow = json!({"settings": {"proof_slots": 2, "judge_key": key}, "plugins": {"fix": "/r"}});
     let listing = schema::effective::<Config>(flow.to_string().as_bytes()).unwrap();
     assert!(listing.not_live.is_empty());
     let get = |name: &str| {
@@ -477,8 +475,8 @@ fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     };
     assert_eq!(get("settings.proof_slots"), (json!(2), From::File));
     assert_eq!(get("settings.train"), (json!(false), From::Default));
-    assert_eq!(get("plugins.review"), (json!("/r"), From::File));
-    assert_eq!(get("plugins.fix"), (json!(null), From::Default));
+    assert_eq!(get("plugins.fix"), (json!("/r"), From::File));
+    assert_eq!(get("plugins.judge"), (json!(null), From::Default));
     assert_eq!(get("evidence"), (json!(null), From::Default));
     assert_eq!(get("settings.judge_key"), (json!("[redacted]"), From::File));
     assert!(!serde_json::to_string(&listing).unwrap().contains(&key));
@@ -535,7 +533,7 @@ fn every_reader_refuses_a_duplicate_key_and_a_positional_struct() {
     let flow = dir.path().join("flow.json");
     for refused in [
         r#"{"settings": {"train": true, "train": false}}"#,
-        r#"{"plugins": [null, null, null, null]}"#,
+        r#"{"plugins": [null, null, null]}"#,
         r#"{"execution": {"review": ["machine", null, null]}}"#,
         r#"[{}, [], {}, {}, null]"#,
     ] {

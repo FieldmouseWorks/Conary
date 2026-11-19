@@ -32,12 +32,11 @@ pub(super) fn another(c: &Case, n: u64) {
     snapshot.revision = Revision::from(&c.hub.pull(REPO, n).unwrap());
     c.hub.flow_snapshot(REPO, n, snapshot);
     c.good_ci(&head(n));
-    c.hub.flow_review(REPO, n, "reviewer", Verdict::Clean, 0);
-    let r = c.hub.reviews(REPO, n).unwrap().pop().unwrap();
+    c.hub.flow_review(REPO, n, Verdict::Clean, 0);
     c.sign_check(
         &head(n),
         "conary/review/reviewer",
-        Some(&review_receipt(&head(n), r.body.as_deref().unwrap())),
+        Some(&review_receipt(&head(n), &c.connector_summary(n))),
     );
     c.hub
         .post_status(&head(n), json!({"context":"machine","state":"pending"}));

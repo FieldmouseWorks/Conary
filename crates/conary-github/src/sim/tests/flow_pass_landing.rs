@@ -200,7 +200,7 @@ fn blocking_producer_results_racing_publication_retract_permission() {
         let key = c.config.settings.judge_key.clone().unwrap();
         c.hub.race(Call::FlowStage, move |hub| {
             if blocking == "findings" {
-                hub.flow_review(REPO, 3, "reviewer", Verdict::Findings, 1);
+                hub.flow_review(REPO, 3, Verdict::Findings, 1);
             } else {
                 let revision = Revision::from(&hub.pull(REPO, 3).unwrap());
                 let word = match blocking {

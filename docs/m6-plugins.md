@@ -181,7 +181,7 @@ flow settings name it.
 
 | Plugin | Producer posts | Signed check run, and its log | Key's check scope |
 | --- | --- | --- | --- |
-| Review | Nothing itself. The flow publishes the review (`flow::review_body`) as an account in `settings.review_authors`. The producer then signs that publication if it matches what the producer recorded | `conary/review/ROLE` on the review's head. The log is `review_receipt(head, body)` | `conary/review/ROLE` |
+| Review | Nothing itself. The reviewer is Codex's GitHub connector, which posts its own review ([flow.md](flow.md#review)); a producer would sign the post the clean word came from. None does yet, so nothing counts | `conary/review/ROLE` on the head. The log is `review_receipt(head, body)` | `conary/review/ROLE` |
 | Fix | Its commits, pushed to the PR's branch | None. A fix is authorship, not evidence. The next review grades it. Its session becomes known from the validated plugin answer ([flow.md](flow.md#explicit-landing-passes)), so a later judge can't be that session | No key |
 | Judge | The sealed `autoland-judgment:v3` comment (`SealKey::judgment_by`), as an account in `settings.verdict_authors` | `conary/judgment` on the head. The log is `judgment_receipt_by(revision, generation, verdict, provenance, basis)` | `conary/judgment` |
 | Proof | A check run per proof, named as the proof is named in `settings.proofs` | That check run, with `definition` set to `recipe_digest(recipe)`. The log is the sha256 of the program's output | The exact names of the configured proofs |
@@ -515,6 +515,10 @@ steward through the socket directory's group.
 Run burrow's gate.
 
 ### R: review plugin and producer
+
+Superseded: the reviewer is Codex's GitHub connector, which reviews on its
+own ([flow.md](flow.md#review)), and burrow's review plugin and producer are
+gone (FieldmouseWorks/burrow#1204).
 
 **Repo:** burrow. **Depends on:** B1 and B2. It needs no contract change.
 

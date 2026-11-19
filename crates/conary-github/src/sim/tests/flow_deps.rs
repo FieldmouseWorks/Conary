@@ -84,7 +84,7 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
                 Some(if changed_author { "person" } else { email }),
                 Some(if changed_author { email } else { "person" }),
             );
-            assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+            assert!(matches!(c.view(8000).step, Step::AskReview(_)));
             c.review("reviewer", Verdict::Clean, 700);
             assert_eq!(c.view(8000).step, Step::Merge);
         }
@@ -96,7 +96,8 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
     c.settings.renovate_email = None;
     assert_eq!(c.facts().bot_edited, None);
     // Unknown/misconfigured provenance never gets the CI-only shortcut.
-    assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+    c.hub.remove_flow_reviews(REMI, 3);
+    assert!(matches!(c.view(8000).step, Step::AskReview(_)));
     c.review("reviewer", Verdict::Clean, 700);
     assert_eq!(c.view(8000).step, Step::Merge); // current trusted reviewer covers the complete claim
 }

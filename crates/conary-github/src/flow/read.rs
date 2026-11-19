@@ -34,11 +34,13 @@ pub struct Snapshot {
     pub checks_complete: bool,
     pub rebase_removed: Vec<u64>,
     pub timeline_cut_at: Option<u64>,
+    /// When the PR last changed without a push, and when its head was
+    /// pushed, as the reviewers' word is read against them.
+    pub since: super::reviews::Since,
 }
 
 pub trait Read: Source + crate::branches::Branches {
     fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError>;
-    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
@@ -147,7 +149,6 @@ pub fn read(
             .as_deref()
             .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
         failed: None,
-        failed_review: None,
         succeeded: BTreeSet::new(),
     };
     // These PRs do not enter the pipeline. In particular, do not spend
@@ -211,27 +212,12 @@ pub fn read(
     facts.conversation = super::judging::conversation(&comments);
     facts.owner_approved =
         super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
-    let mut carried = BTreeSet::new();
-    for old in records
-        .iter()
-        .filter_map(|r| r.commit_id.as_ref())
-        .filter(|h| *h != &pull.head.sha)
-        .collect::<BTreeSet<_>>()
-    {
-        if source
-            .carries(&repository, base, &pull.head.sha, old)
-            .unwrap_or(false)
-        {
-            carried.insert(old.clone());
-        }
-    }
     facts.reviewers = super::reviews::read(
-        &pull,
+        &pull.head.sha,
         &records,
-        &extra.resolved_reviews,
-        &super::Targets::read(&extra.threads, &comments, &facts.settings),
+        &comments,
+        extra.since,
         &facts.settings,
-        &carried,
     )?;
     facts.judgment = markers.judgment;
     facts.judgment_generation = markers.judgment_generation;

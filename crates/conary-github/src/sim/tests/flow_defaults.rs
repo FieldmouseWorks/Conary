@@ -18,6 +18,7 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         judge_engines,
         reviewers: _,
         review_authors,
+        flow_authors,
         verdict_authors,
         judge_key,
         major_key,
@@ -53,7 +54,7 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
     // No machine's accounts, people, keys, label or engines.
     assert_eq!(job_login, None);
     assert!(judge_engines.is_empty());
-    assert!(review_authors.is_empty());
+    assert!(review_authors.is_empty() && flow_authors.is_empty());
     assert!(verdict_authors.is_empty());
     assert!(judge_key.is_none() && major_key.is_none());
     assert!(bot_emails.is_empty());
@@ -100,15 +101,17 @@ fn an_unset_owner_label_leaves_the_owner_step_waiting_unlisted() {
 }
 
 #[test]
-fn no_review_author_queues_no_review() {
+fn no_review_author_asks_for_no_review() {
     let mut c = Case::new();
     c.hub.remove_flow_reviews(REMI, 3);
-    assert_eq!(c.view(4000).step, Step::QueueReview("reviewer".into()));
+    assert!(matches!(c.view(4000).step, Step::AskReview(_)));
+    // With no account whose review counts, no review it asks for could
+    // ever be read.
     c.settings.review_authors.clear();
     let next = c.view(4000);
     assert_eq!(
         (next.stage, next.step),
-        (Stage::Reviewer, Step::Wait { until: None })
+        (Stage::Review, Step::Wait { until: None })
     );
 }
 
@@ -116,7 +119,7 @@ fn no_review_author_queues_no_review() {
 fn the_train_status_counts_from_the_configured_steward_alone() {
     for author in [STEWARD, "other-steward[bot]"] {
         let mut c = Case::new();
-        c.settings.review_authors = ["other-steward[bot]".into()].into();
+        c.settings.flow_authors = ["other-steward[bot]".into()].into();
         c.hub.put_statuses(
             &c.scope().head,
             json!([{"context":"conary/train","state":"failure","creator":{"login":author,"type":"Bot"}}]),

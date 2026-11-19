@@ -107,31 +107,49 @@ impl Hub {
 }
 
 impl Hub {
-    pub(crate) fn flow_review(
-        &self,
-        repo: &str,
-        pr: u64,
-        reviewer: &str,
-        verdict: crate::flow::Verdict,
-        at: u64,
-    ) {
-        let p = self.pull_json(repo, pr);
-        let scope = crate::flow::Revision::from(&crate::api::Source::pull(self, repo, pr).unwrap());
-        let mark = json!({"commit_sha":p["head"]["sha"],"base":p["base"]["ref"],"findings":u32::from(verdict==crate::flow::Verdict::Findings),"scope":scope.description,"reviewed_at":at});
-        let id = self.world.borrow().repos[repo]
-            .reviews
-            .get(&pr)
-            .map_or(1, |r| r.len() as u64 + 1);
-        let review = json!({"id":id,"user":fixtures::user(super::STEWARD,"Bot"),"body":format!("<!-- {reviewer}-review:v2 {mark} -->"),"commit_id":p["head"]["sha"],"submitted_at":jiff::Timestamp::from_second(at as i64).unwrap().to_string()});
+    /// What Codex's GitHub connector posts of the PR's head at `at`: its
+    /// summary comment, and for findings a review on the head whose receipt
+    /// names it.
+    pub(crate) fn flow_review(&self, repo: &str, pr: u64, verdict: crate::flow::Verdict, at: u64) {
+        use crate::flow::Verdict;
+        let head = self.pull_json(repo, pr)["head"]["sha"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let when = jiff::Timestamp::from_second(at as i64).unwrap().to_string();
+        let (status, findings) = match verdict {
+            Verdict::Running => ("running", None),
+            Verdict::Clean => ("completed", Some(false)),
+            Verdict::Findings => ("completed", Some(true)),
+        };
+        if verdict == Verdict::Findings {
+            let mut world = self.world.borrow_mut();
+            let reviews = world
+                .repos
+                .get_mut(repo)
+                .unwrap()
+                .reviews
+                .entry(pr)
+                .or_default();
+            let id = reviews.len() as u64 + 1;
+            reviews.push(json!({"id":id,"user":fixtures::user(super::CONNECTOR,"Bot"),
+                "state":"COMMENTED","commit_id":head,"submitted_at":when,
+                "body":format!("<!-- codex-review-receipt:v1 -->\n\n### Codex Review\n\n**Reviewed commit:** `{}`\n", &head[..10.min(head.len())])}));
+        }
+        let state = json!({"code_review":{"commit_sha":head,"has_any_findings":findings,"status":status},
+            "security_review":{"commit_sha":null,"has_any_findings":null,"status":null}});
+        let c = json!({"user":fixtures::user(super::CONNECTOR,"Bot"),
+            "body":format!("<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {state} -->\n\nCodex Review Summary"),
+            "created_at":when,"updated_at":when});
         self.world
             .borrow_mut()
             .repos
             .get_mut(repo)
             .unwrap()
-            .reviews
+            .comments
             .entry(pr)
             .or_default()
-            .push(review);
+            .push(c);
     }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn person_review(
@@ -171,14 +189,14 @@ impl Hub {
         let review = reviews.iter_mut().find(|r| r["id"] == id).unwrap();
         review["body"] = json!(body);
     }
+    /// Everything the connector posted on the PR, gone.
     pub(crate) fn remove_flow_reviews(&self, repo: &str, pr: u64) {
-        self.world
-            .borrow_mut()
-            .repos
-            .get_mut(repo)
-            .unwrap()
-            .reviews
-            .remove(&pr);
+        let mut world = self.world.borrow_mut();
+        let r = world.repos.get_mut(repo).unwrap();
+        r.reviews.remove(&pr);
+        if let Some(comments) = r.comments.get_mut(&pr) {
+            comments.retain(|c| c["user"]["login"] != super::CONNECTOR);
+        }
     }
 }
 
@@ -207,18 +225,15 @@ impl Hub {
 }
 
 impl Hub {
-    pub(crate) fn resolve_flow_findings(&self, repo: &str, pr: u64, role: &str) {
+    /// The connector's last findings review on the PR, its threads resolved.
+    pub(crate) fn resolve_flow_findings(&self, repo: &str, pr: u64) {
         let id = self.world.borrow().repos[repo]
             .reviews
             .get(&pr)
             .unwrap()
             .iter()
             .rev()
-            .find(|r| {
-                r["body"]
-                    .as_str()
-                    .is_some_and(|b| b.contains(&format!("<!-- {role}-review:v2 ")))
-            })
+            .find(|r| r["user"]["login"] == super::CONNECTOR)
             .unwrap()["id"]
             .as_u64()
             .unwrap();

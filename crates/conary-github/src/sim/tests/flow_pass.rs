@@ -33,37 +33,36 @@ fn lifecycle(train: bool) {
         .unwrap()
     };
     let now = flow::jobs::now();
+    // Nothing has reviewed the head yet: the connector reviews each push on
+    // its own, so the flow waits before asking.
     assert_eq!(
         run(now)[0].next.as_ref().unwrap().step,
-        Step::QueueReview("reviewer".into())
+        Step::Wait {
+            until: Some(now + 1800)
+        }
     );
+    assert_eq!(c.hub.count(Call::FlowComment), 0);
     assert_eq!(c.hub.count(Call::Land), 0);
-    c.run_worker();
-    assert_eq!(
-        run(now + 1)[0].next.as_ref().unwrap().step,
-        Step::PostReview("reviewer".into())
-    );
-    assert_eq!(
-        run(now + 2)[0].next.as_ref().unwrap().step,
-        Step::HandFix(Kind::Findings)
-    );
-    assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(3));
+    // No review came: the flow asks the connector for one on the PR, and
+    // remembers it asked only once GitHub took the comment.
     assert!(matches!(
-        run(now + 3)[0].next.as_ref().unwrap().step,
-        Step::Wait { .. }
+        run(now + 1800)[0].next.as_ref().unwrap().step,
+        Step::AskReview(_)
     ));
-    c.run_worker();
-    assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(4));
-    // The fix's answer goes up on its finding's target before another look.
-    assert_eq!(
-        run(now + 4)[0].next.as_ref().unwrap().step,
-        Step::PostFix("3-2".into())
-    );
-    run(now + 5);
-    run(now + 6);
-    c.run_worker();
-    run(now + 7);
-    let result = run(now + 8);
+    let asks: Vec<_> = c
+        .hub
+        .comments(REPO, 3)
+        .unwrap()
+        .into_iter()
+        .filter_map(|c| c.body)
+        .filter(|b| b.starts_with("@codex review\n\n"))
+        .collect();
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(c.record().memory.asked, Some((head(3), now + 1800)));
+    assert_eq!(c.hub.count(Call::Land), 0);
+    // The connector reviews the head clean, with its producer's receipt.
+    c.clean_review();
+    let result = run(now + 1801);
     assert_eq!(result[0].error, None);
     assert_eq!(
         result[0].next.as_ref().unwrap().step,
@@ -87,11 +86,11 @@ fn lifecycle(train: bool) {
 }
 
 #[test]
-fn pass_lifecycle_collects_a_fix_after_its_starting_pass() {
+fn pass_lifecycle_asks_for_a_review_then_merges_once_it_is_clean() {
     lifecycle(false);
 }
 #[test]
-fn pass_lifecycle_joins_a_train_after_review_fix_and_green_ci() {
+fn pass_lifecycle_joins_a_train_after_an_asked_review_and_green_ci() {
     lifecycle(true);
 }
 
@@ -124,7 +123,7 @@ fn pass_dry_run_writes_nothing_and_prints_one_complete_line_per_pr() {
     for call in [
         Call::FlowStatus,
         Call::FlowStage,
-        Call::FlowReview,
+        Call::FlowComment,
         Call::Land,
         Call::Mark,
         Call::FlowOwner,
@@ -136,11 +135,20 @@ fn pass_dry_run_writes_nothing_and_prints_one_complete_line_per_pr() {
 #[test]
 fn pass_without_plugin_waits_with_reason() {
     let mut c = Case::new();
-    c.config.plugins.review = None;
+    // A judge is owed (the head's engine may not judge it), and no judge
+    // plugin is configured.
+    c.config.settings.judge_engines = ["fixture-author".into()].into();
+    c.clean_review();
+    c.hub.commit_details(
+        &head(3),
+        Some("change: fixture\n\nEngine: fixture-author\nSession: author\n"),
+        Some("owner@example.org"),
+        Some("owner@example.org"),
+    );
     let report = c.pass(flow::jobs::now(), false);
     let next = report[0].next.as_ref().unwrap();
     assert_eq!(next.step, Step::Wait { until: None });
-    assert_eq!(next.description, "No plugin configured for review");
+    assert_eq!(next.description, "No plugin configured for judge");
     assert!(c.record().jobs.is_empty());
 }
 #[test]
@@ -167,35 +175,6 @@ fn pass_refused_settled_write_never_merges_and_third_strike_is_overdue() {
     c.pass(now + 20000, false);
     assert_eq!(c.hub.count(Call::Land), 1);
 }
-#[test]
-fn pass_refuses_the_heads_own_plugin_as_reviewer() {
-    let c = Case::new();
-    c.hub.commit_details(
-        &head(3),
-        Some("change: fixture\n\nEngine: conary-example\nSession: forged-independent-session\n"),
-        Some("owner@example.org"),
-        Some("owner@example.org"),
-    );
-    let now = flow::jobs::now();
-    c.pass(now, false);
-    c.run_worker();
-    let record = c.record();
-    let answer: flow::jobs::Completion = serde_json::from_slice(
-        &std::fs::read(record.jobs[0].path.with_extension("answer")).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        answer
-            .result
-            .unwrap()
-            .unwrap_err()
-            .contains("author cannot grade")
-    );
-    c.pass(now + 1, false);
-    assert_eq!(c.hub.count(Call::FlowReview), 0);
-    assert_eq!(c.hub.count(Call::Land), 0);
-}
-
 #[test]
 fn pass_merges_only_after_observing_settled_permission() {
     let c = Case::new();
@@ -281,10 +260,23 @@ fn pass_rejects_a_revision_that_moves_before_execution() {
 fn pass_worker_has_a_deadline_even_when_it_was_never_launched() {
     let mut c = Case::new();
     c.config.settings.job_timeout = 1;
+    // A judge is owed: its job is started and never answers.
+    c.config.plugins.judge = Some(example());
+    c.config.settings.judge_engines = ["fixture-author".into()].into();
+    c.clean_review();
+    c.hub.commit_details(
+        &head(3),
+        Some("change: fixture\n\nEngine: fixture-author\nSession: author\n"),
+        Some("owner@example.org"),
+        Some("owner@example.org"),
+    );
     let now = flow::jobs::now();
-    c.pass(now, false);
+    assert_eq!(
+        c.pass(now, false)[0].next.as_ref().unwrap().step,
+        Step::Judge(vec![Trigger::AuthorEngine])
+    );
     let results = c.pass(now + 2, false);
-    assert_eq!(c.hub.count(Call::FlowReview), 0);
+    assert_eq!(c.hub.count(Call::Land), 0);
     assert!(matches!(
         results[0].next.as_ref().unwrap().step,
         Step::Wait { .. }
@@ -366,8 +358,12 @@ fn pass_memory_roundtrips_nonempty_composite_keys() {
     );
     record
         .memory
-        .review_posts
-        .insert(("reviewer".into(), revision.clone(), 20), 2);
+        .major_issuance
+        .insert(revision.clone(), (20, None));
+    record
+        .memory
+        .push_looks
+        .insert(("3-1".into(), revision.head.clone()), (2, 30));
     record
         .memory
         .unanswered
@@ -391,21 +387,36 @@ fn pass_releases_the_repository_lock_with_an_inherited_descriptor() {
 }
 
 #[test]
-fn pass_reconciles_a_review_post_whose_answer_was_lost() {
+fn pass_an_ask_that_failed_is_not_remembered_and_is_asked_again() {
     let c = Case::new();
     let now = flow::jobs::now();
     c.pass(now, false);
-    c.run_worker();
-    c.hub.lose(Call::FlowReview);
-    assert!(c.pass(now + 1, false)[0].error.is_some());
-    assert_eq!(c.hub.count(Call::FlowReview), 1);
-    c.hub.heal(Call::FlowReview);
-    let report = c.pass(now + 2, false);
-    assert_eq!(report[0].error, None);
-    assert_eq!(
-        c.hub.count(Call::FlowReview),
-        1,
-        "the same producer answer is posted once"
-    );
-    assert!(c.record().jobs[0].posted);
+    c.hub.fail(Call::FlowComment);
+    let report = c.pass(now + 1800, false);
+    assert!(matches!(
+        report[0].next.as_ref().unwrap().step,
+        Step::AskReview(_)
+    ));
+    assert!(report[0].error.is_some());
+    // Nothing went up, so nothing was asked: the next pass asks again
+    // rather than waiting an hour on an ask the connector never saw.
+    assert_eq!(c.record().memory.asked, None);
+    assert!(c.hub.comments(REPO, 3).unwrap().is_empty());
+    c.hub.heal(Call::FlowComment);
+    let mut t = now + 1800;
+    while c.record().memory.asked.is_none() {
+        t += 600;
+        assert!(t < now + 3600, "never asked again");
+        c.pass(t, false);
+    }
+    assert_eq!(c.record().memory.asked, Some((head(3), t)));
+    let asks = c
+        .hub
+        .comments(REPO, 3)
+        .unwrap()
+        .into_iter()
+        .filter_map(|c| c.body)
+        .filter(|b| b.starts_with("@codex review\n\n"))
+        .count();
+    assert_eq!(asks, 1);
 }

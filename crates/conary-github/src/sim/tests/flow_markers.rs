@@ -265,7 +265,7 @@ fn a_seal_from_another_head_base_description_or_pr_is_not_reused() {
             _ => unreachable!(),
         }
         h.refresh_flow(REMI, 3);
-        h.flow_review(REMI, 3, "reviewer", Verdict::Clean, 1);
+        h.flow_review(REMI, 3, Verdict::Clean, 1);
         let p = h.pull(REMI, 3).unwrap();
         h.ci(&p.head.sha, &[("check", "success")]);
         h.commit_details(

@@ -1,330 +1,154 @@
-//! The review part of step.py/review_step.py. Findings survive outages;
-//! answered findings request a fresh look until the cap, then a judge.
+//! The reviewer's part of a PR's step, as burrow's steward takes it
+//! (review_step.py, and the review part of step.py): what the reviewer said
+//! of the head ([`super::reviews`]) and what that leaves the PR waiting on.
+//! The reviewer reviews each push on its own; the flow only asks it to look
+//! again when a look is owed that no push will bring.
 use super::decide::{self, Decision};
 use super::*;
 
+/// A push the reviewer hasn't begun on after this long is asked for, and
+/// after [`LOST`] the owner hears of it: it reviews each push within
+/// minutes when its usage lasts.
+pub(super) const QUIET: u64 = 30 * 60;
+/// See [`QUIET`].
+pub(super) const LOST: u64 = 120 * 60;
+/// One head is asked for at most this often.
+const AGAIN: u64 = 3600;
+
+/// What's said when the flow asks for a look at a head no push brings one to.
+pub(super) const ANSWERED: &str = "Every finding is answered; this head has no push to review.";
+
 pub(super) enum Look {
     Next(Decision),
-    Settled { capped: bool },
+    /// The reviewers are done with this head. `capped`: past the round
+    /// limit without being clean. `changed`: clean, but the PR was
+    /// retargeted or edited after its push, which their word can't cover.
+    Settled {
+        capped: bool,
+        changed: bool,
+    },
 }
+
 fn wait(stage: Stage, until: Option<u64>, why: &str) -> Look {
     Look::Next(decide::wait(stage, until, why))
 }
-fn at(stage: Stage, step: Step, why: &str) -> Look {
-    Look::Next(decide::at(stage, step, why))
-}
 
-fn current<'a>(r: &'a Reviewer, revision: &Revision) -> Option<&'a Review> {
-    r.review.as_ref().filter(|v| &v.revision == revision)
+/// Ask the reviewer to look at the head, unless it was asked for this head
+/// within the hour; then wait for that hour to pass.
+fn ask(f: &Facts, m: &Memory, now: u64, why: &str, description: &str) -> Look {
+    match &m.asked {
+        Some((head, at)) if head == &f.revision.head && now < at.saturating_add(AGAIN) => {
+            wait(Stage::Review, Some(at.saturating_add(AGAIN)), description)
+        }
+        _ => Look::Next(decide::at(
+            Stage::Review,
+            Step::AskReview(why.into()),
+            description,
+        )),
+    }
 }
 
 pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) -> Look {
-    for (name, bases) in &mut m.lost_on {
-        let observed = now.max(
-            f.reviewers
-                .get(name)
-                .and_then(|r| r.review.as_ref())
-                .map_or(0, |r| r.at),
-        );
-        for loss in bases.values_mut() {
-            loss.observe(observed);
-        }
-    }
-    for (name, r) in &f.reviewers {
-        let loss = m
-            .lost_on
-            .get(name)
-            .and_then(|bases| bases.get(&f.revision.base));
-        let covered = current(r, &f.revision).is_some_and(|v| {
-            v.verdict == Verdict::Clean
-                && loss.is_some_and(|loss| {
-                    let original = match loss {
-                        LostReview::Findings { revision, .. } => Some(revision),
-                        LostReview::Legacy { .. } => None,
-                    };
-                    loss.after()
-                        .is_some_and(|after| covers(r, &f.revision, original, after))
-                })
-        });
-        if covered {
-            if let Some(bases) = m.lost_on.get_mut(name) {
-                bases.remove(&f.revision.base);
-            }
-            if m.lost_on.get(name).is_some_and(|bases| bases.is_empty()) {
-                m.lost_on.remove(name);
-            }
-        }
-        if let Some(id) = r.record_id {
-            m.latest_reviews.insert(name.clone(), id);
-        }
-    }
-    let needs_review = f.classified.review() && request_review;
-    let working = |r: &Reviewer| {
-        r.under_way
-            .as_ref()
-            .is_some_and(|r| r.base == f.revision.base)
-    };
-    let available = |r: &Reviewer| r.unavailable_until.is_none_or(|t| t <= now);
-    let lost = |name: &str| m.lost_on.get(name).and_then(|s| s.get(&f.revision.base));
-    let on: Vec<_> = f
-        .reviewers
-        .iter()
-        .filter(|(name, r)| {
-            available(r)
-                || (current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean)
-                    && lost(name).is_none())
-        })
-        .collect();
-    let clean = !on.is_empty()
-        && on.iter().all(|(name, r)| {
-            current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean)
-                && lost(name).is_none()
-        });
     let rounds = f.reviewers.values().map(|r| r.rounds).max().unwrap_or(0);
-    let capped = needs_review && !clean && rounds >= f.settings.rounds;
-    // Consume obsolete service answers in memory, without pretending that
-    // a GitHub write succeeded. Posting remains an explicit intention.
-    for (name, r) in &f.reviewers {
-        if let Some(answer) = &r.answer {
-            let key = (name.clone(), answer.revision.clone(), answer.at);
-            if m.consumed_reviews.contains(&key) {
-                continue;
-            }
-            let tries = m.review_posts.get(&key).copied().unwrap_or(0);
-            if tries >= 3 {
-                let covered = covers_answer(r, &f.revision, answer);
-                if covered || available(r) && answer.revision.head == f.revision.head {
-                    if !covered && answer.verdict == Verdict::Findings {
-                        remember_loss(
-                            m,
-                            name,
-                            answer,
-                            now.max(r.review.as_ref().map_or(0, |v| v.at)),
-                        );
-                    }
-                    m.consumed_reviews.insert(key);
-                    continue;
-                }
-            }
-            if answer.revision.base != f.revision.base {
-                if answer.verdict == Verdict::Findings {
-                    remember_loss(
-                        m,
-                        name,
-                        answer,
-                        now.max(r.review.as_ref().map_or(0, |v| v.at)),
+    let mut clean = !f.reviewers.is_empty()
+        && f.reviewers
+            .values()
+            .all(|r| r.verdict == Some(Verdict::Clean));
+    // Past the limit the flow stops waiting on the reviewers: a fix job
+    // settles what's left on its merits, and a judge decides whether it
+    // lands. The reviewer still reviews each push; it just isn't waited for.
+    let mut capped = rounds >= f.settings.rounds && !clean;
+    // Documentation alone that isn't R2 needs green CI and no review round.
+    let unreviewed = !clean && !(f.classified.review() && request_review);
+    if unreviewed {
+        (clean, capped) = (true, false);
+    }
+    let what = f.open_threads > 0 || f.changes_requested;
+    let age = now.saturating_sub(m.seen);
+    let waiting: Vec<_> = if clean || capped {
+        Vec::new()
+    } else {
+        f.reviewers
+            .iter()
+            .filter(|(_, r)| !matches!(r.verdict, Some(Verdict::Clean | Verdict::Findings)))
+            .collect()
+    };
+    if !waiting.is_empty() || f.reviewers.is_empty() && !unreviewed {
+        // One reviewer's threads needn't wait for another to finish.
+        if what {
+            return Look::Next(decide::hand(f, m, now, Kind::Findings, true));
+        }
+        if f.reviewers.is_empty() {
+            return wait(Stage::Review, None, "No reviewer can review it");
+        }
+        for (name, r) in &waiting {
+            if r.verdict.is_none() {
+                // With no account to read its word from, asking would
+                // start a review nothing can count.
+                if f.settings.review_authors.is_empty() {
+                    return wait(
+                        Stage::Review,
+                        None,
+                        "No review author is set to read its review from",
                     );
                 }
-                m.consumed_reviews.insert(key);
-                continue;
-            }
-            if answer.revision.head == f.revision.head || capped || !available(r) || !needs_review {
-                return at(
+                let description = format!("Waiting for {name}'s review of this commit");
+                if age >= QUIET {
+                    let head = &f.revision.head;
+                    let why = format!(
+                        "No review of {} came after its push.",
+                        &head[..head.len().min(7)]
+                    );
+                    return ask(f, m, now, &why, &description);
+                }
+                return wait(
                     Stage::Review,
-                    Step::PostReview(name.clone()),
-                    "Posting the review that came back",
+                    Some(m.seen.saturating_add(QUIET)),
+                    &description,
                 );
             }
-            // A look at the current head follows: old findings could have
-            // been fixed by its push and must not raise another round.
-            if answer.verdict == Verdict::Findings && !covers_answer(r, &f.revision, answer) {
-                remember_loss(
-                    m,
-                    name,
-                    answer,
-                    now.max(r.review.as_ref().map_or(0, |v| v.at)),
-                );
-            }
-            m.consumed_reviews.insert(key);
         }
+        let (name, _) = waiting[0];
+        return wait(
+            Stage::Review,
+            None,
+            &format!("{name} is reviewing this commit"),
+        );
     }
-    let findings = f.open_threads > 0
-        || f.changes_requested
-        || f.reviewers.values().any(|r| {
-            current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Findings)
-                && !r.findings_answered
-        });
-    if findings {
+    if what && capped {
         let mut decision = decide::hand(f, m, now, Kind::Findings, true);
-        if capped {
-            decision.2 = format!("Past the review-round limit ({rounds}): {}", decision.2);
-        }
+        decision.2 = format!("Past the review-round limit ({rounds}): {}", decision.2);
         return Look::Next(decision);
     }
-    let mut coverage = 0;
-    for (name, r) in &f.reviewers {
-        let loss = m.lost_on.get(name).and_then(|s| s.get(&f.revision.base));
-        if current(r, &f.revision).is_some_and(|v| v.verdict == Verdict::Clean) && loss.is_none() {
-            coverage += 1;
-            continue;
-        }
-        if !available(r) {
-            if working(r) {
-                return wait(
-                    Stage::Review,
-                    r.unavailable_until,
-                    "A reviewer out of service is still reviewing it",
-                );
-            }
-            if loss.is_some() || capped && r.queued {
-                return wait(
-                    Stage::Reviewer,
-                    r.unavailable_until,
-                    "A reviewer out of service still owes it findings",
-                );
-            }
-            continue;
-        }
-        coverage += 1;
-        if capped && (r.queued || working(r)) {
-            return wait(
-                Stage::Review,
-                None,
-                "Past the round limit; a queued review is still owed",
-            );
-        }
-        let wanted = loss.is_some() || needs_review && !capped;
-        if wanted {
-            let key = (name.clone(), f.revision.clone());
-            if r.missing {
-                let (since, failed) = m.missing_reviews.entry(key.clone()).or_insert((now, false));
-                if now == *since {
-                    return wait(
-                        Stage::Review,
-                        Some(now.saturating_add(60)),
-                        "A queued review disappeared; read its answer once more",
-                    );
-                }
-                if !*failed {
-                    *failed = true;
-                    let failure = m.review_failures.entry(key.clone()).or_insert((0, 0));
-                    failure.0 = failure.0.saturating_add(1);
-                    failure.1 = now;
-                }
-            }
-            if let Some((count, at)) = m.review_failures.get_mut(&key) {
-                if *count >= 3 {
-                    if now <= at.saturating_add(3600) {
-                        return wait(
-                            Stage::Review,
-                            Some(at.saturating_add(3601)),
-                            "Repeated review failures; try again an hour after the last",
-                        );
-                    }
-                    *count = 0;
-                }
-                if *count > 0 && now < at.saturating_add(300) {
-                    return wait(
-                        Stage::Review,
-                        Some(at.saturating_add(300)),
-                        "Review failed; allow five minutes before another try",
-                    );
-                }
-            }
-            if let Some(at) = r.queue_failed_at.filter(|at| now < at.saturating_add(300)) {
-                return wait(
-                    Stage::Review,
-                    Some(at.saturating_add(300)),
-                    "Could not queue the review; try again in five minutes",
-                );
-            }
-            let quiet = m.seen.saturating_add(f.settings.settle_delay);
-            let answered = current(r, &f.revision)
-                .filter(|v| v.verdict == Verdict::Findings && r.findings_answered)
-                .map(|v| {
-                    v.at.saturating_add(f.settings.settle_delay)
-                        .saturating_add(1)
-                })
-                .unwrap_or(0);
-            let due = quiet.max(answered);
-            if now < due {
-                return wait(
-                    Stage::Review,
-                    Some(due),
-                    "Waiting for the head or answered findings to settle before review",
-                );
-            }
-            return if r.queued || working(r) {
-                wait(Stage::Review, None, "Reviewing this commit")
-            } else if f.settings.review_authors.is_empty() {
-                wait(
-                    Stage::Reviewer,
-                    None,
-                    "No review author is set to post its review",
-                )
-            } else {
-                at(
-                    Stage::Review,
-                    Step::QueueReview(name.clone()),
-                    "Queue a review of this commit",
-                )
-            };
-        }
+    if what {
+        return Look::Next(decide::hand(f, m, now, Kind::Findings, true));
     }
-    if needs_review && coverage == 0 && !capped {
-        let until = f
-            .reviewers
-            .values()
-            .filter_map(|r| r.unavailable_until)
-            .filter(|t| *t > now)
-            .min();
-        return wait(
-            if f.reviewers.is_empty() {
-                Stage::Review
-            } else {
-                Stage::Reviewer
-            },
-            until,
-            "No reviewer can review it now",
-        );
+    if !clean && !capped {
+        // Every finding answered without a new commit: the reviewers that
+        // had findings look again, once their answers have settled.
+        let description = format!("Findings answered; review round {} next", rounds + 1);
+        let mut until = None;
+        for r in f.reviewers.values() {
+            if r.verdict == Some(Verdict::Findings) {
+                let due = r.at.saturating_add(f.settings.settle_delay);
+                if now > due {
+                    return ask(f, m, now, ANSWERED, &description);
+                }
+                until = Some(until.map_or(due + 1, |u: u64| u.min(due + 1)));
+            }
+        }
+        return wait(Stage::Review, until, &description);
     }
-    Look::Settled { capped }
+    Look::Settled {
+        capped,
+        changed: clean && !unreviewed && f.reviewers.values().any(|r| r.changed),
+    }
 }
 
-fn covers(
-    reviewer: &Reviewer,
-    revision: &Revision,
-    original: Option<&Revision>,
-    after: u64,
-) -> bool {
-    current(reviewer, revision).is_some_and(|clean| {
-        clean.verdict == Verdict::Clean
-            && clean.at > after
-            && reviewer.reviewed_head.as_deref().is_some_and(|head| {
-                head == revision.head
-                    || original.is_some_and(|original| {
-                        head == original.head
-                            && clean.revision.base == original.base
-                            && clean.revision.description == original.description
-                    })
-            })
-    })
-}
-fn covers_answer(reviewer: &Reviewer, revision: &Revision, answer: &Review) -> bool {
-    answer.at != 0
-        && answer.revision.base == revision.base
-        && covers(reviewer, revision, Some(&answer.revision), answer.at)
-}
-fn remember_loss(memory: &mut Memory, role: &str, answer: &Review, observed: u64) {
-    let incoming = LostReview::findings(answer, observed);
-    memory
-        .lost_on
-        .entry(role.into())
-        .or_default()
-        .entry(answer.revision.base.clone())
-        .and_modify(|loss| {
-            let same_scope = matches!((&*loss,&incoming),
-                (LostReview::Findings{revision:a,..},LostReview::Findings{revision:b,..}) if a==b);
-            if same_scope {
-                if incoming.after() > loss.after() {
-                    *loss = incoming.clone();
-                }
-            } else {
-                *loss = LostReview::Legacy {
-                    head: loss.head().into(),
-                    after: loss.after().max(incoming.after()),
-                };
-            }
-        })
-        .or_insert(incoming);
+/// Whether the owner should hear that no review came: one of the reviewers
+/// has said nothing of a head the flow first saw [`LOST`] ago.
+pub(super) fn overdue(f: &Facts, m: &Memory, now: u64) -> bool {
+    f.classified.review()
+        && now.saturating_sub(m.seen) >= LOST
+        && f.reviewers.values().any(|r| r.verdict.is_none())
 }

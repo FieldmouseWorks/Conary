@@ -52,7 +52,6 @@ pub struct Record {
     pub decision: Option<Next>,
     pub jobs: Vec<super::jobs::Work>,
     pub failed: Option<Failure>,
-    pub failed_review: Option<FailedPost>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
 }

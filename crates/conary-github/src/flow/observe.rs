@@ -73,32 +73,6 @@ fn hydrate_with(
             Some(Err(_)) => JobState::Broken,
         };
         match &work.purpose {
-            Purpose::Review(role) => {
-                let reviewer = f.reviewers.entry(role.clone()).or_default();
-                if work.posted {
-                    continue;
-                }
-                if completion.result.is_none() {
-                    reviewer.queued = true;
-                    reviewer.under_way = Some(job.revision);
-                } else if let Some(Ok(plugin::Response {
-                    answer: plugin::Answer::Review { findings },
-                    ..
-                })) = &completion.result
-                {
-                    reviewer.answer = Some(Review {
-                        revision: job.revision,
-                        at: completion.at,
-                        verdict: if findings.is_empty() {
-                            Verdict::Clean
-                        } else {
-                            Verdict::Findings
-                        },
-                    });
-                } else if job.revision == f.revision {
-                    reviewer.failed_at = Some(completion.at);
-                }
-            }
             Purpose::Fix(kind) => {
                 let answer = match &completion.result {
                     Some(Ok(plugin::Response {

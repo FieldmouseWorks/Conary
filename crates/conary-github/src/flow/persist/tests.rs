@@ -28,8 +28,24 @@ fn canonical_record() -> Value {
     // A decision saved before it carried its priority level reads as the
     // default level's.
     value["decision"]["priority"] = json!("medium");
+    // What the flow kept when it ran its own review service loads and is
+    // dropped: the reviewer is Codex's GitHub connector now.
+    for field in DROPPED_MEMORY {
+        value["memory"].as_object_mut().unwrap().remove(field);
+    }
+    value.as_object_mut().unwrap().remove("failed_review");
     value
 }
+
+/// Memory the flow's own review service kept, which the fixture still holds.
+const DROPPED_MEMORY: [&str; 6] = [
+    "latest_reviews",
+    "consumed_reviews",
+    "review_posts",
+    "review_failures",
+    "missing_reviews",
+    "lost_on",
+];
 
 fn fixture() -> (tempfile::TempDir, conary_core::op::Repo, Data) {
     let root = tempfile::tempdir().unwrap();
@@ -43,6 +59,12 @@ fn fixture() -> (tempfile::TempDir, conary_core::op::Repo, Data) {
 fn base_records_migrate_without_resetting_state() {
     let (root, repo, data) = fixture();
     let expected = canonical_record();
+    // The fixture still holds the review service's state, which must load.
+    let base: Value = serde_json::from_str(BASE_RECORD).unwrap();
+    for field in DROPPED_MEMORY {
+        assert!(base["memory"].get(field).is_some(), "{field}");
+    }
+    assert!(base.get("failed_review").is_some());
     for record in [
         data.load(3).unwrap(),
         Data::read(root.path(), &repo, 3).unwrap(),

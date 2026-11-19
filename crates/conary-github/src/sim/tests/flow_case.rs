@@ -1,28 +1,16 @@
 //! Scenario setup separates GitHub state from local service observations.
-//! Every decision reads the Hub afresh. Only jobs, service availability and
-//! machine proof observations are added afterwards: GitHub cannot give them.
+//! Every decision reads the Hub afresh. Only jobs and machine proof
+//! observations are added afterwards: GitHub cannot give them.
 use crate::api::Source;
 use crate::flow::*;
-use crate::sim::{Hub, REMI};
+use crate::sim::{CONNECTOR, Hub, REMI};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-#[derive(Default, Clone)]
-pub(super) struct Service {
-    pub queued: bool,
-    pub unavailable_until: Option<u64>,
-    pub answer: Option<Review>,
-    pub under_way: bool,
-    pub under_way_on: Option<Revision>,
-    pub failed_at: Option<u64>,
-    pub queue_failed_at: Option<u64>,
-    pub missing: bool,
-}
 pub(super) struct Case {
     pub hub: Hub,
     pub memory: Memory,
     pub settings: Settings,
-    pub services: BTreeMap<String, Service>,
     pub jobs: BTreeMap<Kind, Job>,
     pub claims: Vec<FixClaim>,
     pub stopped_jobs: std::collections::BTreeSet<String>,
@@ -32,8 +20,6 @@ pub(super) struct Case {
     /// for cases about what follows it.
     pub readiness: Option<Readiness>,
     pub failed: Option<Failure>,
-    pub failed_review: Option<String>,
-    pub review_unavailable: bool,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub base_held: bool,
     pub train: TrainState,
@@ -48,7 +34,6 @@ impl Case {
             hub,
             memory,
             settings: crate::sim::settings(),
-            services: BTreeMap::new(),
             jobs: BTreeMap::new(),
             claims: Vec::new(),
             stopped_jobs: Default::default(),
@@ -56,8 +41,6 @@ impl Case {
             proof_data: ProofData::default(),
             readiness: None,
             failed: None,
-            failed_review: None,
-            review_unavailable: false,
             succeeded: Default::default(),
             base_held: false,
             train: TrainState::default(),
@@ -71,10 +54,10 @@ impl Case {
     }
     pub fn review(&mut self, role: &str, verdict: Verdict, at: u64) {
         self.settings.reviewers.insert(role.into());
-        self.hub.flow_review(REMI, 3, role, verdict, at);
+        self.hub.flow_review(REMI, 3, verdict, at);
     }
-    pub fn answered(&self, role: &str) {
-        self.hub.resolve_flow_findings(REMI, 3, role);
+    pub fn answered(&self) {
+        self.hub.resolve_flow_findings(REMI, 3);
     }
     pub fn threads(&self, count: u32) {
         self.hub.edit_flow(REMI, 3, |s| s.open_threads = count);
@@ -148,12 +131,21 @@ impl Case {
             .unwrap()
         });
     }
+    /// The PR's comments but the connector's: each case's sealed issuances
+    /// count from one, however many reviews the connector summed up.
+    fn issued(&self) -> u64 {
+        let comments = self.hub.comments(REMI, 3).unwrap();
+        comments
+            .iter()
+            .filter(|c| c.user.as_ref().is_none_or(|u| u.login != CONNECTOR))
+            .count() as u64
+    }
     /// Post a sealed judgment at the next generation.
     fn issue(&mut self, seal: impl FnOnce(&SealKey, &Revision, u64) -> String) {
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         self.settings.judge_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
-        let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
+        let generation = self.issued() + 1;
         let marker = seal(&key, &self.scope(), generation);
         self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
@@ -161,7 +153,7 @@ impl Case {
         let key = SealKey::from_hex(&"b".repeat(64)).unwrap();
         self.settings.major_key = Some(key.clone());
         self.settings.verdict_authors.insert("owner".into());
-        let generation = self.hub.comments(REMI, 3).unwrap().len() as u64 + 1;
+        let generation = self.issued() + 1;
         let marker = key.decision(REMI, 3, "major-verdict", verdict, &self.scope(), generation);
         self.hub.flow_comment(REMI, 3, "owner", &marker);
     }
@@ -190,27 +182,10 @@ impl Case {
         let h = self.hub.head_of(REMI, 3);
         self.hub.ci(&h, &[("check", conclusion)]);
     }
-    pub fn service(&mut self, name: &str) -> &mut Service {
-        self.services.entry(name.into()).or_default()
-    }
     pub fn facts(&self) -> Facts {
         let mut f=read(&self.hub,&REMI.parse().unwrap(),3,
             &conary_core::Policy::parse(br#"{"r2":["^secrets/","(^|/)CODEOWNERS$"],"docs":["^docs/","^README.md$"],"notDocs":["^docs/DESIGN.md$"],"hidden":["^hidden/"]}"#).unwrap(),
             self.settings.clone(),&["owner".into()]).unwrap();
-        for (name, s) in &self.services {
-            if let Some(r) = f.reviewers.get_mut(name) {
-                r.queued = s.queued;
-                r.unavailable_until = s.unavailable_until;
-                r.answer = s.answer.clone();
-                r.under_way = s
-                    .under_way_on
-                    .clone()
-                    .or_else(|| s.under_way.then(|| f.revision.clone()));
-                r.failed_at = s.failed_at;
-                r.queue_failed_at = s.queue_failed_at;
-                r.missing = s.missing;
-            }
-        }
         f.judge_requests = self.judge_requests.clone();
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
@@ -234,10 +209,6 @@ impl Case {
             f.proof = p.clone();
         }
         f.failed = self.failed;
-        f.failed_review = self.failed_review.as_ref().map(|role| FailedPost {
-            role: role.clone(),
-            unavailable: self.review_unavailable,
-        });
         f.succeeded = self.succeeded.clone();
         f.base_held |= self.base_held;
         f.train = self.train.clone();

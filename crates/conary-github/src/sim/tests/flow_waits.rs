@@ -3,17 +3,12 @@ use crate::flow::*;
 use crate::sim::REMI;
 use serde_json::json;
 #[test]
-fn reviewer_recovery_and_quiet_wakeups_do_not_extend_the_stall_deadline() {
+fn quiet_wakeups_do_not_extend_the_stall_deadline() {
     // watched.py:67 / 86: wait deadlines follow phase/revision, not scheduled rechecks.
     let mut c = Case::new();
-    c.roles(&["reviewer", "covering"]);
-    c.review("covering", Verdict::Clean, 600);
-    c.memory.lost_on.insert(
-        "reviewer".into(),
-        std::collections::BTreeMap::from([("main".into(), c.scope().head.into())]),
-    );
-    c.service("reviewer").unavailable_until = Some(86400);
+    c.roles(&["reviewer"]);
     let n = c.pass(700);
+    assert_eq!(n.step, Step::Wait { until: Some(1800) });
     assert_eq!(n.overdue_at, Some(7900));
     assert_eq!(n.wait_on, Some(WaitOn::Steward));
     assert_eq!(c.pass(800).overdue_at, n.overdue_at);
@@ -108,21 +103,12 @@ fn an_old_pending_pr_is_listed_but_held_draft_and_swept_prs_are_not() {
     assert_eq!(c.view(86403).owner_notice, None);
 }
 #[test]
-fn unavailable_and_repeatedly_failing_reviewers_are_listed_without_watching_them() {
-    // watched.py:67 / passes.py:119: listed PRs are removed from watchdog waits.
+fn a_head_no_review_came_for_is_listed_without_watching_it() {
+    // watched.py:67: listed PRs are removed from watchdog waits.
     let mut c = Case::new();
     c.roles(&["reviewer"]);
-    c.service("reviewer").unavailable_until = Some(86400);
-    let n = c.view(700);
+    let n = c.view(7200);
     assert_eq!(n.owner_notice, Some(OwnerNotice::NoReviewer));
-    assert_eq!(n.overdue_at, None);
-    c.service("reviewer").unavailable_until = None;
-    for at in [500, 600, 650] {
-        c.service("reviewer").failed_at = Some(at);
-        c.pass(at);
-    }
-    let n = c.view(800);
-    assert_eq!(n.owner_notice, Some(OwnerNotice::ReviewFailures));
     assert_eq!(n.overdue_at, None);
 }
 

@@ -10,13 +10,15 @@ use std::collections::BTreeMap;
 
 const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
-  headRefOid baseRefName title body isDraft mergeStateStatus updatedAt
+  headRefOid baseRefName title body isDraft mergeStateStatus updatedAt lastEditedAt
   labels(first:100) { pageInfo { hasNextPage } }
   reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:100) { pageInfo { hasNextPage } nodes { author { login } body pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
+  retargets: timelineItems(last:1,itemTypes:[BASE_REF_CHANGED_EVENT]) { nodes { ... on BaseRefChangedEvent { createdAt } } }
+  renames: timelineItems(last:1,itemTypes:[RENAMED_TITLE_EVENT]) { nodes { ... on RenamedTitleEvent { createdAt } } }
   commits(last:1) { nodes { commit { oid checkSuites(first:100) {
-   pageInfo { hasNextPage } nodes { databaseId status conclusion app { slug }
+   pageInfo { hasNextPage } nodes { databaseId createdAt status conclusion app { slug }
     workflowRun { file { path } workflow { id name } }
    }
   } } } }
@@ -81,12 +83,25 @@ struct Pull {
     is_draft: bool,
     merge_state_status: String,
     updated_at: String,
+    last_edited_at: Option<String>,
     labels: Paged,
     review_threads: Threads,
     reviews: Count,
     comments: Count,
     commits: Commits,
     timeline_items: Timeline,
+    retargets: Retargets,
+    renames: Retargets,
+}
+#[derive(Deserialize)]
+/// The last timeline event of one kind, when it happened.
+struct Retargets {
+    nodes: Vec<Retarget>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Retarget {
+    created_at: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +177,7 @@ struct Suites {
 #[serde(rename_all = "camelCase")]
 struct SuiteNode {
     database_id: u64,
+    created_at: String,
     status: String,
     conclusion: Option<String>,
     app: Option<App>,
@@ -230,9 +246,6 @@ impl Read for Api {
         Ok(result)
     }
 
-    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError> {
-        Api::carries(self, repo, base, head, old)
-    }
     fn snapshot(&self, repo: &str, number: u64) -> Result<Snapshot, ApiError> {
         let (owner, name) = repo
             .split_once('/')
@@ -274,12 +287,18 @@ impl Read for Api {
             .ok_or_else(|| ApiError::new("GitHub did not return the PR snapshot"))?;
         let mut suites = BTreeMap::new();
         let mut checks_complete = true;
+        // When GitHub got the head, as near as it says: the earliest check
+        // suite on it, each App that checks the repo getting one as the
+        // push comes in. A commit's own dates say when it was made.
+        let mut pushed: Option<u64> = None;
         for node in p.commits.nodes {
             if node.commit.oid != p.head_ref_oid {
                 return Err(ApiError::new("PR moved within its GraphQL snapshot"));
             }
             checks_complete &= !node.commit.check_suites.page_info.has_next_page;
             for s in node.commit.check_suites.nodes {
+                let at = crate::flow::reviews::timestamp(&s.created_at)?;
+                pushed = Some(pushed.map_or(at, |p| p.min(at)));
                 suites.insert(
                     s.database_id,
                     Suite {
@@ -378,6 +397,27 @@ impl Read for Api {
                 })
                 .collect(),
             resolved_reviews,
+            since: crate::flow::reviews::Since {
+                // `lastEditedAt` dates only the body's edits; a rename is
+                // its own timeline event, and the title is as much the
+                // claim a review read.
+                edited: p
+                    .last_edited_at
+                    .as_deref()
+                    .into_iter()
+                    .chain(p.renames.nodes.last().map(|r| r.created_at.as_str()))
+                    .map(crate::flow::reviews::timestamp)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .max(),
+                retargeted: p
+                    .retargets
+                    .nodes
+                    .last()
+                    .map(|r| crate::flow::reviews::timestamp(&r.created_at))
+                    .transpose()?,
+                pushed,
+            },
             updated_at: crate::flow::reviews::timestamp(&p.updated_at)?,
             suites,
             checks_complete,

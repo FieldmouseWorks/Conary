@@ -123,63 +123,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             m.handed.insert(*kind, job.revision.clone());
         }
     }
-    for (role, reviewer) in &f.reviewers {
-        if reviewer.record_id.is_some()
-            && reviewer.record_id != m.latest_reviews.get(role).copied()
-            && reviewer
-                .review
-                .as_ref()
-                .is_some_and(|v| v.revision == f.revision)
-            && f.failed_review.as_ref().map(|p| &p.role) != Some(role)
-            && reviewer.failed_at.is_none()
-        {
-            m.review_failures
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-        if let Some(at) = reviewer
-            .failed_at
-            .into_iter()
-            .chain(reviewer.queue_failed_at)
-            .max()
-        {
-            let failure = m
-                .review_failures
-                .entry((role.clone(), f.revision.clone()))
-                .or_insert((0, u64::MAX));
-            if failure.1 != at {
-                failure.0 = failure.0.saturating_add(1);
-                failure.1 = at;
-            }
-        }
-        if reviewer.queued {
-            m.missing_reviews
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-    }
-    if let Some(failed) = &f.failed_review
-        && let Some(answer) = f
-            .reviewers
-            .get(&failed.role)
-            .and_then(|r| r.answer.as_ref())
-    {
-        if !failed.unavailable {
-            let tries = m
-                .review_posts
-                .entry((failed.role.clone(), answer.revision.clone(), answer.at))
-                .or_default();
-            *tries = tries.saturating_add(1);
-            if answer.revision.head == f.revision.head && answer.revision.base == f.revision.base {
-                let failure = m
-                    .review_failures
-                    .entry((failed.role.clone(), f.revision.clone()))
-                    .or_insert((0, 0));
-                failure.0 = failure.0.saturating_add(1);
-                failure.1 = now;
-            }
-        }
-        let strikes = m.strikes.entry(Failure::Post).or_default();
-        *strikes = strikes.saturating_add(1);
-    }
     let decision = super::decide::decide(f, &mut m, now);
     if let Step::StopJob(id) = &decision.1 {
         m.stopping.insert(id.clone());
@@ -206,24 +149,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     };
     let (stage, step, description) = super::train::apply(f, decision);
     let description = description.chars().take(140).collect::<String>();
-    let no_reviewer = f.classified.review()
-        && f.reviewers.values().all(|r| {
-            r.unavailable_until.is_some_and(|until| until > now)
-                && !r
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.revision == f.revision && r.verdict == Verdict::Clean)
-        });
-    let failures = m.review_failures.iter().any(|((role, rev), (count, _))| {
-        rev == &f.revision
-            && *count >= 3
-            && f.reviewers
-                .get(role)
-                .is_some_and(|r| r.unavailable_until.is_none_or(|until| until <= now))
-    });
-    let unposted = m.review_posts.iter().any(|(key, count)| {
-        *count >= 3 && !m.consumed_reviews.contains(key) && f.reviewers.contains_key(&key.0)
-    });
+    let no_reviewer = super::review::overdue(f, &m, now);
     let red = f.checks.iter().any(|c| c.state == Ci::Red);
     let own_conflict = f.merging == Merge::Conflict
         && f.bot_edited == Some(true)
@@ -245,14 +171,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     {
         None
     } else if no_reviewer
-        && matches!(stage, Stage::Reviewer | Stage::Review)
-        && matches!(step, Step::Wait { .. })
+        && stage == Stage::Review
+        && matches!(step, Step::Wait { .. } | Step::AskReview(_))
     {
         Some(OwnerNotice::NoReviewer)
-    } else if failures && f.classified.review() {
-        Some(OwnerNotice::ReviewFailures)
-    } else if unposted {
-        Some(OwnerNotice::UnpostedReview)
     } else if f
         .created_at
         .is_some_and(|at| now > at.saturating_add(86400))

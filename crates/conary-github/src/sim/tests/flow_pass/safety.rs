@@ -124,7 +124,7 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             },
         );
         for pr in [3, 5] {
-            c.hub.flow_review(REPO, pr, "reviewer", Verdict::Clean, 0);
+            c.hub.flow_review(REPO, pr, Verdict::Clean, 0);
             c.hub
                 .post_status(&head(pr), json!({"context":"machine", "state":"pending"}));
         }
