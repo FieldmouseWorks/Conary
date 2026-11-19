@@ -279,8 +279,8 @@ thread to answer, and `Step::PostFix` fails. This task owns both halves.
 
 **Identity.** Every finding target and every answer carries a marker
 that names the review issuance and the finding inside it. The issuance is
-named by `threads::issuance(head, body)`, the digest of its head and body,
-which is unique per publication because the body holds the
+named by the digest of its head and body, which is unique per
+publication because the body holds the
 findings and `reviewed_at`. The finding is named by its index in that
 review marker's `problems`, and the role and head are named too. An answer
 also names the fix invocation it came from. So a second review on the same
