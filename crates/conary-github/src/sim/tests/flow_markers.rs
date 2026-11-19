@@ -518,3 +518,51 @@ fn an_authenticated_v3_issuance_without_its_basis_is_a_tombstone() {
         Step::Judge(vec![Trigger::AuthorEngine, Trigger::Asked])
     );
 }
+/// A judgment sealed for a reason since retired (`hidden_files`, which the
+/// flow asked for while the policy hid paths from reviewers) still
+/// authenticates, and stands as a tombstone: it supersedes the older pass
+/// and asks a judge again, rather than being skipped so the pass stands.
+#[test]
+fn a_judgment_sealed_for_a_retired_reason_is_a_tombstone() {
+    let s = settings();
+    let key = s.judge_key.clone().unwrap();
+    let (h, m) = setup();
+    let revision = Revision::from(&h.pull(REMI, 3).unwrap());
+    let pass = key
+        .judgment_by(
+            REMI,
+            3,
+            Judgment::Pass,
+            &revision,
+            1,
+            provenance(),
+            super::judged_for_everything(&h, REMI),
+        )
+        .unwrap();
+    h.flow_comment(REMI, 3, "owner", &pass);
+    assert_eq!(read_f(&h, s.clone()).judgment_generation, Some(1));
+    let issued = format!(
+        r#"{{"generation":2,"revision":{},"verdict":"pass","provenance":{},"why":["hidden_files"],"context":"{}"}}"#,
+        serde_json::to_string(&revision).unwrap(),
+        serde_json::to_string(&provenance()).unwrap(),
+        judging_context(&Default::default(), &Default::default()),
+    );
+    let tag = key.seal(
+        &REMI.to_lowercase(),
+        3,
+        "autoland-judgment:v3",
+        "pass",
+        &revision.head,
+        &issued,
+    );
+    h.flow_comment(
+        REMI,
+        3,
+        "owner",
+        &format!(r#"<!-- autoland-judgment:v3 {{"issued":{issued},"tag":"{tag}"}} -->"#),
+    );
+    let f = read_f(&h, s);
+    assert_eq!(f.judgment_generation, Some(2));
+    assert_eq!(f.judgment, None);
+    assert!(matches!(next(&f, &m, 4000).0.step, Step::Judge(_)));
+}

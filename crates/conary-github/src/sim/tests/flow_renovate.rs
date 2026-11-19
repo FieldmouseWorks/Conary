@@ -42,7 +42,7 @@ fn a_standing_rebase_request_fences_findings_handoffs() {
 
 #[test]
 fn removed_rebase_requests_fence_for_a_full_run_across_pushes() {
-    // deps.py:197-223 / 233: timeline removal, even unseen, not the steward's last observation.
+    // deps.py:197-223 / 233: timeline removal, even unobserved, not the steward's last observation.
     let mut c = renovate();
     c.hub.edit_flow(REMI, 3, |s| s.rebase_removed = vec![10700]);
     assert_eq!(c.pass(14500).step, Step::Wait { until: Some(17900) });

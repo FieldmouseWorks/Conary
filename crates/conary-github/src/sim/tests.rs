@@ -37,7 +37,6 @@ fn every_reason() -> Vec<conary_core::plugin::Trigger> {
     vec![
         R2,
         AuthorEngine,
-        HiddenFiles,
         NoCi,
         Asked,
         RoundLimit,

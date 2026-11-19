@@ -349,7 +349,6 @@ impl Hub {
             .map(|p| Touched {
                 path: (*p).into(),
                 from: None,
-                new: false,
             })
             .collect();
         self.world.borrow_mut().touched.insert(patch.into(), files);
@@ -900,7 +899,6 @@ impl World {
                 vec![Touched {
                     path: SOME_FILE.into(),
                     from: None,
-                    new: false,
                 }]
             });
             for t in touched {

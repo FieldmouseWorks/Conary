@@ -351,7 +351,6 @@ fn a_judge_request_needs_its_pr_why_and_context() {
     let every = vec![
         Trigger::R2,
         Trigger::AuthorEngine,
-        Trigger::HiddenFiles,
         Trigger::NoCi,
         Trigger::Asked,
         Trigger::RoundLimit,
@@ -365,7 +364,6 @@ fn a_judge_request_needs_its_pr_why_and_context() {
         json!([
             "r2",
             "author_engine",
-            "hidden_files",
             "no_ci",
             "asked",
             "round_limit",

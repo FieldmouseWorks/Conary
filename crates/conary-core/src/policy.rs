@@ -35,11 +35,6 @@ impl std::fmt::Display for Class {
 pub struct Touched {
     pub path: String,
     pub from: Option<String>,
-    /// Whether the path is new to the tree: added, or the far end of a
-    /// rename or a copy. A reviewer's snapshot pairs each new path with a
-    /// source by content, from every file in the tree, and may pick a
-    /// hidden one where the comparison names another or none.
-    pub new: bool,
 }
 
 /// The paths a change touches, as far as they could be read.
@@ -130,11 +125,6 @@ struct Rules {
     /// a design doc, a page the repo publishes.
     #[serde(default)]
     not_docs: Vec<String>,
-    /// Path regexes for what reviewers are never shown, matched as their
-    /// snapshot hides a path ([`hides`]): never documentation, so a change
-    /// to one gets a review round, whose snapshot names it for the judge.
-    #[serde(default)]
-    hidden: Vec<String>,
     /// Whether landing goes live: R1 rather than R0.
     live: Option<bool>,
 }
@@ -149,8 +139,6 @@ struct File {
     docs: Vec<String>,
     #[serde(default)]
     not_docs: Vec<String>,
-    #[serde(default)]
-    hidden: Vec<String>,
     live: Option<bool>,
     #[serde(default)]
     repos: Entries,
@@ -190,7 +178,6 @@ struct Compiled {
     r2: Vec<Regex>,
     docs: Vec<Regex>,
     not_docs: Vec<Regex>,
-    hidden: Vec<Regex>,
     live: Option<bool>,
 }
 
@@ -205,7 +192,6 @@ impl Compiled {
             r2: compile(rules.r2, "r2")?,
             docs: compile(rules.docs, "docs")?,
             not_docs: compile(rules.not_docs, "notDocs")?,
-            hidden: compile(rules.hidden, "hidden")?,
             live: rules.live,
         })
     }
@@ -225,7 +211,7 @@ impl std::error::Error for PolicyError {}
 /// The machine's class policy, as one JSON file says it:
 ///
 /// ```json
-/// {"r2": ["(^|/)CODEOWNERS$"], "docs": [], "notDocs": [], "hidden": [], "live": false,
+/// {"r2": ["(^|/)CODEOWNERS$"], "docs": [], "notDocs": [], "live": false,
 ///  "repos": {"owner/name": {"r2": ["^migrations/"], "docs": ["^docs/"], "live": true}}}
 /// ```
 ///
@@ -259,7 +245,6 @@ impl Policy {
                     r2: file.r2,
                     docs: file.docs,
                     not_docs: file.not_docs,
-                    hidden: file.hidden,
                     live: file.live,
                 },
                 "",
@@ -294,13 +279,6 @@ impl Policy {
         )
     }
 
-    /// Whether snapshots hide this path, including a hidden parent directory.
-    pub fn hidden(&self, repo: &Repo, path: &str) -> bool {
-        self.levels(repo)
-            .flat_map(|l| &l.hidden)
-            .any(|p| hides(p, path))
-    }
-
     /// What the policy says of a change in `repo` touching `paths`.
     pub fn classify(&self, repo: &Repo, paths: &Paths) -> Classified {
         let levels = self.levels(repo);
@@ -324,19 +302,11 @@ impl Policy {
             .clone()
             .flat_map(|l| &l.not_docs)
             .chain(&self.never_docs);
-        let hidden = levels.clone().flat_map(|l| &l.hidden);
-        // Where anything is hidden, a new path is never documentation: the
-        // snapshot may pair it with a hidden source, and hide it too.
-        let hiding = hidden.clone().next().is_some();
         let docs = !paths.cut
             && !paths.files.is_empty()
-            && paths.files.iter().all(|t| {
-                !(hiding && t.new)
-                    && std::iter::once(&t.path).chain(&t.from).all(|path| {
-                        docs_pats.clone().any(|p| p.is_match(path))
-                            && !not_docs.clone().any(|p| p.is_match(path))
-                            && !hidden.clone().any(|p| hides(p, path))
-                    })
+            && every().all(|path| {
+                docs_pats.clone().any(|p| p.is_match(path))
+                    && !not_docs.clone().any(|p| p.is_match(path))
             });
         let live = levels.filter_map(|l| l.live).last().unwrap_or(false);
         let class = match (&because, live) {
@@ -351,15 +321,6 @@ impl Policy {
             raised: Vec::new(),
         }
     }
-}
-
-/// Whether a `hidden` pattern hides `path` the way a reviewer's snapshot
-/// does (burrow's skipPaths): it matches the path, or the name without a
-/// final newline, or a directory holding it, with a trailing slash.
-fn hides(pattern: &Regex, path: &str) -> bool {
-    let is =
-        |p: &str| pattern.is_match(p) || p.strip_suffix('\n').is_some_and(|b| pattern.is_match(b));
-    is(path) || path.match_indices('/').any(|(i, _)| is(&path[..=i]))
 }
 
 #[cfg(test)]

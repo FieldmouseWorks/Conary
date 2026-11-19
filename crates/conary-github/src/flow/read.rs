@@ -113,7 +113,6 @@ pub fn read(
         base_tip: None,
         settings,
         classified,
-        unseen: false,
         authorship_known: false,
         needs_judge: false,
         judge_asked: false,
@@ -268,11 +267,6 @@ pub fn read(
             .is_none_or(|b| b.ci != Ci::Red || tip.as_deref() != Some(&b.head));
     }
 
-    facts.unseen = paths
-        .files
-        .iter()
-        .flat_map(|p| std::iter::once(&p.path).chain(p.from.as_ref()))
-        .any(|p| policy.hidden(repo, p));
     facts.gate_edited = super::gates::edited(&paths, || {
         source.diff(&repository, base, &pull.head.sha).ok()
     });

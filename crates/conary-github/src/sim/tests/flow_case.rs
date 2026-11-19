@@ -23,7 +23,6 @@ pub(super) struct Case {
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub base_held: bool,
     pub train: TrainState,
-    pub unseen: bool,
     /// What each finished judge job was asked on, as its invocation says.
     pub judge_requests: BTreeMap<String, Option<Basis>>,
 }
@@ -44,7 +43,6 @@ impl Case {
             succeeded: Default::default(),
             base_held: false,
             train: TrainState::default(),
-            unseen: false,
             judge_requests: BTreeMap::new(),
         }
     }
@@ -184,7 +182,7 @@ impl Case {
     }
     pub fn facts(&self) -> Facts {
         let mut f=read(&self.hub,&REMI.parse().unwrap(),3,
-            &conary_core::Policy::parse(br#"{"r2":["^secrets/","(^|/)CODEOWNERS$"],"docs":["^docs/","^README.md$"],"notDocs":["^docs/DESIGN.md$"],"hidden":["^hidden/"]}"#).unwrap(),
+            &conary_core::Policy::parse(br#"{"r2":["^secrets/","(^|/)CODEOWNERS$"],"docs":["^docs/","^README.md$"],"notDocs":["^docs/DESIGN.md$"]}"#).unwrap(),
             self.settings.clone(),&["owner".into()]).unwrap();
         f.judge_requests = self.judge_requests.clone();
         f.jobs = self.jobs.clone();
@@ -212,7 +210,6 @@ impl Case {
         f.succeeded = self.succeeded.clone();
         f.base_held |= self.base_held;
         f.train = self.train.clone();
-        f.unseen |= self.unseen;
         f
     }
     /// A preparation of the programs the next proof runs on the head (its

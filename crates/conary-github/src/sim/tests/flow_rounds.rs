@@ -57,21 +57,6 @@ fn answered_findings_wait_for_a_new_look_below_the_cap() {
     assert_eq!(c.view(1200).step, Step::Wait { until: Some(1301) });
     assert!(matches!(c.view(1301).step, Step::AskReview(_)));
 }
-#[test]
-fn unseen_snapshot_paths_still_need_a_judge_after_clean_reviews() {
-    // review.py:178-189: hidden-path evidence survives a lost local snapshot.
-    let mut c = Case::new();
-    c.unseen = true;
-    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::HiddenFiles]));
-}
-#[test]
-fn hidden_paths_need_a_judge_after_clean_reviews() {
-    // carried.py:102: clean looks don't expose a path the reviewers were not shown.
-    let c = Case::new();
-    c.hub.touch(&c.scope().head, &["hidden/key.pem"]);
-    assert!(c.facts().unseen);
-    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::HiddenFiles]));
-}
 
 #[test]
 fn an_authors_r2_raise_cannot_be_taken_back_with_the_label() {

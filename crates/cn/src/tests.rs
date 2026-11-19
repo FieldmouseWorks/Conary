@@ -104,8 +104,13 @@ fn policy_checks_a_file_as_class_reads_it() {
         std::fs::write(&file, body).unwrap();
         run(&Cli::try_parse_from(["cn", "policy", file.to_str().unwrap()]).unwrap())
     };
-    assert!(check(r#"{"r2": ["^secrets/"], "hidden": ["^docs/private/$"]}"#).is_ok());
-    for bad in [r#"{"hiddn": []}"#, r#"{"r2": ["("]}"#, "not json"] {
+    assert!(check(r#"{"r2": ["^secrets/"], "docs": ["^docs/"]}"#).is_ok());
+    for bad in [
+        r#"{"dcs": []}"#,
+        r#"{"hidden": []}"#,
+        r#"{"r2": ["("]}"#,
+        "not json",
+    ] {
         assert!(check(bad).is_err(), "{bad}");
     }
 }

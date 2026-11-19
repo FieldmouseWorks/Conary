@@ -591,7 +591,7 @@ fn a_landed_heads_success_is_retired_before_the_next_head_says_its_landing() {
 }
 
 #[test]
-fn a_merge_unseen_when_its_candidate_stopped_is_waited_for_and_lands_through_it() {
+fn a_merge_not_yet_shown_when_its_candidate_stopped_is_waited_for_and_lands_through_it() {
     // GitHub took the first's merge and doesn't show it yet when the
     // second's new head stops the candidate. The train builds nothing
     // until the merge shows, and then it lands through the candidate it

@@ -564,7 +564,6 @@ pub struct Facts {
     pub proof_data: ProofData,
     pub settings: Settings,
     pub classified: Classified,
-    pub unseen: bool,
     pub authorship_known: bool,
     pub needs_judge: bool,
     pub judge_asked: bool,

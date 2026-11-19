@@ -392,7 +392,6 @@ pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool, changed: bool) -> Vec<T
     [
         (f.classified.class == Class::R2, Trigger::R2),
         (f.needs_judge, Trigger::AuthorEngine),
-        (f.unseen, Trigger::HiddenFiles),
         (ci == Ci::None, Trigger::NoCi),
         (f.judge_asked, Trigger::Asked),
         (capped, Trigger::RoundLimit),

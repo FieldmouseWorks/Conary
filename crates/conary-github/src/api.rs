@@ -227,7 +227,6 @@ pub(crate) struct Comparison {
 pub(crate) struct ComparedFile {
     filename: String,
     previous_filename: Option<String>,
-    status: Option<String>,
 }
 
 /// The most files GitHub lists for a comparison. It says nothing of the
@@ -689,7 +688,6 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
         files: files
             .into_iter()
             .map(|f| Touched {
-                new: matches!(f.status.as_deref(), Some("added" | "renamed" | "copied")),
                 path: f.filename,
                 from: f.previous_filename,
             })
