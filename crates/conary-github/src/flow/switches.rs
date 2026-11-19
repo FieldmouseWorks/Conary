@@ -155,6 +155,18 @@ pub struct Status {
     /// before any pass has.
     pub read_at: Option<u64>,
     pub switches: Vec<InEffect>,
+    /// Every degraded path of an open PR: its record or a worker's answer
+    /// that doesn't read now, and what its last decision named. Left out
+    /// when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<DegradedPr>,
+}
+/// One open PR's degraded path.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct DegradedPr {
+    pub pr: u64,
+    #[serde(flatten)]
+    pub degradation: super::Degradation,
 }
 /// One switch in effect, and every PR it holds.
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -188,14 +200,51 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
         Err(e) => return Err(e.into()),
     };
     let mut prs = Vec::new();
+    let mut degraded = Vec::new();
     for &pr in open.iter().flat_map(|o| &o.prs) {
-        let record = Data::read(root, repo, pr)?;
+        let mut found = |what, e: &super::persist::Error| {
+            degraded.push(DegradedPr {
+                pr,
+                degradation: super::Degradation {
+                    what,
+                    why: super::degraded::why(&**e),
+                },
+            })
+        };
+        let record = match Data::read(root, repo, pr) {
+            Ok(record) => record,
+            Err(e) => {
+                found(super::Degraded::Record, &e);
+                continue;
+            }
+        };
         let mut workers = Vec::new();
         for work in &record.jobs {
-            if !record.memory.retired_jobs.contains(&work.job.id)
-                && super::jobs::inspect(work, now)?.result.is_none()
+            match super::jobs::inspect(work, now) {
+                Err(e) => found(
+                    super::Degraded::Answer {
+                        job: work.job.id.clone(),
+                        kind: work.purpose.kind(),
+                    },
+                    &e,
+                ),
+                Ok(c)
+                    if c.result.is_none() && !record.memory.retired_jobs.contains(&work.job.id) =>
+                {
+                    workers.push(work.job.id.clone());
+                }
+                Ok(_) => {}
+            }
+        }
+        for d in record.decision.iter().flat_map(|d| &d.degraded) {
+            if !degraded
+                .iter()
+                .any(|f| f.pr == pr && f.degradation.what == d.what)
             {
-                workers.push(work.job.id.clone());
+                degraded.push(DegradedPr {
+                    pr,
+                    degradation: d.clone(),
+                });
             }
         }
         prs.push((pr, record.decision, workers));
@@ -285,5 +334,6 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
         repo: repo.clone(),
         read_at: open.map(|o| o.at),
         switches,
+        degraded,
     })
 }

@@ -16,6 +16,19 @@ pub enum Purpose {
     /// A proof's preparation, which holds no proof slot.
     Prepare,
 }
+impl Purpose {
+    /// The plugin kind this work runs.
+    pub fn kind(&self) -> conary_core::plugin::Kind {
+        use conary_core::plugin::Kind;
+        match self {
+            Self::Review(_) => Kind::Review,
+            Self::Fix(_) => Kind::Fix,
+            Self::Judge => Kind::Judge,
+            Self::Proof => Kind::Proof,
+            Self::Prepare => Kind::Prepare,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
     pub purpose: Purpose,

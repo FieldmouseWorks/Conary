@@ -712,9 +712,7 @@ impl Ledger {
                 why,
                 ..
             } => Self::apply_degraded(c, *revision, what, why, at),
-            Body::Restored { revision, what, .. } => {
-                Self::apply_restored(c, *revision, what, at)
-            }
+            Body::Restored { revision, what, .. } => Self::apply_restored(c, *revision, what, at),
             Body::Observe { .. } | Body::Outside { .. } => {
                 unreachable!("check refuses observing a change twice; outside names none")
             }

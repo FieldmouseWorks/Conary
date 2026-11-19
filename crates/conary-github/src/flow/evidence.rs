@@ -111,7 +111,41 @@ pub fn receipt_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Result<()> {
+/// A lookup of a check's attested result that couldn't tell whether it
+/// holds: GitHub didn't answer a read it needed. It's a degraded path
+/// ([`super::degraded`]), never a pass.
+#[derive(Debug)]
+pub(crate) struct CantTell(pub super::Degradation);
+impl std::fmt::Display for CantTell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Degraded: {}", self.0)
+    }
+}
+impl std::error::Error for CantTell {}
+/// A read `check` needed that GitHub didn't answer is a lookup that
+/// couldn't tell; any other error is the lookup's own answer.
+fn told<T>(check: &str, read: Result<T>) -> Result<T> {
+    read.map_err(|e| {
+        if e.is::<crate::ApiError>() {
+            Box::new(CantTell(super::Degradation {
+                what: super::Degraded::Lookup {
+                    check: check.to_owned(),
+                },
+                why: super::degraded::why(&*e),
+            })) as super::persist::Error
+        } else {
+            e
+        }
+    })
+}
+/// Whether every attested result a landing needs holds. Each check whose
+/// lookup told yes or no, rather than couldn't tell, goes in `looked`.
+pub(crate) fn authorize<G: Write>(
+    pass: &Pass<'_>,
+    github: &G,
+    f: &Facts,
+    looked: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
     if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
         return Err("An authorized person's scoped approval is required".into());
     }
@@ -170,7 +204,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
         }
     }
     for name in required {
-        check(github, f, &trust, &f.revision.head, &name, None)?;
+        check(github, f, &trust, &f.revision.head, &name, None, looked)?;
     }
     let negatives = evidence.negatives_under(trust.clone())?;
     let base = github.merge_base(
@@ -230,6 +264,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             head,
             &format!("conary/review/{role}"),
             Some(&review_receipt(head, body)),
+            looked,
         )?;
     }
     if let Some(generation) = f.judgment_generation {
@@ -250,6 +285,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
                 f.judgment.as_ref().and_then(|j| j.provenance.as_ref()),
                 f.judgment.as_ref().and_then(|j| j.basis.as_ref()),
             )),
+            looked,
         )?;
     }
     if let Some(generation) = f.major_generation {
@@ -263,6 +299,7 @@ pub(crate) fn authorize<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts) -> Res
             &f.revision.head,
             "conary/major",
             Some(&major_receipt(&f.revision, generation, f.major)),
+            looked,
         )?;
     }
     Ok(())
@@ -274,9 +311,24 @@ fn check<G: Write>(
     head: &str,
     name: &str,
     receipt: Option<&[u8]>,
+    looked: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let answer = lookup(github, f, trust, head, name, receipt);
+    if !answer.as_ref().is_err_and(|e| e.is::<CantTell>()) {
+        looked.insert(name.to_owned());
+    }
+    answer
+}
+fn lookup<G: Write>(
+    github: &G,
+    f: &Facts,
+    trust: &Trust,
+    head: &str,
+    name: &str,
+    receipt: Option<&[u8]>,
 ) -> Result<()> {
     let repo = f.repo.to_string();
-    let mut latest: Vec<_> = observations(github, f, head)?
+    let mut latest: Vec<_> = told(name, observations(github, f, head))?
         .runs
         .into_iter()
         .filter(|r| r.name == name)
@@ -293,24 +345,28 @@ fn check<G: Write>(
     if latest.is_empty() {
         return Err(format!("{name}: no attested check run (statuses cannot attest)").into());
     }
-    let tree = github.tree(&repo, head)?;
+    let tree = told(name, github.tree(&repo, head).map_err(Into::into))?;
     // A proof's pass counts only for the recipe the machine selects now.
     let definition = f.settings.recipe(name).map(recipe_digest);
     for run in latest {
         if run.status != "completed" || run.conclusion.as_deref() != Some("success") {
             return Err(format!("{name}: producer check is not successful").into());
         }
-        let verified = attested(
-            github,
-            github,
-            &f.repo,
-            Subject::Commit {
-                commit: head,
-                tree: &tree,
-                definition: definition.as_deref(),
-            },
-            &run,
-            trust,
+        let verified = told(
+            name,
+            attested(
+                github,
+                github,
+                &f.repo,
+                Subject::Commit {
+                    commit: head,
+                    tree: &tree,
+                    definition: definition.as_deref(),
+                },
+                &run,
+                trust,
+            )
+            .map_err(Into::into),
         )?
         .map_err(|why| format!("{name}: {why}"))?;
         // A result counts here only whole: nothing covers what it skipped.

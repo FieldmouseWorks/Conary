@@ -399,7 +399,8 @@ fn fresh_authorization_observations_cannot_drop_blocking_or_missing_checks() {
                 ledger: None,
             };
             assert!(
-                crate::flow::evidence::authorize(&pass, &c.hub, &facts).is_err(),
+                crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
+                    .is_err(),
                 "{machine} {state}"
             );
         }
@@ -438,7 +439,10 @@ fn configured_machine_proofs_cannot_be_replaced_by_neutral_or_skipped_runs() {
             dry_run: true,
             ledger: None,
         };
-        assert!(crate::flow::evidence::authorize(&pass, &c.hub, &facts).is_err());
+        assert!(
+            crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
+                .is_err()
+        );
     }
 }
 
@@ -462,7 +466,8 @@ fn authorized(c: &Case) -> std::result::Result<(), String> {
         dry_run: true,
         ledger: None,
     };
-    crate::flow::evidence::authorize(&pass, &c.hub, &facts).map_err(|e| e.to_string())
+    crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
+        .map_err(|e| e.to_string())
 }
 
 /// A green check of a PR's own CI: its token names GitHub's merge commit,

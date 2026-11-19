@@ -52,7 +52,11 @@ impl Book {
     }
 
     fn degraded(&self, change: ChangeId, revision: RevisionId) -> Vec<&Degradation> {
-        self.ledger.change(change).unwrap().degraded(revision).collect()
+        self.ledger
+            .change(change)
+            .unwrap()
+            .degraded(revision)
+            .collect()
     }
 }
 

@@ -159,13 +159,22 @@ impl Pass<'_> {
                 },
             )?;
         }
-        let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls);
+        let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls, self.now);
         occupancy.discover(
             self,
             github,
             repo,
             store.as_deref().map(Store::ledger).or(self.ledger),
         );
+        // What half-worked for a PR this pass doesn't visit is recorded
+        // now; a visited PR's once its revision is.
+        if !self.dry_run
+            && let Some(store) = store.as_deref_mut()
+        {
+            for pull in pulls.iter().filter(|p| only.is_some_and(|n| n != p.number)) {
+                occupancy.record(store, repo, pull.number)?;
+            }
+        }
         let mut reports = Vec::new();
         for pull in pulls
             .into_iter()
@@ -181,6 +190,24 @@ impl Pass<'_> {
                 revision: None,
             };
             let result: Result<()> = (|| {
+                if !occupancy.readable(pr) {
+                    // Its record didn't read: nothing in it counts, and
+                    // nothing is written over it.
+                    if !self.dry_run
+                        && let Some(store) = store.as_deref_mut()
+                    {
+                        occupancy.record(store, repo, pr)?;
+                    }
+                    report.revision = Some(Revision::from(&pull));
+                    report.next = Some(super::degraded::waiting(
+                        occupancy.degraded(pr),
+                        super::Rank::of(&self.config.settings, &pull).level,
+                        store.as_deref().map(Store::ledger).or(self.ledger),
+                        repo,
+                        pr,
+                    ));
+                    return Ok(());
+                }
                 let mut record = match &data {
                     Some(data) => data.load(pr)?,
                     None => Data::read(self.root, repo, pr)?,
@@ -223,6 +250,7 @@ impl Pass<'_> {
                     && let Some(store) = store.as_deref_mut()
                 {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
+                    occupancy.record(store, repo, pr)?;
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
                 // Read afresh before each PR's decision: a pause written
@@ -247,8 +275,10 @@ impl Pass<'_> {
                         next.stage = Stage::ProofSlot;
                         next.step = Step::Wait { until: None };
                         next.proof = None;
-                        next.description =
-                            format!("Waiting for a full plugin proof slot ({ahead} ahead)");
+                        next.description = format!(
+                            "Waiting for a full plugin proof slot ({ahead} ahead{})",
+                            super::proofs::held_by(&facts)
+                        );
                     }
                 }
                 if record
@@ -270,18 +300,43 @@ impl Pass<'_> {
                     next.description =
                         "R2 landing requires the merge train and exact candidate evidence".into();
                 }
+                let mut looked = std::collections::BTreeSet::new();
+                let mut lookups = Vec::new();
                 if grants(&next, &facts)
                     && let Err(why) = if store.is_none() && (!self.dry_run || self.ledger.is_none())
                     {
                         Err("landing permission requires an anchored ledger".into())
                     } else {
-                        super::evidence::authorize(self, github, &facts)
+                        super::evidence::authorize(self, github, &facts, &mut looked)
                     }
                 {
+                    if let Some(cant) = why.downcast_ref::<super::evidence::CantTell>() {
+                        lookups.push(cant.0.clone());
+                    }
                     next.step = Step::Wait { until: None };
                     next.stage = Stage::Proof;
                     next.description = why.to_string().chars().take(140).collect();
                 }
+                if !self.dry_run
+                    && let Some(store) = store.as_deref_mut()
+                {
+                    super::degraded::record(
+                        store,
+                        repo,
+                        pr,
+                        &lookups,
+                        |what| matches!(what, super::Degraded::Lookup { check } if looked.contains(check)),
+                    )?;
+                }
+                super::degraded::name(
+                    &mut next,
+                    occupancy.degraded(pr),
+                    lookups,
+                    &looked,
+                    store.as_deref().map(Store::ledger).or(self.ledger),
+                    repo,
+                    pr,
+                );
                 if let Step::HandFix(kind) = next.step
                     && let Err(why) = super::handoff::problems(github, &facts, &record.memory, kind)
                 {

@@ -1,4 +1,7 @@
 //! Repository-wide admission state, including PRs omitted by targeted kicks.
+//! Reading every open PR's record is also where the pass meets an unreadable
+//! record or worker answer ([`super::degraded`]), for every PR at once.
+use super::degraded::{self, Degradation, Degraded};
 use super::jobs::{self, Purpose};
 use super::persist::Result;
 use super::*;
@@ -9,23 +12,46 @@ pub(crate) struct Occupancy {
     unknown: std::collections::BTreeSet<u64>,
     virtual_live: Vec<ProofHolder>,
     queued: std::collections::BTreeSet<u64>,
+    /// Each open PR's unreadable record, or its workers' unreadable answers.
+    degraded: BTreeMap<u64, Vec<Degradation>>,
 }
 impl Occupancy {
     pub(crate) fn read(
         root: &std::path::Path,
         repo: &conary_core::op::Repo,
         pulls: &[crate::api::PullRequest],
+        now: u64,
     ) -> Self {
         let mut records = BTreeMap::new();
         let mut unknown = std::collections::BTreeSet::new();
+        let mut found = BTreeMap::new();
         for pull in pulls {
+            let mut seen = Vec::new();
             match Data::read(root, repo, pull.number) {
                 Ok(record) => {
+                    for work in &record.jobs {
+                        if let Err(e) = jobs::inspect(work, now) {
+                            seen.push(Degradation {
+                                what: Degraded::Answer {
+                                    job: work.job.id.clone(),
+                                    kind: work.purpose.kind(),
+                                },
+                                why: degraded::why(&*e),
+                            });
+                        }
+                    }
                     records.insert(pull.number, record);
                 }
-                Err(_) => {
+                Err(e) => {
                     unknown.insert(pull.number);
+                    seen.push(Degradation {
+                        what: Degraded::Record,
+                        why: degraded::why(&*e),
+                    });
                 }
+            }
+            if !seen.is_empty() {
+                found.insert(pull.number, seen);
             }
         }
         Self {
@@ -33,7 +59,31 @@ impl Occupancy {
             unknown,
             virtual_live: vec![],
             queued: Default::default(),
+            degraded: found,
         }
+    }
+    /// What half-worked reading the PR's record and its workers' answers.
+    pub(crate) fn degraded(&self, pr: u64) -> &[Degradation] {
+        self.degraded.get(&pr).map_or(&[], Vec::as_slice)
+    }
+    /// Whether the PR's record read, so its answers were read too.
+    pub(crate) fn readable(&self, pr: u64) -> bool {
+        self.records.contains_key(&pr)
+    }
+    /// Record what this pass met of `pr`'s record and answers, and clear
+    /// what it read again: the record always, the answers once it read.
+    pub(crate) fn record(
+        &self,
+        store: &mut conary_core::Store,
+        repo: &conary_core::op::Repo,
+        pr: u64,
+    ) -> Result<()> {
+        let readable = self.readable(pr);
+        degraded::record(store, repo, pr, self.degraded(pr), |what| match what {
+            Degraded::Record => true,
+            Degraded::Answer { .. } => readable,
+            Degraded::Lookup { .. } => false,
+        })
     }
     pub(crate) fn discover<G: Write>(
         &mut self,
@@ -108,8 +158,9 @@ impl Occupancy {
                 f.proof_data.waiting.push(ProofWaiting { number: *number });
             }
         }
-        if uncertain.is_some() {
+        if let Some(number) = uncertain {
             f.proof_data.reserved = f.settings.proof_slots.unwrap_or(0);
+            f.proof_data.reserved_by = Some(number);
         }
         Ok(())
     }

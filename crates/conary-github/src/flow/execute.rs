@@ -472,7 +472,11 @@ fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Ide
 
 fn permission<G: Write>(pass: &Pass<'_>, github: &G, f: &Facts, record: &Record) -> Result<()> {
     let result = super::scope::current(pass, github, f, record)
-        .and_then(|()| super::evidence::authorize(pass, github, f))
+        .and_then(|()| {
+            // Read again only to act on: what it can't tell was recorded
+            // when the decision was made, and fails the effect here.
+            super::evidence::authorize(pass, github, f, &mut Default::default())
+        })
         .and_then(|()| super::scope::current(pass, github, f, record))
         .and_then(|()| {
             if super::approval::required(f) && !super::approval::approved(pass, github, f)? {

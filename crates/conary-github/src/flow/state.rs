@@ -416,6 +416,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             // The pass names them: some live in its configuration alone.
             switches: Vec::new(),
             priority: f.rank().level,
+            degraded: Vec::new(),
         },
         m,
     )

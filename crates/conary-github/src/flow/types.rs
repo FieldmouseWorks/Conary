@@ -812,4 +812,10 @@ pub struct Next {
     /// admission and sizes its stall deadline.
     #[serde(default)]
     pub priority: Level,
+    /// Every path that half-worked for this PR, this pass or as the ledger
+    /// still holds it for its revision ([`super::degraded`]): what came
+    /// through one counts as its check's failure. Left out when there are
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<super::Degradation>,
 }

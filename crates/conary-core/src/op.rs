@@ -202,15 +202,19 @@ pub enum Asked {
 /// What half-worked (`docs/DESIGN.md` section 4.6): a path that went on
 /// without the answer it was for. Whatever came through it counts as its
 /// check's failure until a later [`Body::Restored`] says it works again.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "path", rename_all = "snake_case")]
 pub enum Degraded {
     /// The flow's record of the change's work didn't read. Its workers were
     /// taken as holding every proof slot, and none of its answers count.
     Record,
-    /// The answer of the flow's worker `job` didn't read: it was taken as
-    /// still running, and counts as none.
-    Answer { job: String },
+    /// The answer of the flow's worker `job`, doing `kind` of work, didn't
+    /// read: it was taken as still running, holding its proof slot if it's
+    /// a proof, and counts as no answer.
+    Answer {
+        job: String,
+        kind: crate::plugin::Kind,
+    },
     /// A lookup of `check`'s attested result couldn't tell whether it holds:
     /// GitHub or the producer's attestation didn't answer.
     Lookup { check: String },
@@ -220,7 +224,14 @@ impl std::fmt::Display for Degraded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Record => f.write_str("its flow record didn't read"),
-            Self::Answer { job } => write!(f, "worker {job}'s answer didn't read"),
+            Self::Answer { job, kind } => {
+                let kind = serde_json::to_value(kind).map_err(|_| std::fmt::Error)?;
+                write!(
+                    f,
+                    "{} worker {job}'s answer didn't read",
+                    kind.as_str().unwrap_or("a")
+                )
+            }
             Self::Lookup { check } => write!(f, "{check}'s evidence lookup couldn't tell"),
         }
     }
