@@ -9,6 +9,8 @@ mod decide;
 mod gates;
 mod history;
 mod markers;
+mod priority;
+pub use priority::{Level, Rank, StallAfter};
 mod proofs;
 mod read;
 mod state;

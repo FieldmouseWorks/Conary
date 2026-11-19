@@ -140,8 +140,8 @@ pub(crate) fn slotted(next: &Next) -> bool {
     next.step == Step::Prove && !matches!(next.proof, Some(ProofPlan::Prove { slot: false, .. }))
 }
 
-/// Number of slot holders and earlier waiters ahead. Only open PRs and
-/// earlier waiters in this pass count.
+/// Number of slot holders and waiters ahead. Only open PRs and waiters
+/// ahead in line ([`super::Rank`]) in this pass count.
 pub(super) fn ahead(f: &Facts) -> u32 {
     let Some(slots) = f.settings.proof_slots else {
         return 0;
@@ -153,14 +153,15 @@ pub(super) fn ahead(f: &Facts) -> u32 {
             .filter(|h| f.open_prs.contains(&h.number) && h.job.state.live())
             .count() as u32,
     );
+    let own = f.rank();
     count = count.saturating_add(
         f.proof_data
             .waiting
             .iter()
             .filter(|w| {
-                f.open_prs.contains(&w.number)
-                    && (!f.first_prs.contains(&w.number), w.number)
-                        < (!f.labels.contains(&f.settings.first_label), f.number)
+                w.number != f.number
+                    && f.open_prs.contains(&w.number)
+                    && f.queue.get(&w.number).is_some_and(|theirs| *theirs < own)
             })
             .count() as u32,
     );

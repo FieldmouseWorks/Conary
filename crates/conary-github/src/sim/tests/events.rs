@@ -1,7 +1,7 @@
 //! Event source regression tests are wired from the pre-existing sim test root,
 //! so the negative tree also discovers them.
 use crate::events::*;
-use crate::flow::{Next, Report, Stage, Step};
+use crate::flow::{Level, Next, Report, Stage, Step};
 use ring::hmac;
 use serde_json::json;
 
@@ -40,6 +40,7 @@ fn report(at: u64) -> Report {
             on_usage: false,
             owner_notice: None,
             switches: vec![],
+            priority: Level::Medium,
         }),
         error: None,
         owner_approval: None,

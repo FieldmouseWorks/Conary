@@ -117,7 +117,8 @@ more:
   may carry a credential. Conary never prints their values.
 
 Every reader loads a file through `flow::schema::load`: typed, so a
-duplicate or unknown key is refused, and with each section written as an
+duplicate or unknown key is refused (a key given twice in a map, such as
+`proofs` or `priority_labels`, too), and with each section written as an
 object, the one form the schema describes.
 
 `cn flow settings --config PATH` (`CONARY_FLOW_CONFIG`) prints each option
@@ -372,6 +373,25 @@ PRs are the ones the last pass listed, saved as `open` in the repository's
 directory with the time it read them (`read_at`); a record stays once its
 PR closes, so a closed PR drops out at the next pass.
 
+## Priority
+
+Each PR has a priority level, `high`, `medium` or `low`, the levels
+burrow's drain uses. `priority_labels` maps labels to levels (by default
+`priority: high`, `priority: medium` and `priority: low`; a machine that
+keeps an owner's `first` label maps it to `high`). A PR takes the highest
+level its labels are mapped to, or `default_priority` (`medium`) with none.
+A label maps to one level: it's a key of that map, and the loader refuses
+a key given twice.
+
+Proof slots, train admission and a targeted kick's view of the other PRs
+go in one order ([`flow::Rank`](../crates/conary-github/src/flow/priority.rs)):
+by level, then age (the oldest opened first), then PR number. A pass takes
+its PRs in that order, so a dry run's virtual slots and the train's joins
+follow it too. Each level has its own `stall_after`, the seconds a PR may
+wait at one stage before it's overdue: `high` 1800, `medium` and `low`
+7200 by default. A hold's, the train's and a Renovate automerge's own
+deadlines stay as they are. The level is in each PR's Next, as `priority`.
+
 ## Effects and retries
 
 The executor revokes previous permission before cosmetic stage-label writes.
@@ -389,8 +409,8 @@ train's exact candidate-tree evidence and trunk binding.
 
 Proof slots count active proof workers across all open PRs, including workers outside
 a targeted kick and admissions earlier in this pass. A preparation, and a
-proof its preparation said needs no slot, hold none. Queued first-priority PRs
-keep their order. Dry runs reserve hypothetical slots for the decisions they
+proof its preparation said needs no slot, hold none. Queued PRs keep their
+[order](#priority). Dry runs reserve hypothetical slots for the decisions they
 print, without starting workers, and only for a proof that needs one.
 Cancellation does not release a slot before
 the worker answers. An unreadable ownership record or proof answer reserves
@@ -498,8 +518,8 @@ recipe set:
 
 A `Job` recipe is a model-run check, not a proof, and is never sent to a
 proof plugin: its check waits, with that reason. A targeted kick reads the
-other open PRs' queue priority even before their first pass; dry runs
-reserve virtual slots within the pass using the same ordering.
+other open PRs' [place in line](#priority) even before their first pass; dry
+runs reserve virtual slots within the pass in the same order.
 
 A refused write is saved as a failure observation for the next decision.
 Retry passes still revoke permission while leaving the failed substantive
@@ -521,7 +541,7 @@ The library also refuses to mutate a supplied writable Store in dry-run mode;
 it uses only that Store's ledger observations.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
-`overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice` and, when
+`overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice`, `priority` and, when
 any stop it, `switches` ([Switches](#switches)), and
 `revision` (`head`, `base`, `description`), the revision it was decided on;
 `error` reports a per-PR failure. Null deadlines remain explicit. These

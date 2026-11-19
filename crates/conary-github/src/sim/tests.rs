@@ -379,6 +379,8 @@ mod flow_pass_service;
 
 mod flow_pass_slots;
 
+mod flow_priority;
+
 mod flow_pause;
 mod flow_switches;
 

@@ -56,21 +56,49 @@ fn slots_count_open_jobs_through_drafts_pushes_and_failed_stops() {
     assert_eq!(c.view(800).step, Step::Prove); // slots.py:140
 }
 #[test]
-fn first_label_precedes_older_waiters_and_a_departed_waiter_holds_no_turn() {
-    // slots.py:92,113,122: current-pass waiters only, priority then PR number.
+fn a_higher_level_precedes_older_waiters_and_a_departed_waiter_holds_no_turn() {
+    // slots.py:92,113,122: current-pass waiters only, by level, then age,
+    // then PR number.
     let mut c = proof();
-    c.hub.pr(REMI, 1, &super::head(1));
+    let older = |c: &Case, n: u64| {
+        c.hub.pr(REMI, n, &super::head(n));
+        c.hub.edit_pull(REMI, n, |p| {
+            p["created_at"] = serde_json::json!("2026-01-01T00:00:00Z");
+        });
+    };
+    older(&c, 1);
     c.proof_data.waiting = vec![ProofWaiting { number: 1 }];
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
-    c.label(&["first"]);
+    c.label(&["priority: high"]);
     assert_eq!(c.view(800).step, Step::Prove);
-    c.hub.pr(REMI, 2, &super::head(2));
-    c.hub.label(REMI, 2, &["first"]);
+    assert_eq!(c.view(800).priority, Level::High);
+    // A label the machine maps to a level counts as that level's own.
+    c.label(&["first"]);
+    assert_eq!(c.view(800).stage, Stage::ProofSlot);
+    c.settings
+        .priority_labels
+        .insert("first".into(), Level::High);
+    assert_eq!(c.view(800).step, Step::Prove);
+    // A low PR waits behind a newer unlabelled one.
+    c.label(&["priority: low"]);
+    c.proof_data.waiting = vec![];
+    c.hub.pr(REMI, 4, &super::head(4));
+    c.proof_data.waiting.push(ProofWaiting { number: 4 });
+    assert_eq!(c.view(800).stage, Stage::ProofSlot);
+    assert_eq!(c.view(800).priority, Level::Low);
+    // With the default level low, the unlabelled one is low too, and newer.
+    c.settings.default_priority = Level::Low;
+    assert_eq!(c.view(800).step, Step::Prove);
+    c.settings.default_priority = Level::Medium;
+    c.proof_data.waiting = vec![ProofWaiting { number: 1 }];
+    c.label(&["first"]);
+    older(&c, 2);
+    c.hub.label(REMI, 2, &["priority: high"]);
     c.proof_data.waiting.push(ProofWaiting { number: 2 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
     c.hub.label(REMI, 2, &[]);
     assert_eq!(c.view(800).step, Step::Prove);
-    c.hub.label(REMI, 2, &["first"]);
+    c.hub.label(REMI, 2, &["priority: high"]);
     c.hub
         .edit_pull(REMI, 2, |p| p["state"] = serde_json::json!("closed"));
     assert_eq!(c.view(800).step, Step::Prove);

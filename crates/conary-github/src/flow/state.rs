@@ -281,7 +281,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         } else if stage == Stage::Merge && f.renovate && f.bot_merges && f.bot_automerge_enabled {
             f.settings.renovate_merge_after
         } else {
-            f.settings.stall_after
+            f.settings.stall_after.at(f.rank().level)
         };
         let failure = m
             .strikes
@@ -415,6 +415,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             }),
             // The pass names them: some live in its configuration alone.
             switches: Vec::new(),
+            priority: f.rank().level,
         },
         m,
     )

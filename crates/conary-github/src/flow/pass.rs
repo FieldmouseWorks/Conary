@@ -147,14 +147,8 @@ impl Pass<'_> {
             }
         }
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
-        pulls.sort_by_key(|p| {
-            (
-                !p.labels
-                    .iter()
-                    .any(|l| l.name == self.config.settings.first_label),
-                p.number,
-            )
-        });
+        // Proof slots, train joins and dry runs' virtual slots go in line.
+        pulls.sort_by_key(|p| super::Rank::of(&self.config.settings, p));
         if !self.dry_run {
             super::switches::opened(
                 self.root,

@@ -109,8 +109,11 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             .proofs
             .insert("machine".into(), Recipe::Run(vec!["check".into()]));
         c.hub.pr(REPO, 5, &head(5));
-        c.hub
-            .edit_pull(REPO, 5, |p| p["user"]["login"] = json!("owner"));
+        // Opened with PR 3, so its number breaks the tie.
+        c.hub.edit_pull(REPO, 5, |p| {
+            p["user"]["login"] = json!("owner");
+            p["created_at"] = json!("2099-01-01T00:00:00Z");
+        });
         let snapshot = flow::Read::snapshot(&c.hub, REPO, 3).unwrap();
         c.hub.flow_snapshot(
             REPO,

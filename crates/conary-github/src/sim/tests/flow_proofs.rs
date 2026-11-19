@@ -118,11 +118,14 @@ fn proof_slots_count_each_holder_and_only_current_waiters() {
         .edit_pull(REMI, 9, |p| p["state"] = serde_json::json!("closed"));
     assert_eq!(c.view(800).step, Step::Prove);
     c.hub.pr(REMI, 1, &super::head(1));
+    c.hub.edit_pull(REMI, 1, |p| {
+        p["created_at"] = serde_json::json!("2026-01-01T00:00:00Z");
+    });
     c.proof_data.waiting.push(ProofWaiting { number: 1 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
-    c.label(&["first"]);
+    c.label(&["priority: high"]);
     assert_eq!(c.view(800).step, Step::Prove);
-    c.hub.label(REMI, 1, &["first"]);
+    c.hub.label(REMI, 1, &["priority: high"]);
     c.proof_data.waiting.push(ProofWaiting { number: 1 });
     assert_eq!(c.view(800).stage, Stage::ProofSlot);
 }
