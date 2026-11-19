@@ -16,6 +16,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   retargets: timelineItems(last:1,itemTypes:[BASE_REF_CHANGED_EVENT]) { nodes { ... on BaseRefChangedEvent { createdAt } } }
+  renames: timelineItems(last:1,itemTypes:[RENAMED_TITLE_EVENT]) { nodes { ... on RenamedTitleEvent { createdAt } } }
   commits(last:1) { nodes { commit { oid checkSuites(first:100) {
    pageInfo { hasNextPage } nodes { databaseId createdAt status conclusion app { slug }
     workflowRun { file { path } workflow { id name } }
@@ -90,8 +91,10 @@ struct Pull {
     commits: Commits,
     timeline_items: Timeline,
     retargets: Retargets,
+    renames: Retargets,
 }
 #[derive(Deserialize)]
+/// The last timeline event of one kind, when it happened.
 struct Retargets {
     nodes: Vec<Retarget>,
 }
@@ -395,11 +398,18 @@ impl Read for Api {
                 .collect(),
             resolved_reviews,
             since: crate::flow::reviews::Since {
+                // `lastEditedAt` dates only the body's edits; a rename is
+                // its own timeline event, and the title is as much the
+                // claim a review read.
                 edited: p
                     .last_edited_at
                     .as_deref()
+                    .into_iter()
+                    .chain(p.renames.nodes.last().map(|r| r.created_at.as_str()))
                     .map(crate::flow::reviews::timestamp)
-                    .transpose()?,
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .max(),
                 retargeted: p
                     .retargets
                     .nodes

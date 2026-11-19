@@ -11,7 +11,7 @@ fn answer(v: Value) -> &'static str {
     .leak()
 }
 fn snapshot() -> Value {
-    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base-tip","statusCheckRollup":{"state":"FAILURE"}}},"pullRequest":{
+    let mut v = json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base-tip","statusCheckRollup":{"state":"FAILURE"}}},"pullRequest":{
         "headRefOid":"h","baseRefName":"main","title":"t","body":"b","isDraft":false,"mergeStateStatus":"BEHIND","updatedAt":"2026-11-08T12:00:00Z",
         "lastEditedAt":"2026-11-08T11:00:00Z",
         "timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]},
@@ -30,7 +30,43 @@ fn snapshot() -> Value {
             "databaseId":12,"createdAt":"2026-11-08T10:00:00Z","status":"QUEUED","conclusion":null,"app":{"slug":"other-ci"},
             "workflowRun":null
         }]}}}]}
-    }}}})
+    }}}});
+    // Kept apart: one more field nests the literal past `json!`'s limit.
+    v["data"]["repository"]["pullRequest"]["renames"] = json!({"nodes": []});
+    v
+}
+/// A rename is an edit of the claim a review read, though GitHub's
+/// `lastEditedAt` dates only the body: the later of the two counts.
+#[test]
+fn a_title_rename_counts_as_an_edit() {
+    let at = |t: &str| t.parse::<jiff::Timestamp>().unwrap().as_second() as u64;
+    for (edited, renamed, expected) in [
+        (
+            json!("2026-11-08T11:00:00Z"),
+            json!([{"createdAt":"2026-11-08T11:45:00Z"}]),
+            "2026-11-08T11:45:00Z",
+        ),
+        (
+            json!("2026-11-08T11:00:00Z"),
+            json!([{"createdAt":"2026-11-08T10:30:00Z"}]),
+            "2026-11-08T11:00:00Z",
+        ),
+        (
+            json!(null),
+            json!([{"createdAt":"2026-11-08T11:45:00Z"}]),
+            "2026-11-08T11:45:00Z",
+        ),
+    ] {
+        let mut v = snapshot();
+        let p = &mut v["data"]["repository"]["pullRequest"];
+        p["lastEditedAt"] = edited;
+        p["renames"]["nodes"] = renamed;
+        let (base, _requests) = github(vec![answer(v)]);
+        let s = Api::new(&base, Tokens::given("t"))
+            .snapshot("o/r", 7)
+            .unwrap();
+        assert_eq!(s.since.edited, Some(at(expected)), "{expected}");
+    }
 }
 #[test]
 fn reads_mergeability_threads_and_suite_identity_without_writes() {

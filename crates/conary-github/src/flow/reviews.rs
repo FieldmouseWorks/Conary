@@ -49,7 +49,7 @@ pub(crate) fn timestamp(text: &str) -> Result<u64, ApiError> {
 /// in Unix seconds, as GitHub dates them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Since {
-    /// Its description's last edit.
+    /// Its title's or body's last edit.
     pub edited: Option<u64>,
     /// Its last retarget.
     pub retargeted: Option<u64>,
