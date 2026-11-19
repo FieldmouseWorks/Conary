@@ -268,7 +268,11 @@ impl Case {
     /// The connector calls the PR's current head, `head`, clean; with
     /// `attest`, its producer's receipt over that summary comment is signed.
     pub(super) fn connector_clean(&self, head: &str, attest: bool) {
-        self.hub.flow_review(REPO, 3, Verdict::Clean, 0);
+        self.connector_clean_at(head, attest, 0);
+    }
+    /// [`Self::connector_clean`], its review finished at `at`.
+    pub(super) fn connector_clean_at(&self, head: &str, attest: bool, at: u64) {
+        self.hub.flow_review(REPO, 3, Verdict::Clean, at);
         if attest {
             let body = self.connector_summary(3);
             self.sign_check(
@@ -293,49 +297,36 @@ impl Case {
             .and_then(|c| c.body)
             .expect("the connector's summary comment")
     }
-    /// Findings the flow published as its own review before the connector
-    /// was the reviewer, still on the PR's current head, found at `at`:
-    /// the first `threads` each a thread the flow's account opened, the
-    /// rest each a marked PR comment. Returns the publication read back.
-    pub(super) fn flow_findings(
+    /// The connector's review of the PR's current head at `at`, finding
+    /// `findings`, each on a thread of its own as the connector opens them.
+    /// Returns the threads' ids, in order.
+    pub(super) fn connector_findings(
         &self,
         findings: &[conary_core::plugin::Finding],
-        threads: usize,
         at: u64,
-    ) -> Publication {
-        let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let body = review_body("reviewer", &revision, at, findings);
-        let mark = |finding| FindingMark {
-            role: "reviewer".into(),
-            head: revision.head.clone(),
-            issuance: issuance(&revision.head, &body),
-            finding,
-        };
-        use crate::sim::STEWARD;
-        self.hub
-            .person_review(REPO, 3, STEWARD, "Bot", &revision.head, &body, "COMMENTED");
+    ) -> Vec<String> {
+        self.hub.flow_review(REPO, 3, Verdict::Findings, at);
         let id = self.hub.reviews(REPO, 3).unwrap().len();
-        for (i, f) in findings[..threads].iter().enumerate() {
-            let thread = format!("PRRT_{id}_{i}");
-            self.hub.flow_thread_comments(
-                REPO,
-                3,
-                &thread,
-                &[(STEWARD, &finding_body(f, &mark(i), false))],
-            );
-            self.hub.flow_thread(REPO, 3, &thread, false);
-        }
-        for (i, f) in findings.iter().enumerate().skip(threads) {
-            self.hub
-                .flow_comment(REPO, 3, STEWARD, &finding_body(f, &mark(i), true));
-        }
-        self.hub
-            .reviews(REPO, 3)
-            .unwrap()
+        findings
             .iter()
-            .rev()
-            .find_map(|r| Publication::read(r, "reviewer", &self.config.settings))
-            .unwrap()
+            .enumerate()
+            .map(|(i, f)| {
+                let thread = format!("PRRT_{id}_{i}");
+                let p = format!("{:?}", f.severity);
+                let body = format!(
+                    "**<sub><sub>![{p} Badge](https://img.shields.io/badge/{p}-yellow?style=flat)</sub></sub>  {}**\n\n{}\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+                    f.text, f.text
+                );
+                self.hub.flow_thread_at(
+                    REPO,
+                    3,
+                    &thread,
+                    (&f.path, f.line),
+                    (crate::sim::CONNECTOR, &body),
+                );
+                thread
+            })
+            .collect()
     }
     pub(super) fn sign_check(&self, head: &str, name: &str, receipt: Option<&[u8]>) -> u64 {
         let id = self.hub.run_id();

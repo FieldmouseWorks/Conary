@@ -1,10 +1,9 @@
 //! What a judge request's `context` digests is what GitHub shows, read
 //! afresh: the flow and a judge producer call the same helper on the same
 //! reads, and nothing the flow's own job records say goes in. Through the
-//! real executor, for each place a finding of the flow's own or its answer
-//! lives.
+//! real executor, on the reviewer's threads and their answers.
 use super::flow_pass_case::{Case, REPO, example};
-use super::flow_pass_threads::{findings, reviewed, step, threads, unchanged, until, until_review};
+use super::flow_pass_threads::{reviewed, step, threads, unchanged, until, until_review};
 use super::{TRUNK, head};
 use crate::api::Source;
 use crate::flow::{self, *};
@@ -26,10 +25,10 @@ fn by_the_engine(c: &Case, sha: &str) {
     );
 }
 
-/// The connector reviews the head clean, and the flow asks a judge: the
-/// `context` its request carries.
+/// The connector reviews the head clean, after any findings, and the flow
+/// asks a judge: the `context` its request carries.
 fn asked(c: &Case, now: u64, t: &mut u64) -> String {
-    c.connector_clean(&c.hub.pull(REPO, 3).unwrap().head.sha, true);
+    c.connector_clean_at(&c.hub.pull(REPO, 3).unwrap().head.sha, true, now + *t);
     for _ in 0..20 {
         *t += 60;
         if matches!(step(c, now + *t), Step::Judge(_)) {
@@ -96,7 +95,7 @@ fn edit_thread(c: &Case, id: &str, index: usize, body: &str) {
     c.hub.flow_thread_comments(REPO, 3, id, &comments);
 }
 
-/// The flow's own findings, answered by a fix that changes nothing, and
+/// The connector's findings, answered by a fix that changes nothing, and
 /// the head reviewed clean: the context the judge the author's engine needs
 /// is asked on.
 fn answered_unchanged(c: &Case, now: u64) -> String {
@@ -107,20 +106,6 @@ fn answered_unchanged(c: &Case, now: u64) -> String {
     until_review(c, now, &mut t);
     by_the_engine(c, &head(3));
     asked(c, now, &mut t)
-}
-
-/// The flow's own [`findings`] as marked PR comments, each answered by a
-/// marked comment of its own saying `reply`.
-fn in_the_conversation(c: &Case, now: u64, reply: &str) {
-    let p = c.flow_findings(&findings(), 0, now);
-    for i in 0..findings().len() {
-        c.hub.flow_comment(
-            REPO,
-            3,
-            crate::sim::STEWARD,
-            &answer_body(&format!("{reply} {i}"), &p.mark(i), "3-1"),
-        );
-    }
 }
 
 #[test]
@@ -138,6 +123,9 @@ fn a_reviews_thread_findings_and_their_unchanged_answers_are_read_from_github() 
     // The flow's records of what its fix said don't count: GitHub does.
     rewrite_fix_records(&c, "kept because", "something else");
     assert_eq!(read(&c).context(), context);
+    // A PR comment isn't the findings' discussion.
+    c.hub.flow_comment(REPO, 3, "someone", "just a comment");
+    assert_eq!(on_github(&c), context);
     // An answer or a finding edited on its thread is another discussion.
     let id = all.keys().next().unwrap().clone();
     let answer = all[&id].comments[1].body.replacen("kept", "still kept", 1);
@@ -149,39 +137,6 @@ fn a_reviews_thread_findings_and_their_unchanged_answers_are_read_from_github() 
     edit_thread(&c, &id, 0, &finding);
     assert_ne!(on_github(&c), edited);
     assert_ne!(on_github(&c), context);
-}
-
-#[test]
-fn a_reviews_comment_findings_and_their_answers_are_read_from_github() {
-    let mut c = Case::new();
-    judging(&mut c);
-    let now = flow::jobs::now();
-    in_the_conversation(&c, now, "kept because");
-    by_the_engine(&c, &head(3));
-    let context = asked(&c, now, &mut 0);
-    assert_eq!(context, on_github(&c));
-    assert_eq!(context, read(&c).context());
-    // Every finding and every answer is a marked PR comment.
-    assert!(threads(&c).is_empty());
-    assert_eq!(read(&c).conversation.len(), 2 * findings().len());
-    // A finding edited, its marker kept, is another discussion.
-    let comments = c.hub.comments(REPO, 3).unwrap();
-    let at = comments
-        .iter()
-        .position(|c| {
-            c.body
-                .as_deref()
-                .is_some_and(|b| b.contains("conary-finding:v1"))
-        })
-        .unwrap();
-    let edited = comments[at]
-        .body
-        .as_deref()
-        .unwrap()
-        .replacen("P1", "P2", 1);
-    c.hub.edit_flow_comment(REPO, 3, at, &edited);
-    assert_ne!(on_github(&c), context);
-    assert_eq!(read(&c).context(), on_github(&c));
 }
 
 #[test]
@@ -209,46 +164,4 @@ fn an_earlier_heads_findings_and_answers_are_read_from_github() {
     assert_eq!(context, read(&c).context());
     rewrite_fix_records(&c, "carried", "something else");
     assert_eq!(read(&c).context(), context);
-}
-
-#[test]
-fn the_conversations_findings_and_answers_are_what_a_judge_reads() {
-    let c = Case::new();
-    in_the_conversation(&c, flow::jobs::now(), "answer");
-    // What the flow reads: the conversation, and the context it makes,
-    // which is the helper's over GitHub alone.
-    let facts = || {
-        let f = read(&c);
-        assert_eq!(f.context(), on_github(&c));
-        (f.conversation.clone(), f.context())
-    };
-    let (before, context) = facts();
-    // Two findings and two answers; a sealed verdict or a person's word
-    // isn't the findings' discussion.
-    assert_eq!(before.len(), 4);
-    c.hub.flow_comment(REPO, 3, "someone", "just a comment");
-    assert_eq!(facts(), (before.clone(), context.clone()));
-    // An answer edited, its marker kept, is another discussion; so is one
-    // removed.
-    let comments = c.hub.comments(REPO, 3).unwrap();
-    let at = comments
-        .iter()
-        .position(|c| {
-            c.body
-                .as_deref()
-                .is_some_and(|b| b.contains("conary-answer:v1"))
-        })
-        .unwrap();
-    let edited = comments[at]
-        .body
-        .as_deref()
-        .unwrap()
-        .replacen("answer", "a different answer", 1);
-    c.hub.edit_flow_comment(REPO, 3, at, &edited);
-    let (after, edited_context) = facts();
-    assert_ne!(after, before);
-    assert_ne!(edited_context, context);
-    c.hub.edit_flow_comment(REPO, 3, at, "removed");
-    assert_ne!(facts().1, context);
-    assert_ne!(facts().1, edited_context);
 }

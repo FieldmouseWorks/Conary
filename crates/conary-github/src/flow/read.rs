@@ -107,7 +107,6 @@ pub fn read(
         pushes: BTreeMap::new(),
         threads: extra.threads.clone(),
         review_bodies: BTreeMap::new(),
-        conversation: Vec::new(),
         judge_requests: BTreeMap::new(),
         proof: Proof::NotNeeded,
         proof_data: ProofData::default(),
@@ -209,7 +208,6 @@ pub fn read(
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
     facts.review_bodies = super::judging::review_bodies(&records);
-    facts.conversation = super::judging::conversation(&comments);
     facts.owner_approved =
         super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
     facts.reviewers = super::reviews::read(

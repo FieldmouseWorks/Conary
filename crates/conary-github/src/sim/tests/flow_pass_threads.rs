@@ -1,6 +1,6 @@
-//! A fix's answers on the findings the flow published as its own review,
-//! before Codex's connector was the reviewer, go on exactly those findings'
-//! threads: through the real executor, against the simulated GitHub. The
+//! The reviewer's findings, threads Codex's connector opens, go to a fix,
+//! and its answers go up as replies on exactly those threads, which are then
+//! resolved: through the real executor, against the simulated GitHub. The
 //! plugins' answers are written as their workers would save them.
 use super::flow_pass_case::{Case, REPO};
 use super::{TRUNK, head};
@@ -31,6 +31,13 @@ pub(super) fn findings() -> Vec<Finding> {
 /// Answers every launched worker with `answer`, completed at `at`.
 pub(super) fn respond(c: &Case, at: u64, answer: Answer) {
     for path in c.deferred.0.borrow_mut().drain(..) {
+        respond_to(&path, at, answer.clone());
+    }
+}
+
+/// Answers the worker launched with `path` with `answer`, completed at `at`.
+fn respond_to(path: &std::path::Path, at: u64, answer: Answer) {
+    {
         let completion = flow::jobs::Completion {
             at,
             result: Some(Ok(plugin::Response {
@@ -40,7 +47,7 @@ pub(super) fn respond(c: &Case, at: u64, answer: Answer) {
                     session: Some("fixture-session".into()),
                 },
                 execution: None,
-                answer: answer.clone(),
+                answer,
             })),
         };
         std::fs::write(
@@ -54,6 +61,12 @@ pub(super) fn respond(c: &Case, at: u64, answer: Answer) {
 /// A fix that changes nothing and answers each finding it was handed.
 pub(super) fn unchanged(c: &Case, at: u64, reply: &str) {
     let path = c.deferred.0.borrow()[0].clone();
+    respond(c, at, unchanged_answer(&path, reply));
+}
+
+/// What a fix that changes nothing and answers each finding it was handed,
+/// launched with `path`, answers.
+fn unchanged_answer(path: &std::path::Path, reply: &str) -> Answer {
     let invocation: flow::jobs::Invocation =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let Task::Fix { problems, .. } = invocation.task else {
@@ -69,14 +82,10 @@ pub(super) fn unchanged(c: &Case, at: u64, reply: &str) {
             reply: format!("{reply} {problem}"),
         })
         .collect();
-    respond(
-        c,
-        at,
-        Answer::Fix {
-            result: FixResult::Unchanged,
-            answers: Some(answers),
-        },
-    );
+    Answer::Fix {
+        result: FixResult::Unchanged,
+        answers: Some(answers),
+    }
 }
 
 fn report(c: &Case, now: u64) -> flow::Report {
@@ -109,29 +118,12 @@ pub(super) fn threads(c: &Case) -> std::collections::BTreeMap<String, ReviewThre
     flow::Read::snapshot(&c.hub, REPO, 3).unwrap().threads
 }
 
-fn targets(c: &Case) -> Targets {
-    Targets::read(
-        &threads(c),
-        &c.hub.comments(REPO, 3).unwrap(),
-        &c.config.settings,
-    )
-}
-
-/// Every answer on GitHub: thread replies and PR comments.
+/// Every answer on GitHub: the replies on its threads.
 fn answers(c: &Case) -> Vec<String> {
-    let mut all: Vec<String> = threads(c)
+    threads(c)
         .into_values()
         .flat_map(|t| t.comments.into_iter().skip(1).map(|c| c.body))
-        .collect();
-    all.extend(
-        c.hub
-            .comments(REPO, 3)
-            .unwrap()
-            .into_iter()
-            .filter_map(|c| c.body)
-            .filter(|b| b.contains("<!-- conary-answer:v1 ")),
-    );
-    all
+        .collect()
 }
 
 fn fix_work(c: &Case, id: &str) -> flow::jobs::Work {
@@ -142,14 +134,13 @@ fn fix_work(c: &Case, id: &str) -> flow::jobs::Work {
         .unwrap()
 }
 
-/// The flow's own review of [`findings`] at `now`, each a thread of its
-/// own, as it published them before the connector was the reviewer; and a
-/// pass at `now` that first sees them, which hands nothing on until the
-/// quiet period after them has passed.
-pub(super) fn reviewed(c: &Case, now: u64) -> Publication {
-    let p = c.flow_findings(&findings(), findings().len(), now);
+/// The connector's review of [`findings`] at `now`, each a thread of its
+/// own; and a pass at `now` that first sees them, which hands nothing on
+/// until the quiet period after them has passed. Returns the threads' ids.
+pub(super) fn reviewed(c: &Case, now: u64) -> Vec<String> {
+    let threads = c.connector_findings(&findings(), now);
     assert!(matches!(step(c, now), Step::Wait { .. }));
-    p
+    threads
 }
 
 /// Passes a minute apart from `*t` until one waits on the reviewer: every
@@ -171,32 +162,45 @@ fn last_fix(c: &Case) -> flow::jobs::Work {
     fix_work(c, &format!("3-{}", c.record().sequence))
 }
 #[test]
-fn a_fix_answers_each_of_the_flows_findings_on_exactly_its_own_thread() {
+fn a_fix_answers_each_of_the_connectors_findings_on_exactly_its_own_thread() {
     let c = Case::new();
     let now = flow::jobs::now();
-    let p = reviewed(&c, now);
+    let ids = reviewed(&c, now);
     // Two findings on one line, each its own thread.
-    let t = targets(&c);
-    let target = |i| t.target(&p.mark(i)).unwrap();
-    let (Target::Thread(first), Target::Thread(second)) = (target(0), target(1)) else {
-        panic!("each finding has its thread");
-    };
+    let (first, second) = (ids[0].clone(), ids[1].clone());
     assert_ne!(first, second);
     assert_eq!(threads(&c).len(), 2);
-    // Its threads are its findings, not blocking threads: a fix gets them,
-    // each problem with its target.
+    // A fix gets each thread as a problem: where it is, its severity, and
+    // what it says, under its author.
     assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Findings));
     let work = last_fix(&c);
-    let id = work.job.id.clone();
     assert_eq!(
         work.handed,
-        (0..2)
-            .map(|i| Some(Handed {
-                mark: p.mark(i),
-                target: target(i),
-            }))
-            .collect::<Vec<_>>()
+        ids.iter().cloned().map(Some).collect::<Vec<_>>()
     );
+    let path = c.deferred.0.borrow()[0].clone();
+    let invocation: flow::jobs::Invocation =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let Task::Fix { problems, .. } = invocation.task else {
+        panic!("not a fix");
+    };
+    for (i, problem) in problems.iter().enumerate() {
+        let Problem::Finding { finding } = problem else {
+            panic!("not a finding");
+        };
+        assert_eq!((finding.path.as_str(), finding.line), ("src/lib.rs", 2));
+        assert_eq!(finding.severity, Severity::P1);
+        assert!(finding.text.contains(&ids[i]), "{}", finding.text);
+        assert!(
+            finding
+                .text
+                .contains(&format!("{}: ", crate::sim::CONNECTOR)),
+            "{}",
+            finding.text
+        );
+        assert!(finding.text.contains(&findings()[i].text));
+    }
+    let id = work.job.id.clone();
     unchanged(&c, now + 1, "kept because");
     // The first reply's answer is lost: it went up, and the retry reads it
     // back rather than replying twice.
@@ -212,14 +216,48 @@ fn a_fix_answers_each_of_the_flows_findings_on_exactly_its_own_thread() {
         let thread = &all[thread];
         assert!(thread.resolved);
         assert_eq!(thread.comments.len(), 2, "one reply on thread {i}");
-        assert_eq!(
-            thread.comments[1].body,
-            answer_body(&format!("kept because {i}"), &p.mark(i), &id)
-        );
+        assert_eq!(thread.comments[1].body, format!("kept because {i}"));
         assert_eq!(thread.comments[1].author.as_deref(), Some(STEWARD));
     }
     assert_eq!(answers(&c).len(), 2);
     assert_eq!(c.hub.pull(REPO, 3).unwrap().head.sha, head(3));
+}
+
+#[test]
+fn the_connectors_findings_go_through_a_fix_to_another_look() {
+    let c = Case::new();
+    let now = flow::jobs::now();
+    reviewed(&c, now);
+    // Its open threads go to a fix, not a wait.
+    assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Findings));
+    let id = last_fix(&c).job.id;
+    unchanged(&c, now + 1, "kept because");
+    assert_eq!(step(&c, now + 2), Step::PostFix(id));
+    // Each answered and resolved, the connector is asked to look again: no
+    // push will bring it.
+    let mut t = 2;
+    let asked = loop {
+        t += 60;
+        assert!(t < 40 * 60, "never asked for another look");
+        if let Step::AskReview(why) = step(&c, now + t) {
+            break why;
+        }
+    };
+    assert!(asked.contains("answered"), "{asked}");
+    assert!(
+        threads(&c)
+            .values()
+            .all(|t| t.resolved && t.comments.len() == 2)
+    );
+    assert!(
+        c.hub
+            .comments(REPO, 3)
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.body.as_deref())
+            .any(|b| b.starts_with("@codex review") && b.contains(&asked))
+    );
+    assert_eq!(c.record().memory.asked.map(|(h, _)| h), Some(head(3)));
 }
 
 #[test]
@@ -232,39 +270,28 @@ fn a_second_review_on_the_same_head_is_handed_only_its_own_findings() {
     let mut t = 0;
     until_review(&c, now, &mut t);
     // The same findings again, on the same head, found later.
-    let second = c.flow_findings(&findings(), 2, now + t);
-    assert_ne!(first.issuance, second.issuance);
-    // The first review's answers say nothing of the second's findings.
-    let read = targets(&c);
+    let second = c.connector_findings(&findings(), now + t);
+    // The first review's answered threads are settled; the second's aren't.
+    let read = threads(&c);
     for i in 0..2 {
-        assert!(read.threads(&first.mark(i)).iter().all(|(_, r)| *r));
-        assert!(read.threads(&second.mark(i)).iter().all(|(_, r)| !*r));
-        assert_ne!(read.target(&second.mark(i)), None);
+        assert!(read[&first[i]].resolved);
+        assert!(!read[&second[i]].resolved);
     }
     until(&c, now, &mut t, Step::HandFix(Kind::Findings));
-    let handed: Vec<_> = last_fix(&c)
-        .handed
-        .into_iter()
-        .map(|h| h.unwrap().mark)
-        .collect();
-    assert_eq!(handed, (0..2).map(|i| second.mark(i)).collect::<Vec<_>>());
+    let handed: Vec<_> = last_fix(&c).handed.into_iter().flatten().collect();
+    assert_eq!(handed, second);
 }
 
 #[test]
-fn a_reply_goes_only_on_its_own_findings_thread() {
+fn a_reply_goes_only_on_a_thread_still_on_github() {
     let c = Case::new();
     let now = flow::jobs::now();
-    reviewed(&c, now);
+    let ids = reviewed(&c, now);
     assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Findings));
     unchanged(&c, now + 1, "answer");
-    // The two threads' first comments trade places: each now names the
-    // other's finding.
-    let ids: Vec<String> = threads(&c).into_keys().collect();
+    // One of the two threads is gone before the answers go up.
     c.hub.edit_flow(REPO, 3, |s| {
-        let a = s.threads[&ids[0]].comments[0].clone();
-        let b = s.threads[&ids[1]].comments[0].clone();
-        s.threads.get_mut(&ids[0]).unwrap().comments[0] = b;
-        s.threads.get_mut(&ids[1]).unwrap().comments[0] = a;
+        s.threads.remove(&ids[0]);
     });
     for t in 1..10 {
         report(&c, now + 60 * t);
@@ -315,22 +342,23 @@ fn a_superseded_fix_posts_nothing() {
     std::fs::copy(&later.path, &path).unwrap();
     c.deferred.0.borrow_mut().push(path.clone());
     later.path = path;
-    let id = later.job.id.clone();
     record.jobs.push(later);
     data.save(3, &record).unwrap();
     drop(data);
-    unchanged(&c, now + 1, "answer");
+    // Each answers in its own words.
+    let paths: Vec<_> = c.deferred.0.borrow_mut().drain(..).collect();
+    respond_to(&paths[0], now + 1, unchanged_answer(&paths[0], "earlier"));
+    respond_to(&paths[1], now + 1, unchanged_answer(&paths[1], "later"));
     until_review(&c, now, &mut 0);
     let all = answers(&c);
-    assert_eq!(all.len(), 2);
-    assert!(all.iter().all(|a| a.contains(&format!(r#""fix":"{id}""#))));
+    assert_eq!(all, ["later 0", "later 1"]);
 }
 
 #[test]
-fn an_earlier_heads_open_finding_threads_are_answered_on_their_own_threads() {
+fn an_earlier_heads_open_threads_are_answered_on_their_own_threads() {
     let c = Case::new();
     let now = flow::jobs::now();
-    let p = reviewed(&c, now);
+    let ids = reviewed(&c, now);
     let before = threads(&c);
     // Trunk moves and is merged in: the threads on head 3 stay on head 4,
     // still owed their answers.
@@ -344,13 +372,8 @@ fn an_earlier_heads_open_finding_threads_are_answered_on_their_own_threads() {
     c.good_ci(&head(4));
     let mut t = 0;
     until(&c, now, &mut t, Step::HandFix(Kind::Findings));
-    let handed: Vec<_> = last_fix(&c)
-        .handed
-        .into_iter()
-        .map(|h| h.unwrap().mark)
-        .collect();
-    assert_eq!(handed, (0..2).map(|i| p.mark(i)).collect::<Vec<_>>());
-    assert!(handed.iter().all(|m| m.head == head(3)));
+    let handed: Vec<_> = last_fix(&c).handed.into_iter().flatten().collect();
+    assert_eq!(handed, ids);
     unchanged(&c, now + t, "carried");
     until_review(&c, now, &mut t);
     let after = threads(&c);
@@ -397,7 +420,7 @@ fn repeated_unchanged_rounds_never_count_as_missing_answers() {
     let now = flow::jobs::now();
     let mut t = 0;
     for round in 0..3 {
-        c.flow_findings(&findings(), 2, now + t);
+        c.connector_findings(&findings(), now + t);
         until(&c, now, &mut t, Step::HandFix(Kind::Findings));
         unchanged(&c, now + t, &format!("round {round}"));
         until_review(&c, now, &mut t);

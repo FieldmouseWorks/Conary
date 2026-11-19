@@ -157,23 +157,23 @@ fn hydrate_with(
     }
     Ok(())
 }
-/// A fix's answer, each of its answers on the target of the finding it was
-/// handed. An answer to anything it wasn't handed is invalid.
+/// A fix's answer, each of its answers on the thread it was handed. An
+/// answer to anything it wasn't handed is invalid.
 fn fixed(
     work: &jobs::Work,
     pushed: Option<String>,
     answers: Option<&[plugin::FindingAnswer]>,
 ) -> FixResult {
-    let mut targets = Vec::new();
+    let mut threads = Vec::new();
     for answer in answers.unwrap_or_default() {
         match work.handed.get(answer.problem) {
-            Some(Some(handed)) => targets.push((handed.target.clone(), answer.fixed)),
+            Some(Some(thread)) => threads.push((thread.clone(), answer.fixed)),
             _ => return FixResult::Invalid,
         }
     }
     FixResult::Answer(FixAnswer {
         pushed,
-        answers: targets,
+        answers: threads,
         description: None,
         comment: false,
     })
