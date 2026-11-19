@@ -68,6 +68,19 @@ pub enum IngestError {
     Config(&'static str),
     /// The merge-base cache beside the ledger can't be read or added to.
     Cache(std::io::Error),
+    /// An unrecorded PR on one of the repo's own undo branches that can't
+    /// be read as the undo it says it is. It's never read as an ordinary
+    /// PR, and a sync refuses it alone ([`Synced::refused`]).
+    Undo(Refusal),
+}
+
+/// Why an undo PR was refused, before anything of it was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// Its marker can't be read.
+    Marker(String),
+    /// Its marker gives no reason.
+    Reason,
 }
 
 impl std::fmt::Display for IngestError {
@@ -79,6 +92,8 @@ impl std::fmt::Display for IngestError {
             Self::Random(e) => write!(f, "no randomness for a change id: {e}"),
             Self::Config(what) => write!(f, "{what} isn't configured"),
             Self::Cache(e) => write!(f, "merge-base cache: {e}"),
+            Self::Undo(Refusal::Marker(what)) => write!(f, "an undo's marker: {what}"),
+            Self::Undo(Refusal::Reason) => f.write_str("an undo with no reason"),
         }
     }
 }
@@ -176,27 +191,29 @@ fn base(source: &dyn Source, repo: &Repo, pr: &PullRequest) -> Result<CommitId, 
     commit(&source.merge_base(&repo.to_string(), &pr.base.sha, &pr.head.sha)?)
 }
 
-/// Ingests every PR in the repo, oldest first.
+/// Ingests every PR in the repo, oldest first. An undo PR it can't read is
+/// refused alone, as a [`sync`] refuses one.
 pub fn backfill(
     store: &mut Store,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
-) -> Result<Vec<Ingested>, IngestError> {
+) -> Result<Synced, IngestError> {
     config.check()?;
-    source
-        .pulls(&repo.to_string(), Pulls::All)?
-        .iter()
-        .map(|pr| {
-            let base = base(source, repo, pr)?;
-            let read = Read::of(source, &repo.to_string(), pr)?;
-            record(store, source, config, repo, pr, base, read)
-        })
-        .collect()
+    let mut got = Synced::default();
+    for pr in source.pulls(&repo.to_string(), Pulls::All)? {
+        let base = base(source, repo, &pr)?;
+        let read = Read::of(source, &repo.to_string(), &pr)?;
+        got.take(
+            pr.number,
+            record(store, source, config, repo, &pr, base, read),
+        )?;
+    }
+    Ok(got)
 }
 
 mod sync;
-pub use sync::{Gathered, gather, sync};
+pub use sync::{Gathered, Refused, Synced, gather, sync};
 
 pub(crate) fn commit(sha: &str) -> Result<CommitId, IngestError> {
     sha.parse()
@@ -480,10 +497,10 @@ fn record_with_submission(
     let undo = match &marked {
         None => None,
         Some(_) if recorded => None,
-        Some(Err(what)) => return Err(IngestError::Malformed(what.clone())),
+        Some(Err(what)) => return Err(IngestError::Undo(Refusal::Marker(what.clone()))),
         Some(Ok(marker)) => {
             conary_core::op::undo_reason(&marker.reason)
-                .map_err(|_| StoreError::Invalid(Invalid::UndoReason))?;
+                .map_err(|_| IngestError::Undo(Refusal::Reason))?;
             Some(marker.clone())
         }
     };

@@ -354,6 +354,11 @@ fn run(cli: &Cli) -> Result<()> {
             a.publish(&api)?;
             write_notes(&api, &a, github, repo)?;
             let (got, store) = (got?, &a.store);
+            // A refused undo PR is that PR's alone: the rest were synced.
+            for refused in &got.refused {
+                eprintln!("{repo}: {refused}");
+            }
+            let got = got.ingested;
             if cli.human {
                 let recorded: usize = got.iter().map(|g| g.recorded).sum();
                 println!("{repo}: {} PRs, {recorded} new ops", got.len());

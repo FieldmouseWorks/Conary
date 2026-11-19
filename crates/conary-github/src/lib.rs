@@ -23,5 +23,5 @@ pub mod undo;
 
 pub use api::{Api, ApiError, Source};
 pub use etags::Etags;
-pub use ingest::{Config, IngestError, Ingested};
+pub use ingest::{Config, IngestError, Ingested, Synced};
 pub use tokens::Tokens;
