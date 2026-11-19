@@ -259,6 +259,32 @@ impl Hub {
             s.open_threads = s.threads.values().filter(|t| !t.resolved).count() as u32;
         });
     }
+    /// An open review thread `id` on `path`:`line`, opened by `author`
+    /// saying `body`.
+    pub(crate) fn flow_thread_at(
+        &self,
+        repo: &str,
+        pr: u64,
+        id: &str,
+        (path, line): (&str, u64),
+        (author, body): (&str, &str),
+    ) {
+        self.edit_flow(repo, pr, |s| {
+            s.threads.insert(
+                id.into(),
+                crate::flow::ReviewThread {
+                    resolved: false,
+                    path: path.into(),
+                    line: Some(line),
+                    comments: vec![crate::flow::ThreadComment {
+                        author: Some(author.into()),
+                        body: body.into(),
+                    }],
+                },
+            );
+            s.open_threads = s.threads.values().filter(|t| !t.resolved).count() as u32;
+        });
+    }
     /// The comments on review thread `id` as GitHub shows them now, as
     /// `(author, body)`: a finding, its answers, or an edit to either.
     pub(crate) fn flow_thread_comments(

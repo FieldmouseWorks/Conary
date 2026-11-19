@@ -90,7 +90,7 @@ impl Case {
         self.hub.label(REMI, 3, labels);
     }
     /// `flow::judging_context` over a fresh read of the discussion on
-    /// GitHub: its review threads, review bodies and marked PR comments.
+    /// GitHub: its review threads and review bodies.
     pub fn context(&self) -> String {
         read_judging_context(&self.hub, REMI, 3).unwrap()
     }

@@ -18,10 +18,11 @@ fn snapshot() -> Value {
         "retargets":{"nodes":[{"createdAt":"2026-11-08T11:30:00Z"}]},
         "labels":{"pageInfo":{"hasNextPage":false}},
         "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[
-            {"id":"open","isResolved":false,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[
+            {"id":"open","isResolved":false,"path":"src/lib.rs","line":186,"originalLine":153,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[
                 {"author":{"login":"person"},"body":"a finding","pullRequestReview":{"databaseId":5}},
                 {"author":null,"body":"an answer","pullRequestReview":null}]}},
-            {"id":"resolved","isResolved":true,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]},
+            {"id":"resolved","isResolved":true,"path":"src/old.rs","line":null,"originalLine":266,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}},
+            {"id":"file","isResolved":false,"path":"src/gone.rs","line":null,"originalLine":null,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]},
         "reviews":{"totalCount":2},"comments":{"totalCount":3},
         "commits":{"nodes":[{"commit":{"oid":"h","checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{
             "databaseId":11,"createdAt":"2026-11-08T10:05:00Z","status":"IN_PROGRESS","conclusion":null,"app":{"slug":"github-actions"},
@@ -78,7 +79,13 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     assert_eq!(observed.name, "main");
     assert_eq!(observed.head, "base-tip");
     assert_eq!(observed.ci, crate::flow::Ci::Red);
-    assert_eq!(s.open_threads, 1);
+    assert_eq!(s.open_threads, 2);
+    // Where each thread is: its line on the head, the line it was opened on
+    // once outdated, and none on a whole file.
+    let place = |id: &str| (s.threads[id].path.as_str(), s.threads[id].line);
+    assert_eq!(place("open"), ("src/lib.rs", Some(186)));
+    assert_eq!(place("resolved"), ("src/old.rs", Some(266)));
+    assert_eq!(place("file"), ("src/gone.rs", None));
     // Every thread with its comments as they read now: what a judge reads.
     let open = &s.threads["open"];
     assert!(!open.resolved);

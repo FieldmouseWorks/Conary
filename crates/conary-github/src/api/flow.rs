@@ -12,7 +12,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
   headRefOid baseRefName title body isDraft mergeStateStatus updatedAt lastEditedAt
   labels(first:100) { pageInfo { hasNextPage } }
-  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:100) { pageInfo { hasNextPage } nodes { author { login } body pullRequestReview { databaseId } } } } }
+  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved path line originalLine comments(first:100) { pageInfo { hasNextPage } nodes { author { login } body pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   retargets: timelineItems(last:1,itemTypes:[BASE_REF_CHANGED_EVENT]) { nodes { ... on BaseRefChangedEvent { createdAt } } }
@@ -124,6 +124,9 @@ struct Threads {
 struct Thread {
     id: String,
     is_resolved: bool,
+    path: Option<String>,
+    line: Option<u64>,
+    original_line: Option<u64>,
     comments: ThreadComments,
 }
 #[derive(Deserialize)]
@@ -383,6 +386,10 @@ impl Read for Api {
                 .map(|t| {
                     let thread = ReviewThread {
                         resolved: t.is_resolved,
+                        path: t.path.unwrap_or_default(),
+                        // An outdated thread has no line on the head: the
+                        // line it was opened on is where it points.
+                        line: t.line.or(t.original_line),
                         comments: t
                             .comments
                             .nodes

@@ -47,7 +47,7 @@ pub mod schema;
 pub use pass::{Config, Pass, Plugins, Report};
 
 mod judging;
-pub use judging::{conversation, judging_context, read_judging_context, review_bodies};
+pub use judging::{judging_context, read_judging_context, review_bodies};
 
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
@@ -77,6 +77,3 @@ pub use approval::owner_approval;
 mod handoff;
 
 pub(crate) mod publish;
-mod threads;
-pub use threads::{FindingMark, Handed, Target, answer_body, finding_body, issuance};
-pub(crate) use threads::{Publication, Targets};
