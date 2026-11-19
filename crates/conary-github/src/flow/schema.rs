@@ -259,8 +259,8 @@ pub struct Listing {
 /// also take a struct as a positional array). Returns the file as JSON too.
 /// Its errors never quote a value: see [`quiet`].
 pub fn load<T: JsonSchema + DeserializeOwned>(file: &[u8]) -> Result<(T, Value)> {
+    let raw = serde_json::from_slice::<Unique>(file).map_err(quiet)?.0;
     let loaded: T = serde_json::from_slice(file).map_err(quiet)?;
-    let raw: Value = serde_json::from_slice(file).map_err(quiet)?;
     let schema = of::<T>()?;
     objects(&schema, &schema, &raw, "")?;
     Ok((loaded, raw))
@@ -281,12 +281,73 @@ fn quiet(e: serde_json::Error) -> String {
             let said = e.to_string();
             if said.starts_with("missing field `") || said.starts_with("duplicate field `") {
                 said
+            } else if said.starts_with(DUPLICATE) {
+                format!("{DUPLICATE} {at}")
             } else if said.starts_with("unknown field `") {
                 format!("it names an option the schema doesn't declare {at}")
             } else {
                 format!("a value isn't of the type or form its option takes {at}")
             }
         }
+    }
+}
+
+const DUPLICATE: &str = "an object gives one key twice";
+/// A file as JSON, refused if any object in it gives one key twice: serde
+/// refuses that for a struct's fields, but a map (`proofs`,
+/// `priority_labels`) takes the last of them, and the file would mean
+/// something its reader can't see.
+struct Unique(Value);
+impl<'de> serde::Deserialize<'de> for Unique {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        d.deserialize_any(Unique(Value::Null))
+    }
+}
+impl<'de> serde::de::Visitor<'de> for Unique {
+    type Value = Unique;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("JSON")
+    }
+    fn visit_unit<E>(self) -> std::result::Result<Self, E> {
+        Ok(Self(Value::Null))
+    }
+    fn visit_bool<E>(self, v: bool) -> std::result::Result<Self, E> {
+        Ok(Self(v.into()))
+    }
+    fn visit_i64<E>(self, v: i64) -> std::result::Result<Self, E> {
+        Ok(Self(v.into()))
+    }
+    fn visit_u64<E>(self, v: u64) -> std::result::Result<Self, E> {
+        Ok(Self(v.into()))
+    }
+    fn visit_f64<E>(self, v: f64) -> std::result::Result<Self, E> {
+        Ok(Self(v.into()))
+    }
+    fn visit_str<E>(self, v: &str) -> std::result::Result<Self, E> {
+        Ok(Self(v.into()))
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<Self, A::Error> {
+        let mut items = Vec::new();
+        while let Some(Unique(item)) = seq.next_element()? {
+            items.push(item);
+        }
+        Ok(Self(Value::Array(items)))
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> std::result::Result<Self, A::Error> {
+        let mut object = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let Unique(value) = map.next_value()?;
+            if object.insert(key, value).is_some() {
+                return Err(serde::de::Error::custom(DUPLICATE));
+            }
+        }
+        Ok(Self(Value::Object(object)))
     }
 }
 

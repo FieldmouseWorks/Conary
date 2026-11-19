@@ -117,7 +117,8 @@ more:
   may carry a credential. Conary never prints their values.
 
 Every reader loads a file through `flow::schema::load`: typed, so a
-duplicate or unknown key is refused, and with each section written as an
+duplicate or unknown key is refused (a key given twice in a map, such as
+`proofs` or `priority_labels`, too), and with each section written as an
 object, the one form the schema describes.
 
 `cn flow settings --config PATH` (`CONARY_FLOW_CONFIG`) prints each option
@@ -379,7 +380,8 @@ burrow's drain uses. `priority_labels` maps labels to levels (by default
 `priority: high`, `priority: medium` and `priority: low`; a machine that
 keeps an owner's `first` label maps it to `high`). A PR takes the highest
 level its labels are mapped to, or `default_priority` (`medium`) with none.
-A label maps to one level, as a key of that map.
+A label maps to one level: it's a key of that map, and the loader refuses
+a key given twice.
 
 Proof slots, train admission and a targeted kick's view of the other PRs
 go in one order ([`flow::Rank`](../crates/conary-github/src/flow/priority.rs)):
