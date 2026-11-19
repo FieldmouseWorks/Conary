@@ -491,12 +491,16 @@ impl Default for Settings {
     }
 }
 
-/// A review thread as GitHub shows it: whether it's resolved, and its
-/// comments in order. Its comments, not whether it's resolved, are part of
-/// what a judge reads ([`super::judging_context`]).
+/// A review thread as GitHub shows it: whether it's resolved, the file and
+/// line it's on (the line it was opened on, once outdated; none for a
+/// thread on a whole file), and its comments in order. Its comments, not
+/// whether it's resolved or where, are part of what a judge reads
+/// ([`super::judging_context`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReviewThread {
     pub resolved: bool,
+    pub path: String,
+    pub line: Option<u64>,
     pub comments: Vec<ThreadComment>,
 }
 
@@ -553,8 +557,6 @@ pub struct Facts {
     pub threads: BTreeMap<String, ReviewThread>,
     /// The review bodies a judge reads ([`super::review_bodies`]), by review id.
     pub review_bodies: BTreeMap<u64, ThreadComment>,
-    /// The PR comments a judge reads ([`super::conversation`]), in order.
-    pub conversation: Vec<ThreadComment>,
     /// What each finished judge job on this revision was asked to judge on,
     /// by job id: `None` for a request from before the flow said.
     pub judge_requests: BTreeMap<String, Option<Basis>>,
@@ -610,7 +612,7 @@ impl Facts {
     /// judge asked now reads, and what a pass or owner verdict must have
     /// read to count. [`super::read_judging_context`] reads the same.
     pub fn context(&self) -> String {
-        super::judging_context(&self.threads, &self.review_bodies, &self.conversation)
+        super::judging_context(&self.threads, &self.review_bodies)
     }
 }
 

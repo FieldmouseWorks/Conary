@@ -82,10 +82,9 @@ contract's words. One asked again only because a judge already started on
 this head and base carries that judge's reasons, even if the description
 changed since, or `started` when that judge predates recorded reasons. Its `context` is
 `flow::judging_context` over the PR's discussion as GitHub shows it, and
-nothing else: every review thread with its comments as they read now; every
-review body (`flow::review_bodies`); and every PR comment carrying a finding's
-or an answer's marker (`flow::conversation`), whoever wrote them and whether
-or not a worker did. Each finding the flow publishes and each answer a fix
+nothing else: every review thread with its comments as they read now, and
+every review body (`flow::review_bodies`), whoever wrote them and whether or
+not a worker did. Each finding the reviewer posts and each answer a fix
 gives is one of these, so the flow's own job records never go in, and a judge
 producer gets the same digest from `flow::read_judging_context` over its own
 read of the PR. Resolving a thread doesn't change it. An approval's body doesn't
@@ -490,29 +489,25 @@ an unchanged head are asked for again once they've settled
 (`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops
 waiting for the reviewer: a judge decides with `round_limit`.
 
-The fixer protocol can't yet carry the connector's findings (threads the
-flow didn't start), so a fix for them waits, saying why. What's below is how
-the flow answers the findings it published itself, which only reviews
-published before it moved to the connector still carry.
-
-A finding thread is recognised by its first comment's `conary-finding:v1`
-marker, from `settings.flow_authors` only. Fixer requests use any finding
-thread still open. Each problem keeps its finding's marker and target in
-the fix job's record. Unstructured reviews, threads the flow didn't start,
-native change requests, judgment and description failures wait explicitly:
-v1 cannot express their repair. Red checks and conflicts carry their
-observed check or exact base commit.
+A fix is handed every open review thread (`flow::handoff`), whoever opened
+it: the connector's, or anyone's, as burrow's steward hands them. Each is a
+finding on the thread's file and line (the line it was opened on, once
+outdated), at the severity the connector's badge gives it (P1 without one),
+saying the thread's whole conversation under each comment's author; the fix
+job's record keeps the thread's id, which its answer goes on. A thread on no
+line, native change requests, judgment and description failures wait
+explicitly: v1 cannot express their repair. Red checks and conflicts carry
+their observed check or exact base commit.
 
 A v4 fix's answers are posted on the head it left, pushed or `unchanged`,
-and never on a head that moved past it. Each answer's `reply` goes on its
-finding's target with a `conary-answer:v1` marker that also names the fix
-invocation, as the flow's own account: a reply on the thread, which is
-then resolved, or a PR comment. A thread whose first comment no longer names
-that finding gets no reply. A lost write is reconciled by its exact body
+and never on a head that moved past it. Each answer's `reply` goes up as a
+reply on the thread it was handed, as the flow's own account
+(`settings.flow_authors`), and the thread is then resolved. A thread that's
+gone gets no reply. A lost write is reconciled by its exact body
 before it's posted again: every write is saved in the job's record before
 it's sent, and sent only while GitHub doesn't show it; one whose answer was
 lost may have gone up, so it's waited for and sent again only after GitHub
-has gone ten minutes without showing it, at most three times. Every thread of the finding is resolved, a duplicate's too. The fix
+has gone ten minutes without showing it, at most three times. The fix
 is done only once every reply and resolution is read back; it then counts
 as answered, never as a job that ended without its answer. Only the latest
 fix's answers go up: an earlier invocation's are dropped. An `unchanged` fix posts its replies and pushes

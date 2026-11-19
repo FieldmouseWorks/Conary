@@ -111,9 +111,7 @@ pub(crate) fn act<G: Write>(
                 record.memory.asked = Some((f.revision.head.clone(), pass.now));
             }
             Step::HandFix(kind) => {
-                let (problems, handed) = super::handoff::problems(github, f, *kind)?
-                    .into_iter()
-                    .unzip();
+                let (problems, handed) = super::handoff::problems(f, *kind)?.into_iter().unzip();
                 pass.start(
                     f,
                     Purpose::Fix(*kind),

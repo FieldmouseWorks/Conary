@@ -357,7 +357,7 @@ impl Pass<'_> {
                     report.error = Some(next.description.clone());
                 }
                 if let Step::HandFix(kind) = next.step
-                    && let Err(why) = super::handoff::problems(github, &facts, kind)
+                    && let Err(why) = super::handoff::problems(&facts, kind)
                 {
                     next.step = Step::Wait { until: None };
                     next.description = why;
@@ -454,7 +454,7 @@ impl Pass<'_> {
         facts: &Facts,
         purpose: Purpose,
         task: conary_core::plugin::Task,
-        handed: Vec<Option<Handed>>,
+        handed: Vec<Option<String>>,
         record: &mut Record,
         data: &Data,
     ) -> Result<()> {

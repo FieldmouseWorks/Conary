@@ -22,9 +22,9 @@ pub enum FixResult {
 pub struct FixAnswer {
     /// The head a fix pushed; None when it left the head unchanged.
     pub pushed: Option<String>,
-    /// Each of its answers, in order: the target it goes to, and whether it
-    /// says the finding is fixed.
-    pub answers: Vec<(Target, bool)>,
+    /// Each of its answers, in order: the review thread it's a reply on,
+    /// and whether it says the thread's finding is fixed.
+    pub answers: Vec<(String, bool)>,
     /// Fingerprint of the replacement description, never its prompt text.
     pub description: Option<String>,
     pub comment: bool,
@@ -138,7 +138,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
         let unrelated = answer
             .answers
             .iter()
-            .any(|(target, _)| matches!(target, Target::Thread(id) if !f.threads.contains_key(id)));
+            .any(|(thread, _)| !f.threads.contains_key(thread));
         let changed_description = answer.description.as_ref().is_some_and(|description| {
             f.revision.description != job.revision.description
                 && &f.revision.description != description

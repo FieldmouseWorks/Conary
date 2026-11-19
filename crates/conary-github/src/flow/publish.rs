@@ -1,4 +1,4 @@
-//! Publishing a fix's answers on the targets of the findings it was
+//! Publishing a fix's answers as replies on the review threads it was
 //! handed.
 //!
 //! Every write is saved in the job's record before it's sent
@@ -12,7 +12,6 @@
 //! lagging, and asking again later is the whole fix.
 use super::jobs;
 use super::persist::Result;
-use super::threads::Targets;
 use super::*;
 use crate::api::ApiError;
 use conary_core::plugin;
@@ -86,10 +85,11 @@ fn write(
     }
 }
 
-/// Job `at`'s fix answers, each on the target of the finding it answers, as
-/// the flow's review account, with every thread of that finding resolved.
-/// Only for the head the fix left: pushed, or unchanged. Complete only once
-/// every reply and resolution is read back.
+/// Job `at`'s fix answers, each a reply on the review thread it was handed,
+/// as the flow's account, with that thread then resolved. Only for the head
+/// the fix left: pushed, or unchanged. Complete only once every reply and
+/// resolution is read back. A reply is read back by its text: the same
+/// reply already on the thread, an earlier fix's included, is that answer.
 pub(super) fn answers<G: Write>(
     github: &G,
     f: &Facts,
@@ -118,63 +118,43 @@ pub(super) fn answers<G: Write>(
     if head != f.revision.head {
         return Err("the head moved past the fix; its answers aren't posted".into());
     }
-    let id = work.job.id.clone();
     let mut planned = Vec::new();
     for answer in &answers {
-        let handed = work
+        let thread = work
             .handed
             .get(answer.problem)
             .cloned()
             .flatten()
-            .ok_or("a fix answer names no finding it was handed")?;
-        let body = answer_body(&answer.reply, &handed.mark, &id);
-        planned.push((handed, body));
+            .ok_or("a fix answer names no thread it was handed")?;
+        planned.push((thread, answer.reply.trim_end().to_owned()));
     }
     let repo = f.repo.to_string();
-    // Whether each answer, and each resolution, is on GitHub now.
-    let read = || -> Result<(Vec<bool>, Vec<Vec<String>>)> {
+    // Whether each reply is on its thread now, and whether that thread is
+    // resolved.
+    let read = || -> Result<Vec<(bool, bool)>> {
         let snapshot = github.snapshot(&repo, f.number)?;
         if snapshot.revision != f.revision {
             return Err("the PR moved before the fix's answers went up".into());
         }
-        let comments = github.comments(&repo, f.number)?;
-        let targets = Targets::read(&snapshot.threads, &comments, &f.settings);
-        let mut shown = Vec::new();
-        let mut open = Vec::new();
-        for (handed, body) in &planned {
-            shown.push(match &handed.target {
-                Target::Thread(thread) => {
-                    let thread = snapshot
-                        .threads
-                        .get(thread)
-                        .ok_or("a finding's thread is gone")?;
-                    if Targets::of_thread(thread, &f.settings).as_ref() != Some(&handed.mark) {
-                        return Err("a thread no longer holds the finding it was handed for".into());
-                    }
-                    thread
-                        .comments
-                        .iter()
-                        .any(|c| ours(f, c.author.as_deref()) && &c.body == body)
-                }
-                Target::Comment => comments.iter().any(|c| {
-                    ours(f, c.user.as_ref().map(|u| u.login.as_str()))
-                        && c.body.as_deref() == Some(body.as_str())
-                }),
-            });
-            open.push(
-                targets
-                    .threads(&handed.mark)
+        planned
+            .iter()
+            .map(|(thread, body)| {
+                let thread = snapshot
+                    .threads
+                    .get(thread)
+                    .ok_or("a handed thread is gone")?;
+                let shown = thread
+                    .comments
                     .iter()
-                    .filter(|(_, resolved)| !resolved)
-                    .map(|(thread, _)| thread.clone())
-                    .collect(),
-            );
-        }
-        Ok((shown, open))
+                    .any(|c| ours(f, c.author.as_deref()) && &c.body == body);
+                Ok((shown, thread.resolved))
+            })
+            .collect()
     };
-    let (shown, open) = read()?;
-    for (n, (handed, body)) in planned.iter().enumerate() {
-        if !shown[n] {
+    let seen = read()?;
+    for (n, (thread, body)) in planned.iter().enumerate() {
+        let (shown, resolved) = seen[n];
+        if !shown {
             write(
                 record,
                 data,
@@ -182,20 +162,15 @@ pub(super) fn answers<G: Write>(
                 at,
                 &format!("answer {n}"),
                 now,
-                || match &handed.target {
-                    Target::Thread(thread) => github.reply(&repo, f.number, thread, body),
-                    Target::Comment => github.comment(&repo, f.number, body),
-                },
+                || github.reply(&repo, f.number, thread, body),
             )?;
         }
-        // Resolving is idempotent: every thread of the finding, a
-        // duplicate's too, until GitHub shows it resolved.
-        for thread in &open[n] {
+        // Resolving is idempotent: until GitHub shows it resolved.
+        if !resolved {
             github.resolve(&repo, f.number, thread)?;
         }
     }
-    let (shown, open) = read()?;
-    if shown.contains(&false) || open.iter().any(|o| !o.is_empty()) {
+    if read()?.iter().any(|&(shown, resolved)| !shown || !resolved) {
         return Err(lagging("not every answer is on GitHub yet"));
     }
     Ok(())

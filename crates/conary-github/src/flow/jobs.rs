@@ -38,10 +38,10 @@ pub struct Work {
     /// A proof its preparation said needs no proof slot, so holds none.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub slotless: bool,
-    /// A fix's problems, by index: the finding each was and the target its
-    /// answer goes to, or None for a problem that isn't a finding.
+    /// A fix's problems, by index: the review thread each was, which its
+    /// answer is a reply on, or None for a problem that isn't a thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub handed: Vec<Option<Handed>>,
+    pub handed: Vec<Option<String>>,
     /// What publishing this job's answer has sent so far that GitHub
     /// acknowledged, saved as it goes: a later attempt waits to read it
     /// back, and never sends it again.

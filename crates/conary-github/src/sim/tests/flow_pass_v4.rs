@@ -15,7 +15,7 @@ fn context_now(c: &Case) -> String {
     read_judging_context(&c.hub, REPO, 3).unwrap()
 }
 
-/// The finding the flow's own review left open on head 3, on its thread.
+/// The finding the connector's review left open on head 3, on its thread.
 fn finding() -> Finding {
     Finding {
         path: "src/lib.rs".into(),
@@ -25,14 +25,14 @@ fn finding() -> Finding {
     }
 }
 
-/// The flow's own review left one finding open on head 3, the example's fix
+/// The connector's review left one finding open on head 3, the example's fix
 /// answers it and pushes head 4, and the connector reviews head 4 clean.
 /// The author's engine needs a judge, which the next pass asks for. Returns
 /// the context GitHub showed before the fix's answer went up.
 fn fixed_then_reviewed(c: &mut Case, now: u64) -> String {
     c.config.plugins.judge = Some(example());
     c.config.settings.judge_engines = ["fixture-author".into()].into();
-    c.flow_findings(&[finding()], 1, now);
+    c.connector_findings(&[finding()], now);
     c.pass(now, false);
     assert_eq!(
         c.pass(now + 1, false)[0].next.as_ref().unwrap().step,
@@ -88,8 +88,9 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
             let Problem::Finding { finding } = &problems[answers[0].problem] else {
                 panic!("an answer to a finding");
             };
-            // Handed with the review it came from named in its text.
-            assert!(finding.text.ends_with(&findings[0].text));
+            // Handed with the thread it came from named in its text.
+            assert!(finding.text.contains("GitHub review thread PRRT_"));
+            assert!(finding.text.contains(&findings[0].text));
             answered.extend(answers);
         }
     }
@@ -110,15 +111,13 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     // What GitHub shows, read afresh: the review's finding and the fix's
     // answer to it are both there.
     assert_eq!(context, context_now(&c));
-    let comments = conversation(&c.hub.comments(REPO, 3).unwrap());
     let shown = |text: &str| {
-        comments.iter().any(|c| c.body.contains(text))
-            || flow::Read::snapshot(&c.hub, REPO, 3)
-                .unwrap()
-                .threads
-                .values()
-                .flat_map(|t| &t.comments)
-                .any(|c| c.body.contains(text))
+        flow::Read::snapshot(&c.hub, REPO, 3)
+            .unwrap()
+            .threads
+            .values()
+            .flat_map(|t| &t.comments)
+            .any(|c| c.body.contains(text))
     };
     assert!(shown(&findings[0].text));
     assert!(shown(&answered[0].reply));

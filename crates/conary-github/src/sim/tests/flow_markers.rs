@@ -399,7 +399,7 @@ fn an_edited_why_or_context_fails_the_seal_and_the_receipt() {
     let revision = Revision::from(&h.pull(REMI, 3).unwrap());
     let basis = Basis {
         why: vec![Trigger::NoCi, Trigger::RoundLimit],
-        context: judging_context(&Default::default(), &Default::default(), &[]),
+        context: judging_context(&Default::default(), &Default::default()),
     };
     let body = key
         .judgment_by(

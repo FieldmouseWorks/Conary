@@ -17,7 +17,7 @@ fn claim() -> Case {
         },
         answer: FixResult::Answer(FixAnswer {
             pushed: Some(PUSHED.into()),
-            answers: vec![(Target::Thread("thread".into()), true)],
+            answers: vec![("thread".into(), true)],
             description: None,
             comment: false,
         }),
@@ -117,7 +117,7 @@ fn invalid_fix_claims_never_post_any_part_of_their_answers() {
                 0 => a.pushed = Some("not-a-commit".into()),
                 1 => {
                     a.pushed = None;
-                    a.answers = vec![(Target::Thread("foreign-thread".into()), false)];
+                    a.answers = vec![("foreign-thread".into(), false)];
                 }
                 _ => a.pushed = None,
             }
