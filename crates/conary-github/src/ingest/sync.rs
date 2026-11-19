@@ -107,10 +107,11 @@ fn held(
 /// Whether a PR last changed at `at` changed at least [`SETTLED_FOR`]
 /// before `asked`. A time that can't be read never did.
 fn settled_by(at: &str, asked: SystemTime) -> bool {
-    chrono::DateTime::parse_from_rfc3339(at).is_ok_and(|t| {
-        let t = SystemTime::from(t);
-        t.checked_add(SETTLED_FOR).is_some_and(|by| by <= asked)
-    })
+    at.parse::<jiff::Timestamp>()
+        .ok()
+        .and_then(|t| SystemTime::try_from(t).ok())
+        .and_then(|t| t.checked_add(SETTLED_FOR))
+        .is_some_and(|by| by <= asked)
 }
 
 /// Brings the ledger up to date with what's happening in the repo

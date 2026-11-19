@@ -22,9 +22,10 @@ pub fn fingerprint(body: &str) -> String {
 }
 
 pub(crate) fn timestamp(text: &str) -> Result<u64, ApiError> {
-    let t = chrono::DateTime::parse_from_rfc3339(text)
+    let t = text
+        .parse::<jiff::Timestamp>()
         .map_err(|_| ApiError::new("GitHub returned an invalid timestamp"))?
-        .timestamp();
+        .as_second();
     u64::try_from(t).map_err(|_| ApiError::new("GitHub returned a pre-epoch timestamp"))
 }
 

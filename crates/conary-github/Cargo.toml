@@ -9,9 +9,9 @@ publish = false
 
 [dependencies]
 base64 = "0.23.1"
-chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 conary-core = { version = "0.0.0", path = "../conary-core" }
 ed25519-dalek = "3.0.0"
+jiff = { version = "1.0.1", default-features = false, features = ["std"] }
 regex = "1.13.1"
 ring = "0.17.14"
 schemars = "1.2.3"
