@@ -178,3 +178,25 @@ fn compare_refuses_a_decision_without_its_revision() {
     );
     assert_eq!(tally.errors, 1);
 }
+
+/// A PR the flow's pause stops disagrees with a steward that has no pause,
+/// and its line names the switch, so the shadow tells it apart from a
+/// different reading of the PR.
+#[test]
+fn compare_names_the_switch_behind_a_disagreement() {
+    let c = Case::new();
+    let stage = dry(&c)[0].next.as_ref().unwrap().stage;
+    steward_says(&c, stage, "pending", STEWARD);
+    let paused = Pause {
+        scope: Scope::Repository,
+        reason: "moving the machine".into(),
+        at: 7,
+    };
+    flow::pause::pause(c.dir.path(), &REPO.parse().unwrap(), &paused).unwrap();
+    let (lines, tally) = beside(&c.hub, dry(&c), &authors());
+    assert!(!lines[0].agree);
+    assert_eq!((tally.agree, tally.disagree), (0, 1));
+    let line = serde_json::to_value(&lines[0]).unwrap();
+    assert_eq!(line["flow"]["switches"][0]["switch"], "pause", "{line}");
+    assert_eq!(line["flow"]["switches"][0]["reason"], "moving the machine");
+}

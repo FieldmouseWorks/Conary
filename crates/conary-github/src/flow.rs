@@ -62,6 +62,9 @@ mod occupancy;
 pub mod pause;
 pub use pause::{Pause, Scope};
 
+pub(crate) mod switches;
+pub use switches::{Held, Holding, InEffect, Status, Switch, status};
+
 mod ledger;
 
 mod approval;

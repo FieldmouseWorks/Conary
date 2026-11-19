@@ -155,6 +155,16 @@ impl Pass<'_> {
                 p.number,
             )
         });
+        if !self.dry_run {
+            super::switches::opened(
+                self.root,
+                repo,
+                &super::switches::Open {
+                    at: self.now,
+                    prs: pulls.iter().map(|p| p.number).collect(),
+                },
+            )?;
+        }
         let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls);
         occupancy.discover(
             self,
@@ -232,6 +242,8 @@ impl Pass<'_> {
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let approved = facts.owner_approved;
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
+                next.switches =
+                    super::switches::holding(self, &facts, &record.memory, &next, self.now);
                 record.memory = memory;
                 if super::proofs::slotted(&next) {
                     let ahead = super::proofs::ahead(&facts);
@@ -452,7 +464,7 @@ impl Pass<'_> {
         Ok(())
     }
 }
-fn plugin_kind(step: &Step) -> Option<&'static str> {
+pub(super) fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
         Step::QueueReview(_) => Some("review"),
         Step::HandFix(_) => Some("fix"),

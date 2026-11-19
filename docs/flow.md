@@ -324,6 +324,49 @@ stopped worker's request starts again if it's still wanted. The merge
 train's own stepping (`cn train step`) isn't a pass and doesn't read the
 pause; a paused PR leaves the train at its next decision.
 
+## Switches
+
+A switch is something a person or the configuration turned off: the
+repository's pause, a PR's hold label, an omitted plugin (`plugins.review`,
+`fix`, `judge` or `proof`), the train off (`settings.train`), no person list
+(`settings.people`), and no evidence verifier (`evidence` unset, or one that
+requires no gate). Each one shows while it's in effect, with what it holds.
+
+Each PR's decision names every switch that stops it in `switches`, left out
+when there are none. An entry is the switch (`"switch"`: `pause` with its
+`reason` and `at`, `hold` with its `label`, `no_plugin` with its `kind`,
+`train_off`, `no_people` or `no_evidence`), the `step` it keeps off, and the
+`workers` of the PR it's stopping. A pause or a hold decides the PR's step
+and so masks the others: the step they keep off is decided again with them
+lifted, its memory thrown away, and the configuration's switches are judged
+on that step. So a paused, held PR that needs a review with no review plugin
+names all three. A configuration switch names a PR only at the step it
+keeps off: an omitted plugin when the step is that plugin's work; the train
+off when an R2 change would merge (an R2 change lands only through the
+train); no person list when a landing step needs a person's approval, or
+the owner label hands the PR to the owner; no evidence verifier at any
+landing step. The PR's `description` stays the one its decision gives.
+
+A held PR is read as fully as any other, so its decision can say what the
+hold keeps off. The hold still decides it ahead of everything but what an
+owner must hear of first, as before.
+
+```console
+cn flow status OWNER/REPO --config flow.json
+```
+
+prints the repository's switches in effect, each with `prs`: every PR it
+holds, the `step` it keeps off and the PR's `workers` that haven't
+answered. It reads only the data directory and the configuration: no
+GitHub, conaryd, token or lock, so it answers while they're down or a pass
+holds the lock. The pause is read from its file now, and holds every open
+PR it covers, whether or not a pass has seen it yet. The configuration's
+switches are listed whenever they're in effect, holding no PR until a
+decision names one. Holds are as the last pass read the labels. The open
+PRs are the ones the last pass listed, saved as `open` in the repository's
+directory with the time it read them (`read_at`); a record stays once its
+PR closes, so a closed PR drops out at the next pass.
+
 ## Effects and retries
 
 The executor revokes previous permission before cosmetic stage-label writes.
@@ -473,7 +516,8 @@ The library also refuses to mutate a supplied writable Store in dry-run mode;
 it uses only that Store's ledger observations.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
-`overdue_at`, `proof`, `wait_on`, `on_usage`, and `owner_notice`, and
+`overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice` and, when
+any stop it, `switches` ([Switches](#switches)), and
 `revision` (`head`, `base`, `description`), the revision it was decided on;
 `error` reports a per-PR failure. Null deadlines remain explicit. These
 lines are suitable for comparing with the existing steward beside it,
@@ -485,7 +529,8 @@ each PR now: the stage its `waiting: …` label names, and its newest
 `review-settled` status on the head, counted only from
 `settings.review_authors` (from anyone when that's empty). It prints one
 JSON line per PR with `repo`, `pr`, `head`, `agree`, `flow` (`stage`,
-`step`, `description`), `steward` (`stages`, `state`, `description`) and
+`step`, `description`, `switches`), `steward` (`stages`, `state`,
+`description`) and
 `error`: disagreements first, then errors, then agreements, each by PR
 number. A last line tallies the repository: `prs`, `agree`, `disagree`,
 `errors`. The stages agree when the steward's labels name exactly the
@@ -523,6 +568,11 @@ first saw a head, so it gives this as "Waiting for the head or answered
 findings to settle" where a live pass would queue the review. It ends at S1,
 when the flow's own reviewer and judge publish what it counts; a PR still
 open then gets one fresh review.
+
+**A switch the steward doesn't share.** A PR the flow's pause, a hold the
+steward doesn't read, or a switch in the flow's configuration stops
+disagrees with a steward that carries on. Its line's `flow.switches` names
+the switch, so it isn't read as the two seeing the PR differently.
 
 **The steward is a pass behind.** Not a difference: the steward's next pass
 says what the flow said. Right after the steward posts a review with

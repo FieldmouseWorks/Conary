@@ -31,6 +31,10 @@ pub struct Decided {
     pub stage: Stage,
     pub step: Step,
     pub description: String,
+    /// The switches in effect that stop the PR, as its decision names them:
+    /// a disagreement with one is a switch the steward doesn't have, not a
+    /// different reading of the PR.
+    pub switches: Vec<super::Holding>,
 }
 
 /// What the steward says of the PR on GitHub.
@@ -74,6 +78,7 @@ pub fn beside<G: Source>(
                 stage: next.stage,
                 step: next.step,
                 description: next.description,
+                switches: next.switches,
             });
             let read = said(github, &report.repo.to_string(), report.pr, authors).and_then(
                 |(revision, said)| match &report.revision {

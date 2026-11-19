@@ -90,11 +90,11 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if !f.complete {
         return owner(f, "Too much to read: the owner merges it");
     }
-    if f.base_held {
-        return wait(Stage::Base, None, "Waiting for the default branch's CI");
-    }
     if f.labels.contains(&f.settings.hold_label) {
         return wait(Stage::None, None, "On hold (the hold label)");
+    }
+    if f.base_held {
+        return wait(Stage::Base, None, "Waiting for the default branch's CI");
     }
     if f.stacked_on.is_some() {
         return wait(

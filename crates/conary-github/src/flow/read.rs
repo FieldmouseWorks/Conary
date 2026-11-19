@@ -381,11 +381,8 @@ impl From<&crate::api::PullRequest> for Revision {
     }
 }
 
+/// A PR outside the pipeline, read no further. A held one is in it, only
+/// switched off: it's read in full, so what its hold keeps off shows.
 pub(crate) fn excluded(f: &Facts) -> bool {
-    !f.open
-        || f.draft
-        || !f.trusted
-        || !f.complete
-        || f.labels.contains(&f.settings.hold_label)
-        || f.stacked_on.is_some()
+    !f.open || f.draft || !f.trusted || !f.complete || f.stacked_on.is_some()
 }

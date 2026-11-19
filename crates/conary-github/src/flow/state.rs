@@ -413,6 +413,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                     None
                 }
             }),
+            // The pass names them: some live in its configuration alone.
+            switches: Vec::new(),
         },
         m,
     )
