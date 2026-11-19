@@ -260,34 +260,45 @@ fn a_seated_pr_with_an_unreadable_answer_is_granted_nothing() {
     std::fs::write(&answer, b"corrupt completion").unwrap();
     let before = granted(&c);
     let reports = c.pass(now + 1, false);
+    assert_eq!(granted(&c), before, "permission published: {reports:?}");
+    assert!(c.record().live.is_empty(), "{reports:?}");
+    assert_eq!(c.hub.count(Call::Land), 0);
     let three = decided(&reports, 3);
     assert_eq!(three["step"], json!({"Wait": {"until": null}}), "{three}");
     assert_ne!(three["stage"], "train", "{three}");
     assert_eq!(three["degraded"][0]["path"], "answer", "{three}");
-    assert_eq!(granted(&c), before, "permission published: {three}");
-    assert!(c.record().live.is_empty());
-    assert_eq!(c.hub.count(Call::Land), 0);
     assert_eq!(ops(&c, "degraded").len(), 1);
 }
 
-/// An answer that stops reading after the decision and before its
-/// permission is used: the permission is withdrawn, landing directly and
-/// in the train, as when any other input changed.
+/// An answer that stops reading during the pass, landing directly and in
+/// the train: after occupancy read it and before the PR's decision did
+/// (on the PR's snapshot read), or after the decision and before its
+/// permission is used (on the stage write between the two scope checks).
+/// Either way nothing is granted or landed, and the report names it.
 #[test]
-fn an_answer_that_stops_reading_before_permission_is_used_withdraws_it() {
-    for seated in [false, true] {
-        let mut c = Case::new();
-        let now = jobs::now();
-        let answer = posted_review(&mut c, seated, now);
-        let before = granted(&c);
-        c.hub.race(crate::sim::On::from(Call::FlowStage), move |_| {
-            std::fs::write(&answer, b"corrupt completion").unwrap();
-        });
-        let reports = c.pass(now + 1, false);
-        let error = reports[0].error.as_deref().unwrap_or_default();
-        assert!(error.contains("answer"), "seated {seated}: {reports:?}");
-        assert_eq!(granted(&c), before, "seated {seated}: {reports:?}");
-        assert!(c.record().live.is_empty(), "seated {seated}");
-        assert_eq!(c.hub.count(Call::Land), 0, "seated {seated}");
+fn an_answer_that_stops_reading_during_the_pass_is_granted_nothing() {
+    for on in [Call::FlowSnapshot, Call::FlowStage] {
+        for seated in [false, true] {
+            let mut c = Case::new();
+            let now = jobs::now();
+            let answer = posted_review(&mut c, seated, now);
+            let before = granted(&c);
+            c.hub.race(crate::sim::On::from(on), move |_| {
+                std::fs::write(&answer, b"corrupt completion").unwrap();
+            });
+            let reports = c.pass(now + 1, false);
+            let case = format!("{on:?} seated {seated}: {reports:?}");
+            assert_eq!(granted(&c), before, "permission published: {case}");
+            assert!(c.record().live.is_empty(), "{case}");
+            assert_eq!(c.hub.count(Call::Land), 0, "{case}");
+            let error = reports[0].error.as_deref().unwrap_or_default();
+            assert!(error.contains("answer didn't read"), "{case}");
+            if on == Call::FlowSnapshot {
+                // The decision met it: it waits on it, and it's recorded.
+                let three = decided(&reports, 3);
+                assert_eq!(three["degraded"][0]["path"], "answer", "{case}");
+                assert_eq!(ops(&c, "degraded").len(), 1, "{case}");
+            }
+        }
     }
 }

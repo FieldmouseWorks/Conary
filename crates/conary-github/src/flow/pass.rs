@@ -259,9 +259,10 @@ impl Pass<'_> {
                 {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
                 }
-                super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                let hydrated = super::observe::hydrate(&mut facts, &record, self.now, self.dry_run);
                 // What half-worked reading its answers, when occupancy read
-                // them and when this decision did.
+                // them and when this decision did: recorded even when the
+                // read failed otherwise.
                 let read = occupancy.met(pr, &facts.unreadable);
                 if !self.dry_run
                     && let Some(store) = store.as_deref_mut()
@@ -270,6 +271,7 @@ impl Pass<'_> {
                 {
                     report.error = Some(format!("recording what degraded: {e}"));
                 }
+                hydrated?;
                 // Read afresh before each PR's decision: a pause written
                 // during the pass stops the PRs after it.
                 facts.paused = super::pause::read(self.root, repo)?.filter(|p| p.covers(pr));
