@@ -278,8 +278,9 @@ fn sync_reads_again_a_pr_whose_merge_base_changed_since_it_gathered() {
 fn sync_reads_again_the_timeline_of_a_pr_changed_just_before_it_gathered() {
     let dir = tempfile::tempdir().unwrap();
     let f = fake();
-    let just = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now())
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let just = jiff::Timestamp::from_second(jiff::Timestamp::now().as_second())
+        .unwrap()
+        .to_string();
     f.edit_pull(REPO, 9, |p| p["updated_at"] = json!(just));
     let watch = Watch::new(&f, dir.path());
     let gathered = gather(&watch, &config(), &repo(), dir.path()).unwrap();

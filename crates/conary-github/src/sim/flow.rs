@@ -122,7 +122,7 @@ impl Hub {
             .reviews
             .get(&pr)
             .map_or(1, |r| r.len() as u64 + 1);
-        let review = json!({"id":id,"user":fixtures::user(super::STEWARD,"Bot"),"body":format!("<!-- {reviewer}-review:v2 {mark} -->"),"commit_id":p["head"]["sha"],"submitted_at":chrono::DateTime::from_timestamp(at as i64,0).unwrap().to_rfc3339()});
+        let review = json!({"id":id,"user":fixtures::user(super::STEWARD,"Bot"),"body":format!("<!-- {reviewer}-review:v2 {mark} -->"),"commit_id":p["head"]["sha"],"submitted_at":jiff::Timestamp::from_second(at as i64).unwrap().to_string()});
         self.world
             .borrow_mut()
             .repos
