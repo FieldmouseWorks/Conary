@@ -128,6 +128,66 @@ mod tests {
         change
     }
 
+    /// Each degraded path is written as the op log spells it, and a replay
+    /// gives back the same degradations, cleared as they were.
+    #[test]
+    fn degradations_are_written_and_replayed_as_spelled() {
+        use crate::op::Degraded;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let change = observe(&mut store, 9);
+        store
+            .record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+        let revision = RevisionId::new(&commit('a'), &commit('b'));
+        let paths = [
+            (Degraded::Record, r#"{"path":"record"}"#),
+            (
+                Degraded::Answer {
+                    job: "3-1".into(),
+                    kind: crate::plugin::Kind::Proof,
+                },
+                r#"{"path":"answer","job":"3-1","kind":"proof"}"#,
+            ),
+            (
+                Degraded::Lookup {
+                    check: "gate".into(),
+                },
+                r#"{"path":"lookup","check":"gate"}"#,
+            ),
+        ];
+        for (what, spelled) in &paths {
+            assert_eq!(serde_json::to_string(what).unwrap(), *spelled);
+            store
+                .record(Body::Degraded {
+                    change,
+                    revision,
+                    what: what.clone(),
+                    why: "it didn't read".into(),
+                })
+                .unwrap();
+        }
+        store
+            .record(Body::Restored {
+                change,
+                revision,
+                what: Degraded::Record,
+            })
+            .unwrap();
+        let written = store.ledger().change(change).unwrap().degradations.clone();
+        drop(store);
+        let ops = log::read(dir.path(), &key().verifying_key(), None).unwrap();
+        let replayed = Ledger::replay(&ops).unwrap();
+        let c = replayed.change(change).unwrap();
+        assert_eq!(c.degradations, written);
+        assert_eq!(c.degradations.len(), 3);
+        assert_eq!(c.degraded(revision).count(), 2);
+    }
+
     #[test]
     fn a_change_is_seen_revised_checked_and_landed() {
         let dir = tempfile::tempdir().unwrap();

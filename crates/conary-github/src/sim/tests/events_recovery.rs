@@ -31,6 +31,7 @@ fn booked(at: u64) -> Report {
             owner_notice: None,
             switches: vec![],
             priority: Level::Medium,
+            degraded: Vec::new(),
         }),
         error: None,
         owner_approval: None,

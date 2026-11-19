@@ -591,6 +591,10 @@ pub struct Facts {
     /// The ids of this PR's workers that haven't answered: the work a pause
     /// or a hold stops.
     pub working: BTreeSet<String>,
+    /// This PR's workers whose answers are there and don't read
+    /// ([`super::degraded`]): each is taken as still running, and while
+    /// any is, nothing is granted.
+    pub unreadable: Vec<super::Degradation>,
     /// The repository's pause, when one covers this PR, read right before
     /// this decision.
     pub paused: Option<super::pause::Pause>,
@@ -812,4 +816,10 @@ pub struct Next {
     /// admission and sizes its stall deadline.
     #[serde(default)]
     pub priority: Level,
+    /// Every path that half-worked for this PR, this pass or as the ledger
+    /// still holds it for its revision ([`super::degraded`]): what came
+    /// through one counts as its check's failure. Left out when there are
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded: Vec<super::Degradation>,
 }

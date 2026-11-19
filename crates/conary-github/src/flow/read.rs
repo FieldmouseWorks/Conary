@@ -99,6 +99,7 @@ pub fn read(
         jobs: BTreeMap::new(),
         claims: Vec::new(),
         stopped_jobs: BTreeSet::new(),
+        unreadable: Vec::new(),
         working: BTreeSet::new(),
         paused: None,
         pushes: BTreeMap::new(),

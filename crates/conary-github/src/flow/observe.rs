@@ -31,10 +31,30 @@ fn hydrate_with(
             && jobs::stopped(work).is_some()
         {
             Completion::default()
-        } else if dry_run {
-            jobs::inspect(work, now)?
         } else {
-            jobs::completion(work, now)?
+            // An answer that doesn't read is taken as still running, as
+            // occupancy takes it, and kept in the facts: the PR's decision
+            // waits on it, nothing is granted while it lasts, and one that
+            // stops reading before permission is used withdraws it
+            // ([`super::degraded`]). Any other failure is the pass's.
+            let read = if dry_run {
+                jobs::inspect(work, now)
+            } else {
+                jobs::completion(work, now)
+            };
+            match read {
+                Err(e) if e.is::<jobs::Unreadable>() => {
+                    f.unreadable.push(super::Degradation {
+                        what: super::Degraded::Answer {
+                            job: work.job.id.clone(),
+                            kind: work.purpose.kind(),
+                        },
+                        why: super::degraded::why(&*e),
+                    });
+                    Completion::default()
+                }
+                read => read?,
+            }
         };
         let mut job = work.job.clone();
         // Stopped work, obsolete, paused or held, is neither an answer nor

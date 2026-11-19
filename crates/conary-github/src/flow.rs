@@ -10,6 +10,7 @@ mod gates;
 mod history;
 mod markers;
 mod priority;
+pub use degraded::{Degradation, Degraded};
 pub use priority::{Level, Rank, StallAfter};
 mod proofs;
 mod read;
@@ -59,13 +60,14 @@ pub use evidence::{
 
 mod scope;
 
+pub(crate) mod degraded;
 mod occupancy;
 
 pub mod pause;
 pub use pause::{Pause, Scope};
 
 pub(crate) mod switches;
-pub use switches::{Held, Holding, InEffect, Status, Switch, status};
+pub use switches::{DegradedPr, Held, Holding, InEffect, Status, Switch, status};
 
 mod ledger;
 

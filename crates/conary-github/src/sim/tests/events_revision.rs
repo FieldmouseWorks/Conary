@@ -26,6 +26,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
             owner_notice: None,
             switches: vec![],
             priority: Level::Medium,
+            degraded: Vec::new(),
         }),
     }
 }

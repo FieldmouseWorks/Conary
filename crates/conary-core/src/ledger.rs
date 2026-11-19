@@ -11,9 +11,11 @@ use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Attest, Authority, Body, CheckKind, Op, Outcome, Repo};
 use crate::policy::Class;
 
+mod degraded;
 mod train;
 mod undo;
 
+pub use degraded::Degradation;
 pub use train::{Candidate, CandidateEvidence, Held, Plan, State, Train};
 pub use undo::Undo;
 
@@ -110,6 +112,10 @@ pub struct Change {
     /// What the class policy said of its revisions, oldest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub classes: Vec<Classed>,
+    /// Every path that half-worked for one of its revisions, oldest first,
+    /// cleared or not (design 4.6).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degradations: Vec<Degradation>,
     pub landing: Option<Landing>,
     /// What it reverts, when it's an undo.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,6 +216,10 @@ pub enum Invalid {
     Held(Held),
     /// An undo that reverts nothing.
     NothingToUndo,
+    /// A degradation's `why` is blank or longer than its bound.
+    DegradedWhy,
+    /// A restore of a path that isn't degraded for that revision.
+    NotDegraded,
     /// A new undo lacks its nonblank operational reason.
     UndoReason,
     /// The change is an undo already.
@@ -262,6 +272,12 @@ impl std::fmt::Display for Invalid {
             }
             Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
             Self::NothingToUndo => f.write_str("the undo reverts nothing"),
+            Self::DegradedWhy => write!(
+                f,
+                "a degradation needs a nonblank why of at most {} bytes",
+                crate::op::DEGRADED_WHY
+            ),
+            Self::NotDegraded => f.write_str("that path isn't degraded for that revision"),
             Self::UndoReason => f.write_str("an undo requires a nonblank reason"),
             Self::AlreadyUndo => f.write_str("the change is an undo already"),
             Self::UndoRepeats(id) => write!(f, "the undo names {id} twice, or itself"),
@@ -516,6 +532,17 @@ impl Ledger {
                 asked,
                 reason,
             } => self.check_undo(*change, reverts, asked, reason.as_deref())?,
+            Body::Degraded {
+                change,
+                revision,
+                what,
+                why,
+            } => self.check_degraded(*change, *revision, what, why)?,
+            Body::Restored {
+                change,
+                revision,
+                what,
+            } => self.check_restored(*change, *revision, what)?,
         }
         Ok(())
     }
@@ -572,6 +599,7 @@ impl Ledger {
                             current: None,
                             evidence: Vec::new(),
                             classes: Vec::new(),
+                            degradations: Vec::new(),
                             landing: None,
                             undo: None,
                             undone_by: Vec::new(),
@@ -678,6 +706,13 @@ impl Ledger {
             }
             Body::Close { .. } => c.closed = true,
             Body::Reopen { .. } => c.closed = false,
+            Body::Degraded {
+                revision,
+                what,
+                why,
+                ..
+            } => Self::apply_degraded(c, *revision, what, why, at),
+            Body::Restored { revision, what, .. } => Self::apply_restored(c, *revision, what, at),
             Body::Observe { .. } | Body::Outside { .. } => {
                 unreachable!("check refuses observing a change twice; outside names none")
             }

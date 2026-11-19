@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct ProofData {
     /// Capacity without ownership. It must never enter job cancellation.
     pub reserved: u32,
+    /// The PR whose work can't be told [`Self::reserved`] is for, and why.
+    pub reserved_by: Option<(u64, &'static str)>,
     pub records: Vec<ProofRecord>,
     pub live: Vec<ProofHolder>,
     pub waiting: Vec<ProofWaiting>,
@@ -138,6 +140,15 @@ fn model_run(f: &Facts) -> BTreeSet<&String> {
 /// preparation said needs none.
 pub(crate) fn slotted(next: &Next) -> bool {
     next.step == Step::Prove && !matches!(next.proof, Some(ProofPlan::Prove { slot: false, .. }))
+}
+
+/// Whose work, untold, holds every slot ([`ProofData::reserved_by`]), as a
+/// slot wait says it.
+pub(super) fn held_by(f: &Facts) -> String {
+    f.proof_data
+        .reserved_by
+        .map(|(by, why)| format!(": #{by}'s {why}, so every slot is held"))
+        .unwrap_or_default()
 }
 
 /// Number of slot holders and waiters ahead. Only open PRs and waiters
@@ -377,7 +388,10 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
             return Some((
                 Stage::ProofSlot,
                 Step::Wait { until: None },
-                format!("Waiting for a machine proof slot ({ahead} ahead)"),
+                format!(
+                    "Waiting for a machine proof slot ({ahead} ahead{})",
+                    held_by(f)
+                ),
                 None,
             ));
         }

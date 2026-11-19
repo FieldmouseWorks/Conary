@@ -199,6 +199,48 @@ pub enum Asked {
     Since { since: i64 },
 }
 
+/// What half-worked (`docs/DESIGN.md` section 4.6): a path that went on
+/// without the answer it was for. Whatever came through it counts as its
+/// check's failure until a later [`Body::Restored`] says it works again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "path", rename_all = "snake_case")]
+pub enum Degraded {
+    /// The flow's record of the change's work didn't read. Its workers were
+    /// taken as holding every proof slot, and none of its answers count.
+    Record,
+    /// The answer of the flow's worker `job`, doing `kind` of work, didn't
+    /// read: it was taken as still running, holding its proof slot if it's
+    /// a proof, and counts as no answer.
+    Answer {
+        job: String,
+        kind: crate::plugin::Kind,
+    },
+    /// A lookup of `check`'s attested result couldn't tell whether it holds:
+    /// GitHub or the producer's attestation didn't answer.
+    Lookup { check: String },
+}
+
+impl std::fmt::Display for Degraded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Record => f.write_str("its flow record didn't read"),
+            Self::Answer { job, kind } => {
+                let kind = serde_json::to_value(kind).map_err(|_| std::fmt::Error)?;
+                write!(
+                    f,
+                    "{} worker {job}'s answer didn't read",
+                    kind.as_str().unwrap_or("a")
+                )
+            }
+            Self::Lookup { check } => write!(f, "{check}'s evidence lookup couldn't tell"),
+        }
+    }
+}
+
+/// The most bytes of a degradation's `why`: it's permanent, so it says
+/// what failed in a line, never a body read back from GitHub or a plugin.
+pub const DEGRADED_WHY: usize = 200;
+
 /// A new undo's operational reason, preserved verbatim. Callers must keep
 /// secrets, personal data and prompt text out of this permanent record.
 pub fn undo_reason(reason: &str) -> Result<String, &'static str> {
@@ -347,6 +389,21 @@ pub enum Body {
         candidate: CandidateId,
         tree: TreeId,
     },
+    /// A path that half-worked for this revision of the change: what
+    /// degraded and why (at most [`DEGRADED_WHY`] bytes). Recorded once while
+    /// it lasts, and never removed: a later [`Body::Restored`] clears it.
+    Degraded {
+        change: ChangeId,
+        revision: RevisionId,
+        what: Degraded,
+        why: String,
+    },
+    /// The path a [`Body::Degraded`] named works again for that revision.
+    Restored {
+        change: ChangeId,
+        revision: RevisionId,
+        what: Degraded,
+    },
     /// `change` is an undo: its PR reverts `reverts`, landed changes in its
     /// repo, because `asked` asked for them. Once it lands they're
     /// reverted, and they're landed again if it's undone in turn.
@@ -375,6 +432,8 @@ impl Body {
             | Self::Reopen { change }
             | Self::Join { change, .. }
             | Self::Leave { change, .. }
+            | Self::Degraded { change, .. }
+            | Self::Restored { change, .. }
             | Self::Undo { change, .. } => Some(*change),
             Self::Outside { .. }
             | Self::Candidate { .. }
