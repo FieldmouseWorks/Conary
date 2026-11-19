@@ -33,16 +33,26 @@ fn hydrate_with(
             Completion::default()
         } else {
             // An answer that doesn't read is taken as still running, as
-            // occupancy takes it: the pass has recorded it as degraded
-            // ([`super::degraded`]), and the PR's decision waits on it.
-            // Any other failure is the pass's.
+            // occupancy takes it, and kept in the facts: the PR's decision
+            // waits on it, nothing is granted while it lasts, and one that
+            // stops reading before permission is used withdraws it
+            // ([`super::degraded`]). Any other failure is the pass's.
             let read = if dry_run {
                 jobs::inspect(work, now)
             } else {
                 jobs::completion(work, now)
             };
             match read {
-                Err(e) if e.is::<jobs::Unreadable>() => Completion::default(),
+                Err(e) if e.is::<jobs::Unreadable>() => {
+                    f.unreadable.push(super::Degradation {
+                        what: super::Degraded::Answer {
+                            job: work.job.id.clone(),
+                            kind: work.purpose.kind(),
+                        },
+                        why: super::degraded::why(&*e),
+                    });
+                    Completion::default()
+                }
                 read => read?,
             }
         };

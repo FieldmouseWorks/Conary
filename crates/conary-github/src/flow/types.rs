@@ -591,6 +591,10 @@ pub struct Facts {
     /// The ids of this PR's workers that haven't answered: the work a pause
     /// or a hold stops.
     pub working: BTreeSet<String>,
+    /// This PR's workers whose answers are there and don't read
+    /// ([`super::degraded`]): each is taken as still running, and while
+    /// any is, nothing is granted.
+    pub unreadable: Vec<super::Degradation>,
     /// The repository's pause, when one covers this PR, read right before
     /// this decision.
     pub paused: Option<super::pause::Pause>,

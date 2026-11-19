@@ -50,6 +50,15 @@ fn validate<G: Write>(
     if fresh.changes_requested && !f.changes_requested {
         return Err("Review changes were requested before permission was used".into());
     }
+    // An answer the decision read that doesn't read now. Cleanup leaves
+    // out stopped work it doesn't read, so only a new one counts.
+    if let Some(d) = fresh
+        .unreadable
+        .iter()
+        .find(|d| !f.unreadable.iter().any(|o| o.what == d.what))
+    {
+        return Err(format!("{d} before permission was used").into());
+    }
     let labels = |f: &Facts| {
         f.labels
             .iter()

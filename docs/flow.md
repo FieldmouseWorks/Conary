@@ -409,8 +409,10 @@ paths it records:
   writes over the record.
 - **A worker's answer that doesn't read** (`answer`, with its `job` and the
   `kind` of work). The worker is taken as still running, and holding its
-  slot if it's a proof. The PR's decision waits on it, unless it's stopping
-  work.
+  slot if it's a proof. The PR's decision waits on it at no stage, so even
+  a seat in the train is granted nothing, unless it's stopping work. An
+  answer that stops reading after the decision and before its permission is
+  used withdraws the permission, as any other changed input does.
 - **An evidence lookup that can't tell** (`lookup`, with its `check`): a
   read of GitHub that one check's attested result needed didn't answer:
   its runs, its tree or its attestation, the negative check's merge base
@@ -424,9 +426,10 @@ A pass records each path once while it lasts, against the PR's revision as
 the ledger has it, and appends `restored` when the same path works again: a
 record or answer the next pass reads, a lookup that tells. A PR the ledger
 hasn't seen has nothing to record against, and its decision still names
-what degraded. A dry run, or a pass with no ledger store, records nothing and names the
-same. A decision
-names a lookup the ledger still holds degraded until it's looked up again.
+what degraded. A dry run, or a pass with no ledger store, records nothing
+and names the same: a path the ledger still holds degraded that this pass
+took again (a record or answer that reads, a lookup that tells) isn't named,
+and any other it holds is, until it's taken again.
 
 `cn flow status` lists every open PR's degraded paths as `degraded`, each
 with its `pr`: a record or answer that doesn't read now, read from the data

@@ -3,7 +3,8 @@
 //! (`docs/flow.md`, "Degraded paths"). These read the decision and the op
 //! log as JSON, as `cn flow` and a ledger reader see them.
 use super::flow_pass_case::{Case, REPO};
-use super::flow_pass_slots::{prepared, two};
+use super::flow_pass_slots::{prepared, step, two};
+use crate::api::Source;
 use crate::flow::*;
 use crate::sim::Call;
 use serde_json::{Value, json};
@@ -105,8 +106,12 @@ fn an_unreadable_record_is_recorded_once_counts_failed_and_is_named() {
     let three = decided(&c.pass(now + 3, true), 3);
     assert_eq!(three["degraded"][0]["path"], "record");
     assert_eq!(ops(&c, "degraded").len(), 1);
-    // Read again: a later op clears it, and the first stays.
+    // Read again: a dry run names nothing and writes nothing, and a real
+    // pass's later op clears it, and the first stays.
     std::fs::write(&path, &kept).unwrap();
+    let three = decided(&c.pass(now + 4, true), 3);
+    assert_eq!(three.get("degraded"), None, "{three}");
+    assert!(ops(&c, "restored").is_empty());
     let reports = c.pass(now + 4, false);
     assert_eq!(decided(&reports, 3).get("degraded"), None);
     assert_eq!(ops(&c, "restored").len(), 1);
@@ -179,7 +184,110 @@ fn an_unreadable_answer_is_recorded_once_counts_failed_and_is_named() {
         assert_eq!(ops(&c, "degraded").len(), 1);
     }
     std::fs::remove_file(&answer).unwrap();
+    let three = decided(&c.pass(now + 4, true), 3);
+    assert_eq!(three.get("degraded"), None, "{three}");
+    assert!(ops(&c, "restored").is_empty());
     let three = decided(&c.pass(now + 4, false), 3);
     assert_eq!(three.get("degraded"), None, "{three}");
     assert_eq!(ops(&c, "restored").len(), 1);
+}
+
+/// The review-settled successes on PR 3's head.
+fn granted(c: &Case) -> usize {
+    c.hub
+        .statuses(REPO, &super::head(3))
+        .unwrap()
+        .iter()
+        .filter(|s| s.context == SETTLED && s.state == "success")
+        .count()
+}
+/// A reviewed PR, its review worker's answer posted and on disk, in the
+/// train (`seated`) or landing directly. Returns the answer's path.
+fn posted_review(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
+    c.clean_review();
+    c.config.settings.train = seated;
+    if seated {
+        let reports = c.pass(now, false);
+        assert_eq!(step(&reports, 0).1, Step::JoinTrain, "{reports:?}");
+    }
+    let mut record = c.record();
+    let path = c.dir.path().join("3-90.job");
+    record.jobs.push(jobs::Work {
+        purpose: jobs::Purpose::Review("reviewer".into()),
+        job: Job {
+            id: "3-90".into(),
+            revision: Revision::from(&c.hub.pull(REPO, 3).unwrap()),
+            state: JobState::Done,
+            started: now,
+            repeated: false,
+        },
+        path: path.clone(),
+        deadline: now + 10_000,
+        posted: true,
+        recipes: Default::default(),
+        slotless: false,
+        handed: vec![],
+        sent: Default::default(),
+    });
+    let file = record_path(c, 3);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, serde_json::to_vec(&record).unwrap()).unwrap();
+    let answer = path.with_extension("answer");
+    let completion = jobs::Completion {
+        at: now,
+        result: Some(Ok(conary_core::plugin::Response {
+            contract: conary_core::plugin::CONTRACT.into(),
+            by: conary_core::plugin::Identity {
+                engine: "fixture".into(),
+                session: None,
+            },
+            execution: None,
+            answer: conary_core::plugin::Answer::Review { findings: vec![] },
+        })),
+    };
+    std::fs::write(&answer, serde_json::to_vec(&completion).unwrap()).unwrap();
+    answer
+}
+
+/// A seated PR whose posted review worker's answer doesn't read: it
+/// waits, named degraded, and its seat is granted nothing, where the train
+/// stage's wait granted it before.
+#[test]
+fn a_seated_pr_with_an_unreadable_answer_is_granted_nothing() {
+    let mut c = Case::new();
+    let now = jobs::now();
+    let answer = posted_review(&mut c, true, now);
+    std::fs::write(&answer, b"corrupt completion").unwrap();
+    let before = granted(&c);
+    let reports = c.pass(now + 1, false);
+    let three = decided(&reports, 3);
+    assert_eq!(three["step"], json!({"Wait": {"until": null}}), "{three}");
+    assert_ne!(three["stage"], "train", "{three}");
+    assert_eq!(three["degraded"][0]["path"], "answer", "{three}");
+    assert_eq!(granted(&c), before, "permission published: {three}");
+    assert!(c.record().live.is_empty());
+    assert_eq!(c.hub.count(Call::Land), 0);
+    assert_eq!(ops(&c, "degraded").len(), 1);
+}
+
+/// An answer that stops reading after the decision and before its
+/// permission is used: the permission is withdrawn, landing directly and
+/// in the train, as when any other input changed.
+#[test]
+fn an_answer_that_stops_reading_before_permission_is_used_withdraws_it() {
+    for seated in [false, true] {
+        let mut c = Case::new();
+        let now = jobs::now();
+        let answer = posted_review(&mut c, seated, now);
+        let before = granted(&c);
+        c.hub.race(crate::sim::On::from(Call::FlowStage), move |_| {
+            std::fs::write(&answer, b"corrupt completion").unwrap();
+        });
+        let reports = c.pass(now + 1, false);
+        let error = reports[0].error.as_deref().unwrap_or_default();
+        assert!(error.contains("answer"), "seated {seated}: {reports:?}");
+        assert_eq!(granted(&c), before, "seated {seated}: {reports:?}");
+        assert!(c.record().live.is_empty(), "seated {seated}");
+        assert_eq!(c.hub.count(Call::Land), 0, "seated {seated}");
+    }
 }

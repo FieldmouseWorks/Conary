@@ -71,19 +71,36 @@ impl Occupancy {
     pub(crate) fn readable(&self, pr: u64) -> bool {
         self.records.contains_key(&pr)
     }
+    /// What half-worked reading `pr`'s record and answers: what this read
+    /// met, and what the PR's own decision met reading its answers since.
+    pub(crate) fn met(&self, pr: u64, since: &[Degradation]) -> Vec<Degradation> {
+        let mut read = self.degraded(pr).to_vec();
+        for d in since {
+            if !read.iter().any(|r| r.what == d.what) {
+                read.push(d.clone());
+            }
+        }
+        read
+    }
+    /// Whether this pass took the path again for `pr`: its record always,
+    /// its answers once the record read. Lookups are the decision's.
+    pub(crate) fn again(&self, pr: u64, what: &Degraded) -> bool {
+        match what {
+            Degraded::Record => true,
+            Degraded::Answer { .. } => self.readable(pr),
+            Degraded::Lookup { .. } => false,
+        }
+    }
     /// Record what this pass met of `pr`'s record and answers, and clear
-    /// what it read again: the record always, the answers once it read.
+    /// what it read again.
     pub(crate) fn record(
         &self,
         store: &mut conary_core::Store,
         repo: &conary_core::op::Repo,
         pr: u64,
     ) -> Result<()> {
-        let readable = self.readable(pr);
-        degraded::record(store, repo, pr, self.degraded(pr), |what| match what {
-            Degraded::Record => true,
-            Degraded::Answer { .. } => readable,
-            Degraded::Lookup { .. } => false,
+        degraded::record(store, repo, pr, self.degraded(pr), |what| {
+            self.again(pr, what)
         })
     }
     pub(crate) fn discover<G: Write>(

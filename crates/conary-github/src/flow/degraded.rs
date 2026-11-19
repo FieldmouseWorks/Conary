@@ -123,6 +123,7 @@ pub(crate) fn held(ledger: Option<&conary_core::Ledger>, repo: &Repo, pr: u64) -
 /// degraded. Nothing in the record counts, and nothing acts for it.
 pub(crate) fn waiting(
     found: &[Degradation],
+    again: impl Fn(&Degraded) -> bool,
     priority: super::Level,
     ledger: Option<&conary_core::Ledger>,
     repo: &Repo,
@@ -142,53 +143,56 @@ pub(crate) fn waiting(
         priority,
         degraded: Vec::new(),
     };
-    name(
-        &mut next,
-        found,
-        Vec::new(),
-        &Default::default(),
-        ledger,
-        repo,
-        pr,
-    );
+    wait(&mut next, found);
+    name(&mut next, found, Vec::new(), again, ledger, repo, pr);
     next
+}
+
+/// A degraded record or answer (`read`) counts as its check's failure: the
+/// PR waits on it, at no stage, so nothing is granted (a wait at the train
+/// stage with a seat would be), whatever else it would do but stop work.
+pub(crate) fn wait(next: &mut super::Next, read: &[Degradation]) {
+    let Some(first) = read.first() else {
+        return;
+    };
+    if matches!(next.step, super::Step::StopJob(_)) {
+        return;
+    }
+    next.stage = super::Stage::None;
+    next.step = super::Step::Wait { until: None };
+    next.wait_until = None;
+    next.proof = None;
+    next.wait_on = None;
+    next.description = match read.len() {
+        1 => format!("Degraded: {first}"),
+        n => format!("Degraded: {first}, and {} more", n - 1),
+    }
+    .chars()
+    .take(140)
+    .collect();
 }
 
 /// Name every degraded path of the PR in its decision: what this pass met
 /// reading its record and answers (`read`) and its evidence (`lookups`),
 /// and what the ledger still holds for its revision that this pass didn't
-/// look up again. What came through one counts as its check's failure: a
-/// degraded record or answer keeps the PR waiting on it, whatever else it
-/// would do but stop work, and a lookup that couldn't tell has already
+/// take again (`again`, the same test [`record`] clears by, so a dry run
+/// names what a writing pass would leave). A degraded record or answer has
+/// already made the PR [`wait`], and a lookup that couldn't tell has already
 /// kept its landing from being granted.
 pub(crate) fn name(
     next: &mut super::Next,
     read: &[Degradation],
     lookups: Vec<Degradation>,
-    looked: &std::collections::BTreeSet<String>,
+    again: impl Fn(&Degraded) -> bool,
     ledger: Option<&conary_core::Ledger>,
     repo: &Repo,
     pr: u64,
 ) {
     let mut named: Vec<Degradation> = read.iter().cloned().chain(lookups).collect();
     for d in held(ledger, repo, pr) {
-        let again = matches!(&d.what, Degraded::Lookup { check } if looked.contains(check));
-        if !again && !named.iter().any(|n| n.what == d.what) {
+        if !again(&d.what) && !named.iter().any(|n| n.what == d.what) {
             named.push(d);
         }
-    }
-    if let Some(first) = read.first()
-        && !matches!(next.step, super::Step::StopJob(_))
-    {
-        next.step = super::Step::Wait { until: None };
-        next.proof = None;
-        next.description = match read.len() {
-            1 => format!("Degraded: {first}"),
-            n => format!("Degraded: {first}, and {} more", n - 1),
-        }
-        .chars()
-        .take(140)
-        .collect();
     }
     next.degraded = named;
 }

@@ -201,6 +201,7 @@ impl Pass<'_> {
                     };
                     let next = super::degraded::waiting(
                         occupancy.degraded(pr),
+                        |w| occupancy.again(pr, w),
                         super::Rank::of(&self.config.settings, &pull).level,
                         store.as_deref().map(Store::ledger).or(self.ledger),
                         repo,
@@ -257,11 +258,18 @@ impl Pass<'_> {
                     && let Some(store) = store.as_deref_mut()
                 {
                     super::ledger::classify(self, github, &mut facts, &mut record, store)?;
-                    if let Err(e) = occupancy.record(store, repo, pr) {
-                        report.error = Some(format!("recording what degraded: {e}"));
-                    }
                 }
                 super::observe::hydrate(&mut facts, &record, self.now, self.dry_run)?;
+                // What half-worked reading its answers, when occupancy read
+                // them and when this decision did.
+                let read = occupancy.met(pr, &facts.unreadable);
+                if !self.dry_run
+                    && let Some(store) = store.as_deref_mut()
+                    && let Err(e) =
+                        super::degraded::record(store, repo, pr, &read, |w| occupancy.again(pr, w))
+                {
+                    report.error = Some(format!("recording what degraded: {e}"));
+                }
                 // Read afresh before each PR's decision: a pause written
                 // during the pass stops the PRs after it.
                 facts.paused = super::pause::read(self.root, repo)?.filter(|p| p.covers(pr));
@@ -309,6 +317,9 @@ impl Pass<'_> {
                     next.description =
                         "R2 landing requires the merge train and exact candidate evidence".into();
                 }
+                // A degraded record or answer counts as failed: the PR waits
+                // on it, granted nothing.
+                super::degraded::wait(&mut next, &read);
                 let mut looked = std::collections::BTreeSet::new();
                 let mut lookups = Vec::new();
                 if grants(&next, &facts)
@@ -335,16 +346,16 @@ impl Pass<'_> {
                 }
                 super::degraded::name(
                     &mut next,
-                    occupancy.degraded(pr),
+                    &read,
                     lookups,
-                    &looked,
+                    |w| occupancy.again(pr, w) || again(w),
                     store.as_deref().map(Store::ledger).or(self.ledger),
                     repo,
                     pr,
                 );
                 // A record or answer that didn't read books the pass again,
                 // to read it again.
-                if !occupancy.degraded(pr).is_empty() && report.error.is_none() {
+                if !read.is_empty() && report.error.is_none() {
                     report.error = Some(next.description.clone());
                 }
                 if let Step::HandFix(kind) = next.step
