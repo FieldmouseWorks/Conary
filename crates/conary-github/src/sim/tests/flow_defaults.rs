@@ -22,7 +22,9 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         flow_authors,
         verdict_authors,
         judge_key,
+        judge_key_file,
         major_key,
+        major_key_file,
         bot_emails,
         renovate_email,
         renovate_login,
@@ -58,6 +60,7 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
     assert!(review_authors.is_empty() && flow_authors.is_empty());
     assert!(verdict_authors.is_empty());
     assert!(judge_key.is_none() && major_key.is_none());
+    assert!(judge_key_file.is_none() && major_key_file.is_none());
     assert!(bot_emails.is_empty());
     assert_eq!((renovate_email, renovate_login), (None, None));
     assert_eq!(owner_label, None);

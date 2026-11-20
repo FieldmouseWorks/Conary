@@ -44,6 +44,13 @@ impl SealKey {
         }
         Ok(Self(text.into()))
     }
+    /// The key a file holds, its surrounding whitespace ignored. Errors name
+    /// the file, never what it holds.
+    pub fn read(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("{} can't be read: {}", path.display(), e.kind()))?;
+        Self::from_hex(text.trim()).map_err(|e| format!("{}: {e}", path.display()))
+    }
     /// Same MAC format as burrow's seal.py. The key is the hexadecimal
     /// text, not its decoded bytes; only the first sixteen tag bytes travel.
     pub fn seal(

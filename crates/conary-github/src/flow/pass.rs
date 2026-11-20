@@ -56,9 +56,12 @@ fn kinds(schema: &mut schemars::Schema) {
     schema.insert("propertyNames".into(), kind.to_value());
 }
 impl Config {
-    /// The one loader of a flow configuration file, for every reader of it.
+    /// The one loader of a flow configuration file, for every reader of it:
+    /// its seal keys given as files are read here, at each load.
     pub fn load(path: &Path) -> Result<Self> {
-        Ok(super::schema::load(&std::fs::read(path)?)?.0)
+        let mut config: Self = super::schema::load(&std::fs::read(path)?)?.0;
+        config.settings.read_key_files()?;
+        Ok(config)
     }
 }
 #[derive(Debug, Serialize)]
