@@ -121,6 +121,14 @@ impl std::fmt::Display for CantTell {
     }
 }
 impl std::error::Error for CantTell {}
+/// A read every check shares that GitHub didn't answer, or that stopped
+/// short: none of them can tell.
+fn cant(read: super::Reading, why: String) -> super::persist::Error {
+    Box::new(CantTell(super::Degradation {
+        what: super::Degraded::Read { read },
+        why,
+    }))
+}
 /// A read `check` needed that GitHub didn't answer is a lookup that
 /// couldn't tell; any other error is the lookup's own answer.
 fn told<T>(check: &str, read: Result<T>) -> Result<T> {
@@ -137,8 +145,9 @@ fn told<T>(check: &str, read: Result<T>) -> Result<T> {
         }
     })
 }
-/// Whether every attested result a landing needs holds. Each check whose
-/// lookup told yes or no, rather than couldn't tell, goes in `looked`.
+/// Whether every attested result a landing needs holds. Each lookup or
+/// shared read that told yes or no, rather than couldn't tell, goes in
+/// `looked`.
 /// Whether `grant` puts the head in the merge train, rather than landing
 /// it: a train PR's join, or its seated wait. The train lands only a
 /// candidate whose own gate passed `evidence.require` attested, on the tree
@@ -155,7 +164,7 @@ pub(crate) fn authorize<G: Write>(
     github: &G,
     f: &Facts,
     grant: &Step,
-    looked: &mut std::collections::BTreeSet<String>,
+    looked: &mut std::collections::BTreeSet<super::Degraded>,
 ) -> Result<()> {
     if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
         return Err("An authorized person's scoped approval is required".into());
@@ -193,6 +202,9 @@ pub(crate) fn authorize<G: Write>(
     // other green check is a PR job's, whose token names GitHub's merge
     // commit rather than the head, and a status can't attest.
     let effective = observations(github, f, &f.revision.head)?;
+    looked.insert(super::Degraded::Read {
+        read: super::Reading::Observations,
+    });
     let mut required = std::collections::BTreeSet::new();
     if !joins_train(grant, f) {
         required.extend(evidence.require.iter().cloned());
@@ -233,10 +245,17 @@ pub(crate) fn authorize<G: Write>(
         crate::train::verify_negative(github, github, &f.repo, &base, &f.revision.head, &negatives)
             .map_err(Into::into),
     )?;
-    looked.insert(negative.clone());
+    looked.insert(super::Degraded::Lookup {
+        check: negative.clone(),
+    });
     verdict.map_err(|why| format!("negative evidence: {why}"))?;
 
-    let records = github.reviews(&repo, f.number)?;
+    let records = github
+        .reviews(&repo, f.number)
+        .map_err(|e| cant(super::Reading::Reviews, super::degraded::why(&e)))?;
+    looked.insert(super::Degraded::Read {
+        read: super::Reading::Reviews,
+    });
     if super::reviews::changes_requested(&records) {
         return Err("Review changes were requested before permission was used".into());
     }
@@ -284,11 +303,13 @@ fn check<G: Write>(
     head: &str,
     name: &str,
     receipt: Option<&[u8]>,
-    looked: &mut std::collections::BTreeSet<String>,
+    looked: &mut std::collections::BTreeSet<super::Degraded>,
 ) -> Result<()> {
     let answer = lookup(github, f, trust, head, name, receipt);
     if !answer.as_ref().is_err_and(|e| e.is::<CantTell>()) {
-        looked.insert(name.to_owned());
+        looked.insert(super::Degraded::Lookup {
+            check: name.to_owned(),
+        });
     }
     answer
 }
@@ -365,17 +386,30 @@ fn lookup<G: Write>(
     Ok(())
 }
 
+/// The head's checks, read again. A read of them that GitHub didn't answer,
+/// or that stopped short, can't tell ([`CantTell`]); a PR that moved is the
+/// answer no.
 fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci::Result> {
     let repo = f.repo.to_string();
-    let snapshot = github.snapshot(&repo, f.number)?;
-    if snapshot.revision != f.revision || !snapshot.checks_complete {
-        return Err("producer check scope changed or is incomplete".into());
+    let read = super::Reading::Observations;
+    let failed = |e: crate::ApiError| cant(read, super::degraded::why(&e));
+    let snapshot = github.snapshot(&repo, f.number).map_err(failed)?;
+    if snapshot.revision != f.revision {
+        return Err("producer check scope changed".into());
     }
-    let paths = github.files(
-        &repo,
-        f.base_tip.as_deref().ok_or("check base unknown")?,
-        head,
-    )?;
+    if !snapshot.checks_complete {
+        return Err(cant(
+            read,
+            "GitHub listed more check suites than one read holds".into(),
+        ));
+    }
+    let paths = github
+        .files(
+            &repo,
+            f.base_tip.as_deref().ok_or("check base unknown")?,
+            head,
+        )
+        .map_err(failed)?;
     let observed = super::ci::checks(
         github,
         &repo,
@@ -387,7 +421,11 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         f.classified.docs,
         &snapshot.suites,
         &f.settings,
-    )?;
+    )
+    .map_err(|e| cant(read, e.degradation.why))?;
+    if let Some(d) = observed.reads.met.first() {
+        return Err(cant(read, d.why.clone()));
+    }
     if head == f.revision.head {
         let checks: Vec<_> = observed
             .checks

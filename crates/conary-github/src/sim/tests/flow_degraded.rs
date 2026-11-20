@@ -10,7 +10,7 @@ use crate::sim::Call;
 use serde_json::{Value, json};
 
 /// The op log's ops of kind `op`, as written.
-fn ops(c: &Case, op: &str) -> Vec<Value> {
+pub(super) fn ops(c: &Case, op: &str) -> Vec<Value> {
     let path = conary_core::log::log_path(c.store.borrow().lock().dir());
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -19,20 +19,18 @@ fn ops(c: &Case, op: &str) -> Vec<Value> {
         .filter(|v| v.pointer("/op/body/op").or(v.pointer("/body/op")) == Some(&json!(op)))
         .collect()
 }
-/// The PR's decision, as JSON. A degraded read is the PR's error too, so
-/// the pass is booked again to read it again; anything else is none.
-fn decided(reports: &[Report], pr: u64) -> Value {
+/// The PR's decision, as JSON. A degraded path it waits on at no stage (a
+/// record or answer that didn't read, or a read it couldn't go on without)
+/// is the PR's error too, so the pass is booked again to read it again;
+/// anything else is none.
+pub(super) fn decided(reports: &[Report], pr: u64) -> Value {
     let report = reports.iter().find(|r| r.pr == pr).unwrap();
     let next = serde_json::to_value(report.next.as_ref().unwrap()).unwrap();
-    let read = next["degraded"]
-        .as_array()
-        .is_some_and(|d| d.iter().any(|d| d["path"] != "lookup"));
+    let description = next["description"].as_str().unwrap();
+    let waits = next["stage"].is_null() && description.starts_with("Degraded: ");
     match &report.error {
-        Some(error) => assert!(
-            read && Some(error.as_str()) == next["description"].as_str(),
-            "#{pr}: {error}"
-        ),
-        None => assert!(!read, "#{pr}: {next}"),
+        Some(error) => assert!(waits && error.starts_with(description), "#{pr}: {error}"),
+        None => assert!(!waits, "#{pr}: {next}"),
     }
     next
 }

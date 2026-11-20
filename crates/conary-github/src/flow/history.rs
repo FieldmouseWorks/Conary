@@ -1,6 +1,7 @@
 //! Provenance is read from every compared commit. Review coverage is never
 //! inferred from a branch name, nor from the author of its final commit.
 use super::Settings;
+use super::degraded::{Reading, Reads};
 use crate::api::History;
 
 pub(super) struct Provenance {
@@ -36,37 +37,47 @@ pub(super) fn trailers(message: &str) -> Option<Vec<(String, String)>> {
         .collect()
 }
 
-pub(super) fn provenance(got: Option<&History>, settings: &Settings, renovate: bool) -> Provenance {
-    let Some(got) = got else {
-        return Provenance {
-            known: false,
-            judge: false,
-            edited: None,
-        };
+/// Provenance from the PR's compared commits, `None` when they didn't read.
+/// A comparison that stopped short, or a commit or its trailers that didn't
+/// read, is a degraded read in `reads`: what came through it counts as
+/// unknown, never as clean.
+pub(super) fn provenance(
+    got: Option<&History>,
+    settings: &Settings,
+    renovate: bool,
+    reads: &mut Reads,
+) -> Provenance {
+    let unknown = Provenance {
+        known: false,
+        judge: false,
+        edited: None,
     };
+    let Some(got) = got else {
+        return unknown;
+    };
+    if !got.complete {
+        reads.met(
+            Reading::Commits,
+            "GitHub's comparison stopped short of every commit".into(),
+        );
+    }
     let mut judge = !got.complete;
     let mut edited = false;
     for c in &got.commits {
-        let Some(detail) = &c.commit else {
-            return Provenance {
-                known: false,
-                judge: false,
-                edited: None,
-            };
-        };
-        let Some(message) = detail.message.as_deref() else {
-            return Provenance {
-                known: false,
-                judge: false,
-                edited: None,
-            };
+        let Some((detail, message)) = c
+            .commit
+            .as_ref()
+            .and_then(|d| Some((d, d.message.as_deref()?)))
+        else {
+            reads.met(Reading::Commits, "a commit came without its message".into());
+            return unknown;
         };
         let Some(trailers) = trailers(message) else {
-            return Provenance {
-                known: false,
-                judge: false,
-                edited: None,
-            };
+            reads.met(
+                Reading::Trailers,
+                "git couldn't parse a commit's trailers".into(),
+            );
+            return unknown;
         };
         judge |= trailers.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("engine")
@@ -95,6 +106,7 @@ pub(super) fn provenance(got: Option<&History>, settings: &Settings, renovate: b
             edited |= !email.is_some_and(|e| bot(settings, e));
         }
     }
+    reads.answered(Reading::Trailers);
     Provenance {
         known: true,
         judge,

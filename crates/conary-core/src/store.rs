@@ -159,6 +159,12 @@ mod tests {
                 },
                 r#"{"path":"lookup","check":"gate"}"#,
             ),
+            (
+                Degraded::Read {
+                    read: crate::op::Reading::MergeTree,
+                },
+                r#"{"path":"read","read":"merge_tree"}"#,
+            ),
         ];
         for (what, spelled) in &paths {
             assert_eq!(serde_json::to_string(what).unwrap(), *spelled);

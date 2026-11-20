@@ -130,15 +130,30 @@ impl Pass<'_> {
                         Ok(())
                     };
                     // Selected PRs withdraw their last valid grant even if a
-                    // new read fails. Unrelated live permissions are preserved.
+                    // new read fails. An unrelated live permission is kept
+                    // only while its PR reads open: a read that fails
+                    // withdraws it, and is a degraded read of the PR.
                     let selected = only.is_none_or(|n| n == pr);
+                    let mut unread = None;
                     let closed = !selected
                         && !record.live.is_empty()
-                        && github
-                            .pull(&repo.to_string(), pr)
-                            .is_ok_and(|p| p.state != "open");
+                        && match github.pull(&repo.to_string(), pr) {
+                            Ok(p) => p.state != "open",
+                            Err(e) => {
+                                unread = Some(super::Degradation {
+                                    what: super::Degraded::Read {
+                                        read: super::Reading::Pull,
+                                    },
+                                    why: super::degraded::why(&e),
+                                });
+                                true
+                            }
+                        };
                     if selected || closed {
                         super::ledger::withdraw_live(pr, data, &mut record)?;
+                    }
+                    if let (Some(unread), Some(store)) = (unread, store.as_deref_mut()) {
+                        super::degraded::record(store, repo, pr, &[unread], |_| false)?;
                     }
                     let cleaned = super::ledger::cleanup(github, repo, pr, data, &mut record);
                     // A cancellation/read error must not preserve a live
@@ -249,7 +264,21 @@ impl Pass<'_> {
                 {
                     data.save(pr, &record)?;
                 }
-                let mut facts = read?;
+                let mut facts = match read {
+                    Ok(facts) => facts,
+                    Err(e) => {
+                        let found = e.degradation.clone();
+                        return self.stopped(
+                            store.as_deref_mut(),
+                            data.as_ref(),
+                            &pull,
+                            &mut record,
+                            &mut report,
+                            found,
+                            &e,
+                        );
+                    }
+                };
                 report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
@@ -281,7 +310,29 @@ impl Pass<'_> {
                 hydrated?;
                 // Read afresh before each PR's decision: a pause written
                 // during the pass stops the PRs after it.
-                facts.paused = super::pause::read(self.root, repo)?.filter(|p| p.covers(pr));
+                facts.paused = match super::pause::read(self.root, repo) {
+                    Ok(paused) => {
+                        facts.reads.answered(super::Reading::Pause);
+                        paused.filter(|p| p.covers(pr))
+                    }
+                    Err(e) => {
+                        let found = super::Degradation {
+                            what: super::Degraded::Read {
+                                read: super::Reading::Pause,
+                            },
+                            why: super::degraded::why(&*e),
+                        };
+                        return self.stopped(
+                            store.as_deref_mut(),
+                            data.as_ref(),
+                            &pull,
+                            &mut record,
+                            &mut report,
+                            found,
+                            &*e,
+                        );
+                    }
+                };
                 occupancy.apply(&mut facts, self.now)?;
                 if let Some(ledger) = store.as_deref().map(Store::ledger).or(self.ledger) {
                     super::observe::train(&mut facts, ledger);
@@ -329,7 +380,9 @@ impl Pass<'_> {
                 // on it, granted nothing.
                 super::degraded::wait(&mut next, &read);
                 let mut looked = std::collections::BTreeSet::new();
-                let mut lookups = Vec::new();
+                // The reads it went on past, or that stopped short, have
+                // each held what they were for failed already.
+                let mut lookups = facts.reads.met.clone();
                 if grants(&next, &facts)
                     && let Err(why) = if store.is_none() && (!self.dry_run || self.ledger.is_none())
                     {
@@ -338,14 +391,18 @@ impl Pass<'_> {
                         super::evidence::authorize(self, github, &facts, &next.step, &mut looked)
                     }
                 {
-                    if let Some(cant) = why.downcast_ref::<super::evidence::CantTell>() {
+                    if let Some(cant) = why.downcast_ref::<super::evidence::CantTell>()
+                        && !lookups.iter().any(|l| l.what == cant.0.what)
+                    {
                         lookups.push(cant.0.clone());
                     }
                     next.step = Step::Wait { until: None };
                     next.stage = Stage::Proof;
                     next.description = why.to_string().chars().take(140).collect();
                 }
-                let again = |what: &super::Degraded| matches!(what, super::Degraded::Lookup { check } if looked.contains(check));
+                let again = |what: &super::Degraded| {
+                    looked.contains(what) || facts.reads.answered.contains(what)
+                };
                 if !self.dry_run
                     && let Some(store) = store.as_deref_mut()
                     && let Err(e) = super::degraded::record(store, repo, pr, &lookups, again)
@@ -459,6 +516,49 @@ impl Pass<'_> {
         }
         reports.sort_by_key(|r| r.pr);
         Ok(reports)
+    }
+    /// The decision for a PR a read it can't go on without failed for: it
+    /// waits at no stage, naming the read, which is recorded, and nothing
+    /// acts for it. Its error books the pass again, to read it again.
+    #[allow(clippy::too_many_arguments)]
+    fn stopped(
+        &self,
+        store: Option<&mut Store>,
+        data: Option<&Data>,
+        pull: &crate::api::PullRequest,
+        record: &mut Record,
+        report: &mut Report,
+        found: super::Degradation,
+        error: &dyn std::error::Error,
+    ) -> Result<()> {
+        let found = [found];
+        let recorded = match store {
+            Some(store) if !self.dry_run => {
+                super::degraded::record(store, &report.repo, pull.number, &found, |_| false)
+                    .map(|()| Some(store.ledger()))
+            }
+            Some(store) => Ok(Some(store.ledger())),
+            None => Ok(self.ledger),
+        };
+        let next = super::degraded::waiting(
+            &found,
+            |_| false,
+            super::Rank::of(&self.config.settings, &self.config.trusted_authors, pull).level,
+            recorded.as_ref().ok().copied().flatten(),
+            &report.repo,
+            pull.number,
+        );
+        report.revision = Some(Revision::from(pull));
+        report.error = Some(match &recorded {
+            Ok(_) => format!("{}; {error}", next.description),
+            Err(r) => format!("{}; {error}; recording it failed: {r}", next.description),
+        });
+        record.decision = Some(next.clone());
+        report.next = Some(next);
+        if let Some(data) = data {
+            data.save(pull.number, record)?;
+        }
+        Ok(())
     }
     pub(crate) fn path(&self, kind: &str) -> Option<&Path> {
         match kind {

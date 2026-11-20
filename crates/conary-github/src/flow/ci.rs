@@ -4,9 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::api::{ApiError, CheckRun};
+use crate::api::CheckRun;
 use conary_core::policy::Paths;
 
+use super::degraded::{ReadError, Reading, Reads};
 use super::{Check, Ci, Read, Settings};
 
 /// Workflow metadata from GitHub's suite/workflow-run reads. Missing metadata
@@ -32,6 +33,9 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
+    /// The reads that failed or stopped short, each holding what it was
+    /// for pending, and those that answered.
+    pub reads: Reads,
 }
 
 const LANE: &str = "lane into ";
@@ -176,6 +180,8 @@ fn replacement(
 /// Evaluate one consistent set of check and suite reads. Annotation reads are
 /// lazy: a replacement run clears an old cancellation without asking why the
 /// old run stopped. API failure propagates, never guesses a timeout verdict.
+/// A read it goes on past (the docs lane's fork point, a run's suite) is a
+/// degraded read in the result's `reads`, and what it was for is pending.
 /// `documentation` is whether the machine's policy names every path of
 /// `paths` documentation: the docs lane's word alone, a job anyone's PR
 /// can name, never waives a proof.
@@ -189,11 +195,12 @@ pub(super) fn checks(
     documentation: bool,
     suites: &BTreeMap<u64, Suite>,
     settings: &Settings,
-) -> std::result::Result<Result, ApiError> {
+) -> std::result::Result<Result, ReadError> {
     let proofs = &settings.machine();
+    let mut reads = Reads::default();
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
-    let raw_runs = source.check_runs(repo, head)?;
+    let raw_runs = reads.ask(Reading::Checks, source.check_runs(repo, head))?;
     let mut has_ci = !raw_runs.is_empty()
         || suites
             .values()
@@ -213,12 +220,12 @@ pub(super) fn checks(
         .iter()
         .filter_map(|r| judged(r, suites).map(|j| (r, j)))
         .collect();
+    // A base branch that's gone has no fork point: that's GitHub's answer.
     let fork = if said.iter().any(|(_, (b, f))| *b == base && f.is_some()) {
-        source
-            .branch(repo, base)
-            .ok()
-            .flatten()
-            .and_then(|tip| source.merge_base(repo, &tip, head).ok())
+        let tip = reads
+            .take(Reading::Fork, source.branch(repo, base))
+            .flatten();
+        tip.and_then(|tip| reads.take(Reading::Fork, source.merge_base(repo, &tip, head)))
     } else {
         None
     };
@@ -287,6 +294,20 @@ pub(super) fn checks(
         if suite_id(run).is_some_and(|id| stale.contains(&id)) {
             continue;
         }
+        // GitHub's two reads disagree about a run whose suite the snapshot
+        // doesn't hold: whether it's a workflow's, and so whether it was
+        // replaced or its workflow is still running, can't be told.
+        let unsuited = suite_id(run).is_some() && suite(run, suites).is_none();
+        if unsuited {
+            reads.met(
+                if cancelled(run) {
+                    Reading::Cancelled
+                } else {
+                    Reading::Checks
+                },
+                "a check run's suite wasn't in the snapshot".into(),
+            );
+        }
         let after = if cancelled(run) {
             replacement(run, &runs, suites, &stale)
         } else {
@@ -303,8 +324,8 @@ pub(super) fn checks(
         let state = if run.status != "completed" || after == Replacement::Going {
             Ci::Pending
         } else if cancelled(run) {
-            if source
-                .annotations(repo, run.id)?
+            if reads
+                .ask(Reading::Cancelled, source.annotations(repo, run.id))?
                 .iter()
                 .any(|m| m.contains("has exceeded the maximum execution time"))
             {
@@ -319,6 +340,9 @@ pub(super) fn checks(
             Some("success" | "neutral" | "skipped")
         ) {
             Ci::Red
+        } else if unsuited {
+            name.push_str(" (its suite unread)");
+            Ci::Pending
         } else if flow(run, suites).is_some()
             && suite(run, suites).is_none_or(|s| s.status != "completed")
         {
@@ -340,7 +364,7 @@ pub(super) fn checks(
         proofs.iter().map(|p| (p.to_lowercase(), p)).collect()
     };
     let mut seen = BTreeSet::new();
-    for status in source.statuses(repo, head)? {
+    for status in reads.ask(Reading::Checks, source.statuses(repo, head))? {
         let name = status.context.to_lowercase();
         let train = name == crate::train::CONTEXT.to_ascii_lowercase();
         // Authenticate reserved train results before choosing the newest one.
@@ -385,5 +409,6 @@ pub(super) fn checks(
         docs,
         has_ci,
         runs: effective.into_values().collect(),
+        reads,
     })
 }

@@ -510,6 +510,30 @@ impl crate::flow::Read for Hub {
                 if snapshot.default_branch.is_none() {
                     snapshot.default_branch = w.base_observation(repo);
                 }
+                // A complete snapshot holds every suite of the head's check
+                // runs, as GitHub's does: one a test didn't name is an App's
+                // that runs no workflow.
+                if snapshot.checks_complete {
+                    for value in w.checks.get(&snapshot.revision.head).into_iter().flatten() {
+                        let run: CheckRun = parse(value);
+                        let Some(suite) = run.check_suite else {
+                            continue;
+                        };
+                        let named =
+                            snapshot
+                                .suites
+                                .entry(suite.id)
+                                .or_insert_with(|| crate::flow::Suite {
+                                    status: "completed".into(),
+                                    conclusion: None,
+                                    app: String::new(),
+                                    workflow: None,
+                                });
+                        if named.app.is_empty() && run.status != "completed" {
+                            named.status = "in_progress".into();
+                        }
+                    }
+                }
                 Ok(snapshot)
             },
         )

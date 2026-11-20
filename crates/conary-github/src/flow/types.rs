@@ -585,6 +585,10 @@ pub struct Facts {
     /// ([`super::degraded`]): each is taken as still running, and while
     /// any is, nothing is granted.
     pub unreadable: Vec<super::Degradation>,
+    /// The reads of GitHub this decision went on past, failed or stopped
+    /// short ([`super::degraded`]), each holding what it was for failed,
+    /// and those that answered.
+    pub reads: super::degraded::Reads,
     /// The repository's pause, when one covers this PR, read right before
     /// this decision.
     pub paused: Option<super::pause::Pause>,

@@ -1,7 +1,7 @@
 //! Repository-wide admission state, including PRs omitted by targeted kicks.
 //! Reading every open PR's record is also where the pass meets an unreadable
 //! record or worker answer ([`super::degraded`]), for every PR at once.
-use super::degraded::{self, Degradation, Degraded};
+use super::degraded::{self, Degradation, Degraded, Reading, Reads};
 use super::jobs::{self, Purpose};
 use super::persist::Result;
 use super::*;
@@ -15,6 +15,10 @@ pub(crate) struct Occupancy {
     queued: std::collections::BTreeSet<u64>,
     /// Each open PR's unreadable record, or its workers' unreadable answers.
     degraded: BTreeMap<u64, Vec<Degradation>>,
+    /// What [`Self::discover`]'s reads of each PR met and answered: what a
+    /// PR the pass doesn't visit records ([`Self::record`]). A visited PR's
+    /// decision reads it again, and records what that read met.
+    reads: BTreeMap<u64, Reads>,
 }
 impl Occupancy {
     pub(crate) fn read(
@@ -61,6 +65,7 @@ impl Occupancy {
             virtual_live: vec![],
             queued: Default::default(),
             degraded: found,
+            reads: BTreeMap::new(),
         }
     }
     /// What half-worked reading the PR's record and its workers' answers.
@@ -88,19 +93,24 @@ impl Occupancy {
         match what {
             Degraded::Record => true,
             Degraded::Answer { .. } => self.readable(pr),
-            Degraded::Lookup { .. } => false,
+            Degraded::Lookup { .. } | Degraded::Read { .. } => false,
         }
     }
-    /// Record what this pass met of `pr`'s record and answers, and clear
-    /// what it read again.
+    /// Record what this pass met of `pr`'s record and answers, and what
+    /// [`Self::discover`]'s reads of it met, and clear what it read again.
+    /// For a PR the pass doesn't visit: a visited one's decision reads it
+    /// again.
     pub(crate) fn record(
         &self,
         store: &mut conary_core::Store,
         repo: &conary_core::op::Repo,
         pr: u64,
     ) -> Result<()> {
-        degraded::record(store, repo, pr, self.degraded(pr), |what| {
-            self.again(pr, what)
+        let reads = self.reads.get(&pr);
+        let mut seen = self.degraded(pr).to_vec();
+        seen.extend(reads.iter().flat_map(|r| r.met.iter().cloned()));
+        degraded::record(store, repo, pr, &seen, |what| {
+            self.again(pr, what) || reads.is_some_and(|r| r.answered.contains(what))
         })
     }
     pub(crate) fn discover<G: Write>(
@@ -111,19 +121,33 @@ impl Occupancy {
         ledger: Option<&conary_core::Ledger>,
     ) {
         for (number, record) in &self.records {
+            let mut reads = Reads::default();
             let result: Result<bool> = (|| {
-                let mut facts = read(
+                let read = read(
                     github,
                     repo,
                     *number,
                     pass.policy,
                     pass.config.settings.clone(),
                     &pass.config.trusted_authors,
-                )?;
+                );
+                let mut facts = match read {
+                    Ok(facts) => {
+                        reads.extend(facts.reads.clone());
+                        facts
+                    }
+                    Err(e) => {
+                        reads.met.push(e.degradation.clone());
+                        return Err(e.into());
+                    }
+                };
                 let mut memory = record.memory.clone();
                 super::ledger::raised(&mut facts, &mut memory, ledger);
                 super::observe::hydrate(&mut facts, record, pass.now, true)?;
-                facts.paused = super::pause::read(pass.root, repo)?.filter(|p| p.covers(*number));
+                let paused = super::pause::read(pass.root, repo)
+                    .inspect_err(|e| reads.met(Reading::Pause, degraded::why(&**e)))?;
+                reads.answered(Reading::Pause);
+                facts.paused = paused.filter(|p| p.covers(*number));
                 super::observe::issuances(&mut facts, &memory);
                 if let Some(ledger) = ledger {
                     super::observe::train(&mut facts, ledger);
@@ -137,14 +161,15 @@ impl Occupancy {
                 }
                 Ok(false) => {}
                 Err(_) => {
-                    // Not a degraded path of its own: what failed is
-                    // GitHub's read or the pause's, which the PR's own
-                    // decision meets.
+                    // What failed is recorded for it as a degraded read
+                    // when the pass doesn't visit it, and met again by its
+                    // own decision when it does.
                     self.unknown
                         .entry(*number)
                         .or_insert("state couldn't be read this pass");
                 }
             }
+            self.reads.insert(*number, reads);
         }
     }
     pub(crate) fn apply(&self, f: &mut Facts, now: u64) -> Result<()> {
