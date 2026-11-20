@@ -348,8 +348,15 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         raised: Vec<String>,
     },
-    /// The change left the train without landing.
-    Leave { change: ChangeId, why: Left },
+    /// The change left the train without landing. `trunk`, for an empty
+    /// merge with nothing merged before it, is the trunk commit its
+    /// candidate was built on: one that already does what it does.
+    Leave {
+        change: ChangeId,
+        why: Left,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trunk: Option<CommitId>,
+    },
     /// A train candidate, whole: `trunk`, the branch, at `base`, then each
     /// change's head merged onto it in order, ending at `commit`, on the
     /// candidate's train branch, where the gate runs. It lands onto that

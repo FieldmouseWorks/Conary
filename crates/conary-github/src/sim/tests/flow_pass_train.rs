@@ -190,3 +190,71 @@ fn a_train_with_nothing_required_fails_its_step_on_its_prs() {
     assert!(error.starts_with("stepping the train"), "{error}");
     assert_eq!(c.hub.count(Call::Land), 0);
 }
+
+/// A seated PR whose GitHub test merge stays on the old trunk as trunk
+/// moves on to one with what it does, and the step that finds its merge
+/// empty there.
+fn held_empty_on_trunk_behind_a_stale_test_merge(c: &Case) {
+    // Joined, and not stepped yet.
+    let mut store = c.store.borrow_mut();
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: jobs::now(),
+        dry_run: false,
+        ledger: None,
+    };
+    pass.run(&c.hub, &repo(), Some(3), Some(&mut store))
+        .unwrap();
+    drop(store);
+    assert_eq!(joined(c), 1);
+    let merge = crate::api::Source::pull(&c.hub, REPO, 3)
+        .unwrap()
+        .merge_commit_sha
+        .unwrap();
+    c.hub.edit_pull(REPO, 3, |p| {
+        p["merge_commit_sha"] = serde_json::json!(merge)
+    });
+    let tip = c.hub.branch_at(REPO, "main").unwrap();
+    let trunk = c.hub.next_sha();
+    c.hub.change(&trunk, &tip, &head(3));
+    c.hub.set_branch(REPO, "main", &trunk);
+    // Seated, it keeps its seat; the step finds its merge empty on trunk.
+    c.pass(jobs::now() + 1, false);
+    assert_eq!(joined(c), 0);
+    assert!(in_flight(c).is_none());
+}
+
+#[test]
+fn a_pr_its_train_found_empty_on_trunk_closes_while_githubs_test_merge_is_stale() {
+    // Conary#487: GitHub's test merge of a seated head goes stale as trunk
+    // moves, and stays so until the head does. The train's candidate merged
+    // it onto trunk to no effect, and that, not the stale preview, says its
+    // changes landed.
+    let c = train_repo();
+    held_empty_on_trunk_behind_a_stale_test_merge(&c);
+    let reports = c.pass(jobs::now() + 2, false);
+    assert_eq!(reports[0].error, None);
+    let next = reports[0].next.as_ref().unwrap();
+    assert_eq!(next.step, Step::CloseAlreadyLanded, "{next:?}");
+    assert_eq!(c.hub.pull_json(REPO, 3)["state"], "closed");
+    assert_eq!(c.hub.pull_json(REPO, 3)["merged"], false);
+    assert_eq!(c.hub.count(Call::Land), 0);
+}
+
+#[test]
+fn an_empty_merge_on_a_trunk_since_moved_closes_nothing() {
+    // Trunk moved past the commit the train found it empty on, unseen by
+    // the ledger: what's on trunk now is not what it was found empty on.
+    let c = train_repo();
+    held_empty_on_trunk_behind_a_stale_test_merge(&c);
+    let tip = c.hub.branch_at(REPO, "main").unwrap();
+    let later = c.hub.add(&tip, "later");
+    c.hub.set_branch(REPO, "main", &later);
+    let reports = c.pass(jobs::now() + 2, false);
+    let next = reports[0].next.as_ref().unwrap();
+    assert_ne!(next.step, Step::CloseAlreadyLanded, "{next:?}");
+    assert_eq!(c.hub.pull_json(REPO, 3)["state"], "open");
+}

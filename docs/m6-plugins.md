@@ -355,9 +355,9 @@ deleted in the same PR.
   before cutover ([what M6 doesn't port](m6.md#what-m6-doesnt-port)).
 
 A `Job` recipe is never sent to a proof plugin. Its check waits, with a
-reason that says a model-run check isn't a proof. Whether wend's
-`proofJobs` check becomes a `Run` recipe, or wend stays on the steward, is
-#315's to decide before wend's cutover.
+reason that says a model-run check isn't a proof. wend's `proofJobs` check
+becomes a `Run` recipe before wend's cutover
+([S2e](m6-cutover.md#s2e-wend)).
 
 **Negative verification**, against the simulated GitHub, each case failing
 before the change:

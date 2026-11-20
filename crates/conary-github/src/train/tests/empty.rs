@@ -3,6 +3,17 @@
 
 use super::*;
 
+/// The trunk commit PR `pr`'s head at its revision now was found empty on,
+/// while that holds it out.
+fn empty_on(store: &Store, pr: u64) -> Option<String> {
+    let ledger = store.ledger();
+    let change = ledger.by_pr(&REMI.parse().unwrap(), pr).unwrap();
+    ledger
+        .train(&REMI.parse().unwrap())?
+        .empty_on(change.id, change.current.unwrap())
+        .map(ToString::to_string)
+}
+
 #[test]
 fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged() {
     let dir = tempfile::tempdir().unwrap();
@@ -26,11 +37,13 @@ fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged()
     // Only the candidate's own branch is left.
     assert_eq!(hub.names(REMI), [train_branch(id), "main".into()]);
     assert_eq!(joined(&store), [3, 5]);
-    // Held while 3 is on its way to trunk ahead of it.
+    // Held while 3 is on its way to trunk ahead of it, and not for being on
+    // trunk: 3 may yet leave.
     assert_eq!(
         try_join(&mut store, &hub, 4, &head(4)).unwrap(),
         Joined::Held(Held::Empty)
     );
+    assert_eq!(empty_on(&store, 4), None);
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
     assert_eq!(step_once(&mut store, &hub).landed, [3, 5]);
     // Trunk moved: it goes again, and changes nothing on trunk itself now,
@@ -48,6 +61,8 @@ fn a_head_that_changes_nothing_after_the_ones_ahead_leaves_and_is_never_merged()
     assert_eq!(stepped.now, Now::Idle);
     assert!(joined(&store).is_empty());
     assert!(!hub.merged(REMI, 4).is_some());
+    // Trunk as it is has what it does.
+    assert_eq!(empty_on(&store, 4), hub.branch_at(REMI, "main"));
 }
 
 #[test]

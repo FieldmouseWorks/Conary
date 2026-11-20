@@ -92,6 +92,7 @@ pub(super) fn land_next(
         store.record(Body::Leave {
             change: next.change,
             why: Left::Unready,
+            trunk: None,
         })?;
         stepped.unready.push(pr);
         return Ok(None);
@@ -109,6 +110,7 @@ pub(super) fn land_next(
         store.record(Body::Leave {
             change: next.change,
             why: Left::Below,
+            trunk: None,
         })?;
         stepped.reseated.push(pr);
         return Ok(None);
@@ -155,6 +157,7 @@ pub(super) fn land_next(
                 store.record(Body::Leave {
                     change: next.change,
                     why: Left::Unready,
+                    trunk: None,
                 })?;
                 stepped.unready.push(pr);
                 return Ok(None);
@@ -187,6 +190,7 @@ pub(super) fn land_next(
     store.record(Body::Leave {
         change: next.change,
         why: Left::Refused,
+        trunk: None,
     })?;
     stepped.refused.push(Refused { pr, why });
     Ok(None)

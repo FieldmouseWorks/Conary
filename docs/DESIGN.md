@@ -496,7 +496,10 @@ so the wait is one run, however many are waiting.
   and its PR is told so, as a conflict is today. So does one whose merge
   leaves the tree as it was: what it does is there already, through trunk
   or a change ahead of it, and landing it would add an empty merge. The
-  steward closes its PR once trunk has what it does.
+  steward closes its PR once trunk has what it does. With nothing merged
+  before it, the `leave` op names the trunk commit it was empty on, and
+  while trunk is still that commit and the hold stands, that says so even
+  when GitHub's own test merge of the PR is stale.
 - **Its evidence.** The gate runs on the candidate's commit: the repo's CI,
   on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's

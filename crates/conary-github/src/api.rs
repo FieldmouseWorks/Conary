@@ -539,51 +539,79 @@ fn etag(response: &Response) -> Option<&str> {
     header(response, "etag")
 }
 
-/// An error status. GitHub's limits, a 429 and its own 5xx are passing:
-/// GitHub is unavailable, not the request wrong. A limit is a 403 or 429
-/// whose headers say so (the primary one spent, a secondary one's
-/// Retry-After) or whose message does: a secondary limit can come with
-/// neither header, and a message lost to the network leaves it unknown, so
-/// unavailable too. Anything else refused, a permission or validation
-/// failure, stays refused.
+/// An error status, named with what GitHub said of it. GitHub's limits, a
+/// 429 and its own 5xx are passing: GitHub is unavailable, not the request
+/// wrong. A limit is a 403 or 429 whose headers say so (the primary one
+/// spent, a secondary one's Retry-After) or whose message does: a secondary
+/// limit can come with neither header, and a 403's message lost to the
+/// network leaves it unknown, so unavailable too. Anything else refused, a
+/// permission or validation failure, stays refused.
 fn failed(url: &str, response: &mut Response) -> ApiError {
     let status = response.status().as_u16();
-    let what = format!("{url}: http status: {status}");
     let limited = header(response, "x-ratelimit-remaining") == Some("0")
         || header(response, "retry-after").is_some();
-    if passing_status(status) || status == 403 && limited {
-        return ApiError::unavailable(what);
-    }
-    if status != 403 {
-        return ApiError::new(what);
-    }
-    match says_rate_limit(url, response) {
-        Ok(true) => ApiError::unavailable(what),
-        Ok(false) => ApiError::new(what),
-        Err(e) if e.unavailable => {
-            ApiError::unavailable(format!("{what}, its message unread: {e}"))
+    let said = said(url, response);
+    let mut what = format!("{url}: http status: {status}");
+    match &said {
+        Ok(Some(s)) => {
+            let errors = s
+                .errors
+                .as_ref()
+                .map(|e| format!(" {e}"))
+                .unwrap_or_default();
+            what = format!("{what}: {}", brief(&format!("{}{errors}", s.message)));
         }
-        Err(e) => ApiError::new(format!("{what}, its message unread: {e}")),
+        Ok(None) => {}
+        Err(e) => what = format!("{what}, its message unread: {e}"),
+    }
+    let unavailable = passing_status(status)
+        || status == 403
+            && (limited
+                || match &said {
+                    Ok(s) => s
+                        .as_ref()
+                        .is_some_and(|s| s.message.to_lowercase().contains("rate limit")),
+                    Err(e) => e.unavailable,
+                });
+    if unavailable {
+        ApiError::unavailable(what)
+    } else {
+        ApiError::new(what)
     }
 }
 
-/// Whether an error answer's message is GitHub's about a rate limit
-/// ("API rate limit exceeded", "You have exceeded a secondary rate limit").
-/// One that isn't JSON isn't GitHub's; one that can't be read is an error.
-fn says_rate_limit(url: &str, response: &mut Response) -> Result<bool, ApiError> {
-    #[derive(Deserialize)]
-    struct Message {
-        message: String,
-    }
+/// What GitHub said of an error status: its message ("API rate limit
+/// exceeded", "BadObjectState") and, for a validation failure, the errors it
+/// lists. An answer that isn't such JSON isn't GitHub's and says nothing; one
+/// that can't be read is an error.
+#[derive(Deserialize)]
+struct Said {
+    message: String,
+    errors: Option<serde_json::Value>,
+}
+
+fn said(url: &str, response: &mut Response) -> Result<Option<Said>, ApiError> {
     let body = response
         .body_mut()
         .with_config()
         .limit(MAX_MESSAGE)
         .read_to_vec()
         .map_err(|e| unreachable(url, e))?;
-    Ok(serde_json::from_slice::<Message>(&body)
-        .is_ok_and(|m| m.message.to_lowercase().contains("rate limit")))
+    Ok(serde_json::from_slice(&body).ok())
 }
+
+/// What GitHub said, on one line and no longer than [`MAX_SAID`] characters:
+/// enough to tell its causes apart, never a page of it in each log line.
+fn brief(said: &str) -> String {
+    let line = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(MAX_SAID) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
+/// The most characters of what GitHub said an error keeps.
+const MAX_SAID: usize = 300;
 
 /// The most of an error answer read for its message.
 const MAX_MESSAGE: u64 = 64 * 1024;

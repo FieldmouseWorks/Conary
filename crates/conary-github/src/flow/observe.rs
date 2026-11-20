@@ -191,6 +191,16 @@ pub(crate) fn train(f: &mut Facts, ledger: &conary_core::Ledger) {
         && let Some(held) = train.held(change.id, revision.id)
     {
         f.train.held = Some((f.revision.head.clone(), format!("{held:?}")));
+        // GitHub's test merge only comes back once the head moves: while it's
+        // stale, the train's empty merge of this head onto trunk as it is now
+        // says what that merge would.
+        if f.empty.is_none()
+            && train
+                .empty_on(change.id, revision.id)
+                .is_some_and(|trunk| f.base_tip.as_deref() == Some(trunk.as_str()))
+        {
+            f.empty = Some(true);
+        }
     }
     if let Some((index, member)) = train
         .joined()
