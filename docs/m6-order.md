@@ -48,15 +48,18 @@ lands, so a lane is that list, not a new mechanism.
 | --- | --- | --- |
 | Conary flow | The 5c tasks C1 to C4, then [#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s children | `crates/conary-github/src/flow/`, `crates/conary-core/src/plugin/`, `docs/flow.md`, `docs/plugins.md` |
 | Conary side | [#294](https://github.com/FieldmouseWorks/Conary/issues/294)'s children, then the Conary children of burrow#985 | `docs/lessons.toml`, `docs/DESIGN.md`, `docs/m6*.md`, the `attest` modules and the `cn` commands over them |
-| burrow M6 | The 5c tasks B1 to B3, R, F, J and P, then the tasks [#316](https://github.com/FieldmouseWorks/Conary/issues/316) files | New crates `burrow-brief`, `burrow-producer`, `burrow-fix` and `burrow-judge`; `burrow-review`; `burrow-proof`; `burrow-upkeep/src/brief.rs`; `modules/ledger.nix`; the `plugins` options in `modules/autoland.nix` |
+| burrow M6 | The 5c tasks B1 to B3, R, F, J and P | New crates `burrow-brief`, `burrow-producer`, `burrow-fix` and `burrow-judge`; `burrow-review`; `burrow-proof`; `burrow-upkeep/src/brief.rs`; `modules/ledger.nix`; the `plugins` options in `modules/autoland.nix` |
 | burrow proj | [burrow#974](https://github.com/FieldmouseWorks/burrow/issues/974) | `crates/burrow-proj/`, `crates/burrow-watchdog/` at stage 3, `modules/proj.nix` from stage 4 |
+| burrow upkeep | [m6-upkeep.md](m6-upkeep.md)'s U tasks, in [its order](m6-upkeep.md#the-tasks) | `crates/burrow-upkeep/` but for what burrow M6 owns, and the upkeep wiring in `modules/autoland.nix` |
+| burrow renovate | [m6-upkeep.md](m6-upkeep.md)'s N tasks, in its order | `crates/burrow-renovate/`, `crates/lock-age/`, `modules/updates.nix`, `modules/updates/` |
 | burrow gate | [burrow#985](https://github.com/FieldmouseWorks/burrow/issues/985) | `.github/workflows/flake-*.yml`, `burrow-flake-check`, `burrow-keep`, `burrow-workflows`, new `burrow-builds`, `modules/builds.nix` |
 
 remi has no lane. It takes one configuration PR per switch, and the values
 for a build that needs them (the build store's shadow).
 
 No lane edits another lane's files. The steward's Python
-(`modules/autoland/*.py`) belongs to no lane: it takes B1's one edit, and
+(`modules/autoland/*.py`) belongs to no lane: it takes B1's one edit, the
+deleted or repointed calls of [m6-upkeep.md](m6-upkeep.md)'s tasks, and
 otherwise only a fix for breakage that blocks a lane
 ([what M6 makes moot](#what-m6-makes-moot)).
 
@@ -210,7 +213,7 @@ it's two days of normal work with nothing traced to the switch.
 | S1 | remi lands through conaryd | [#314](https://github.com/FieldmouseWorks/Conary/issues/314) | Every 5c task is live on remi, #313 has landed, the producers' keys are provisioned, and every kind of shadow disagreement is judged, with none left that is the flow's error ([the shadow is a dry run](#the-shadow-is-a-dry-run-not-a-target)) |
 | S2 | Every other repository, burrow among them, a group at a time | [m6-cutover.md](m6-cutover.md) (#315's plan) and the tasks it files | S1 has settled. burrow's part starts by turning its train on (fence 10). Each group's own conditions are in the plan |
 | S3 | Hosted runs substitute from the build store, and the kept builds go | [burrow#989](https://github.com/FieldmouseWorks/burrow/issues/989) | burrow's part of S2 has settled, and the store's shadow has twenty good reports |
-| S4 | The steward's Python is deleted | The tasks #316 files | Every repository lands through conaryd |
+| S4 | The steward's Python is deleted | [m6-upkeep.md](m6-upkeep.md)'s task D | Every repository lands through conaryd, #318's recovery is live, and every other task of that plan is live ([its gate](m6-upkeep.md#the-gate)) |
 | S5 | One plan a run | [burrow#990](https://github.com/FieldmouseWorks/burrow/issues/990) | S3 has settled |
 | S6 | proj's one pass | [burrow#976](https://github.com/FieldmouseWorks/burrow/issues/976), split by burrow#978 | S2 has settled, and the pass's own shadow has been quiet |
 
