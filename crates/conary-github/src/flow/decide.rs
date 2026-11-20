@@ -408,11 +408,11 @@ pub(super) fn judge_why(f: &Facts, ci: Ci, capped: bool, changed: bool) -> Vec<T
 
 fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     match f.empty {
-        // GitHub's test merge goes stale each time trunk moves, and a seat's
-        // candidate merges it again anyway: the train, not GitHub's preview,
-        // takes an empty merge out (`train::step`). So a seated head keeps
-        // its seat while GitHub catches up.
-        None if seated(f) => {}
+        // GitHub's test merge goes stale each time trunk moves, and doesn't
+        // come back until the head does. The train's candidate merges the
+        // head again anyway and takes an empty merge out (`train::step`), so
+        // a train PR joins, or keeps its seat, without GitHub's preview.
+        None if by_train(f) => {}
         None => {
             return failed(
                 m,
@@ -653,13 +653,4 @@ fn failure_stage(kind: Failure) -> Stage {
 
 pub(super) fn by_train(f: &Facts) -> bool {
     f.settings.train && f.revision.base == f.default_branch
-}
-
-/// In the train at this head.
-fn seated(f: &Facts) -> bool {
-    by_train(f)
-        && f.train
-            .seat
-            .as_ref()
-            .is_some_and(|s| s.head == f.revision.head)
 }

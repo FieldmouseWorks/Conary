@@ -94,7 +94,11 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         // not, since their Revision must match below.
     }
     for (kind, clear) in [
-        (Failure::Empty, f.empty.is_some()),
+        // A train PR's candidate decides its emptiness, not GitHub's preview.
+        (
+            Failure::Empty,
+            f.empty.is_some() || super::decide::by_train(f),
+        ),
         (
             Failure::Mergeable,
             !matches!(f.merging, Merge::Unknown | Merge::Refused),
