@@ -65,7 +65,11 @@ runtime defaults, and v3 responses still report what actually ran.
 not engines chosen to do the judging.
 
 Both the CLI and conaryd reread this file per pass, through `Config::load`;
-updates apply to subsequent requests without a release or restart. Existing
+updates apply to subsequent requests without a release or restart. A seal
+key (`settings.judge_key`, `settings.major_key`) may be given instead as a
+file holding it (`judge_key_file`, `major_key_file`), read at that same load,
+so the configuration can sit where anyone reads it (a Nix store) while the key
+is readable by the flow's user alone. One key given both ways is refused. Existing
 invocations retain the choices they started with. On a burrow-managed host,
 generate this configuration from the
 [shared settings source](https://github.com/FieldmouseWorks/burrow/blob/main/docs/settings-reference.md).

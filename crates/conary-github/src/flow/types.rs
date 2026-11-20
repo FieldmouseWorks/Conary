@@ -354,10 +354,19 @@ pub struct Settings {
     /// The key that seals a judge's verdict, as 64 lowercase hex digits.
     #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub judge_key: Option<SealKey>,
+    /// A file holding `judge_key` instead, so the configuration needn't hold
+    /// the secret: read each time the configuration loads, its surrounding
+    /// whitespace ignored. Set this or `judge_key`, not both.
+    #[schemars(extend("x-spender" = false))]
+    pub judge_key_file: Option<std::path::PathBuf>,
     /// The key that seals a dependency sweep's verdict, as 64 lowercase hex
     /// digits.
     #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub major_key: Option<SealKey>,
+    /// A file holding `major_key` instead, read as `judge_key_file` is. Set
+    /// this or `major_key`, not both.
+    #[schemars(extend("x-spender" = false))]
+    pub major_key_file: Option<std::path::PathBuf>,
     /// Commit emails of the machine's own bots: a commit from one isn't a
     /// person's edit.
     #[schemars(extend("x-spender" = false))]
@@ -448,6 +457,24 @@ impl Settings {
     pub fn recipe(&self, name: &str) -> Option<&Recipe> {
         self.proof_recipe(name).map(|(_, recipe)| recipe)
     }
+    /// Each seal key given as a file (`judge_key_file`, `major_key_file`),
+    /// read into its key. A key given both ways is refused, and so is a file
+    /// that doesn't read or doesn't hold a key, without quoting what it holds.
+    pub(crate) fn read_key_files(&mut self) -> Result<(), String> {
+        for (name, key, file) in [
+            ("judge_key", &mut self.judge_key, &self.judge_key_file),
+            ("major_key", &mut self.major_key, &self.major_key_file),
+        ] {
+            let Some(file) = file else { continue };
+            if key.is_some() {
+                return Err(format!(
+                    "settings.{name} and settings.{name}_file are both set: give one"
+                ));
+            }
+            *key = Some(SealKey::read(file).map_err(|e| format!("settings.{name}_file: {e}"))?);
+        }
+        Ok(())
+    }
 }
 
 impl Default for Settings {
@@ -465,7 +492,9 @@ impl Default for Settings {
             flow_authors: BTreeSet::new(),
             verdict_authors: BTreeSet::new(),
             judge_key: None,
+            judge_key_file: None,
             major_key: None,
+            major_key_file: None,
             bot_emails: BTreeSet::new(),
             renovate_email: None,
             renovate_login: None,
