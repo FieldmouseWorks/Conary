@@ -11,6 +11,7 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
     // Every field is named, so a new setting can't join without a say here.
     let Settings {
         train,
+        train_size: _,
         job_login,
         proof_slots,
         proof_timeout: _,

@@ -438,6 +438,15 @@ impl Pass<'_> {
                 });
             }
         }
+        // Once every open PR was seen to, the train steps, still under the
+        // repository's lock.
+        if self.config.settings.train
+            && only.is_none()
+            && data.is_some()
+            && let Some(store) = store
+        {
+            super::train::step(self, github, repo, store, &mut reports)?;
+        }
         reports.sort_by_key(|r| r.pr);
         Ok(reports)
     }

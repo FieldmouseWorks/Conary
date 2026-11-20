@@ -110,12 +110,15 @@ When a repository is ready to switch, its GitHub webhook uses the externally
 reachable receiver URL, content type **application/json**, and the secret from
 that file. Select pull requests (including labeled/unlabeled actions), pull
 request reviews, pull request review comments, pull request review threads,
-issue comments, check suites, check runs, commit statuses and pushes. GitHub's
+issue comments, check suites, check runs, workflow runs, commit statuses and
+pushes. GitHub's
 `label` event changes label definitions; PR label attachments arrive through
 `pull_request`. Only pushes to the default branch kick the repo's open PRs.
 Issue comments without a PR and events outside this table are acknowledged
-without work. Check events without associated PR numbers and commit statuses
-kick the repository so the pass can correlate current PR heads. Status echoes
+without work. Check events and workflow runs without associated PR numbers
+(a train candidate's, among them) and commit statuses kick the repository so
+the pass can correlate current PR heads and step the train
+([flow](flow.md#the-train)). Status echoes
 are queued with their GitHub status ID. Before dispatch, the worker drops only
 IDs recorded from its own successful status-write responses, including both
 pending and success writes and train statuses. Delivery can precede the write

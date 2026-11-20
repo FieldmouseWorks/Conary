@@ -485,6 +485,9 @@ fn dropped(
     Ok(())
 }
 
+/// The most changes a candidate holds when nothing says otherwise.
+pub const DEFAULT_SIZE: std::num::NonZeroUsize = std::num::NonZeroUsize::new(8).unwrap();
+
 /// What a step needs to know about the repo.
 #[derive(Debug, Clone)]
 pub struct Settings {

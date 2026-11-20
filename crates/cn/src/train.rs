@@ -122,8 +122,8 @@ pub enum TrainCommand {
         /// The repository, as owner/name.
         repo: Repo,
         /// The most changes a candidate holds.
-        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..))]
-        size: u64,
+        #[arg(long, default_value_t = train::DEFAULT_SIZE)]
+        size: std::num::NonZeroUsize,
         /// A check the gate waits for before it can be green, even before it
         /// reports, whose pass counts only with its job's attestation: the
         /// repo's gate, as its shared CI runs it. Repeat for each; a step
@@ -302,7 +302,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             ..
         } => {
             let settings = Settings {
-                size: usize::try_from(*size)?,
+                size: size.get(),
                 require: require.clone(),
                 trust: trust(signer, fresh, producers.as_deref())?,
             };

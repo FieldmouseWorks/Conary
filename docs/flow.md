@@ -214,9 +214,9 @@ token names GitHub's test merge and not the head, and a status can't attest
 at all. So `evidence.require` names only checks a producer can attest on
 the tree that lands. For a PR that lands itself that's its head. For one that
 lands through the merge train (`settings.train`, targeting the default
-branch) it's the candidate: the train's gate (`cn train step --require`,
-given the same checks) asks them of the candidate, attested on the tree
-that lands, so joining the train and
+branch) it's the candidate: the train's gate (its step's `--require`,
+these same checks, [the train](#the-train)) asks them of the candidate,
+attested on the tree that lands, so joining the train and
 waiting in it ask the head only for its proofs and negative, and a repo's
 gate may run on candidates alone. Verification uses the CI reader's effective workflow
 and target selection: replaced cancellations, obsolete target suites and
@@ -331,9 +331,9 @@ stage and never overdue; a held one waits where it always has.
 
 Lifting either carries on from the saved state. What a worker finished
 stays, so no review, fix, preparation or proof answer is redone, and a
-stopped worker's request starts again if it's still wanted. The merge
-train's own stepping (`cn train step`) isn't a pass and doesn't read the
-pause; a paused PR leaves the train at its next decision.
+stopped worker's request starts again if it's still wanted. A paused PR
+leaves the train at its next decision, and a paused repository's train
+isn't stepped ([the train](#the-train)).
 
 ## Switches
 
@@ -470,6 +470,27 @@ its own PR; unrelated reviews and fixes still proceed. Capacity is a numeric
 reservation, never an invented worker ID or a cancellation target. Old local
 records containing synthetic capacity cancellations are recovered without
 dropping cancellation state for real owned workers.
+
+### The train
+
+Stepping is landing, so the flow steps the train of a repo it lands: a pass
+of the whole repo with `settings.train` on ends with one step of its train
+(`train::step`, the one `cn train step` runs), after every open PR's
+decision, so the PRs it joined are in it, and still under the repository's
+lock, so no two passes step at once and a quiet lock means no step is under
+way. The step's `--require` is `evidence.require`, its attestations are
+counted as `evidence` says, and its candidates hold at most
+`settings.train_size` changes. With no `evidence`, or nothing required, the
+step fails and nothing lands. It isn't taken in a dry run, in a pass of one
+PR, while the repository is paused, or when the decision of a PR in the
+train failed in this pass, as it may not be settled any more; nor
+when the train has nothing in it or in flight. A step that changed what a PR
+is (landed, red, refused, out) books that PR's next pass at once, since the
+train's own statuses start none; a step that failed says so on each PR in
+the train, which books it again. conaryd's passes are always of the whole
+repo, and the events that move a train kick one: a check suite or workflow
+run on a candidate's train branch, a merge's push to the default branch, a
+PR's close, and conaryd's start.
 
 ## Review
 
