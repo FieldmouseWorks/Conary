@@ -5,6 +5,7 @@ use crate::flow::persist::{self, Result};
 pub use queue::{Queue, Ran, Recovery, Work};
 use ring::hmac;
 pub use runtime::{Live, Runtime};
+pub(crate) use runtime::{repo_names, repos};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

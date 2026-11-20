@@ -480,6 +480,17 @@ fn settings_list_each_value_its_source_and_the_exceptions_apart() {
     assert_eq!(get("evidence"), (json!(null), From::Default));
     assert_eq!(get("settings.judge_key"), (json!("[redacted]"), From::File));
     assert!(!serde_json::to_string(&listing).unwrap().contains(&key));
+    // The review ask's command may carry a credential in its arguments: it's
+    // listed as set, never as what it is. The repositories it covers show.
+    let door = json!({"review_ask": {"command": ["/door", "--key=hunter2"], "repos": ["o/r"]}});
+    let listing = schema::effective::<Config>(door.to_string().as_bytes()).unwrap();
+    let get = |name: &str| {
+        let o = listing.options.iter().find(|o| o.name == name).unwrap();
+        (o.value.clone(), o.from)
+    };
+    assert_eq!(get("review_ask.command"), (json!("[redacted]"), From::File));
+    assert_eq!(get("review_ask.repos"), (json!(["o/r"]), From::File));
+    assert!(!serde_json::to_string(&listing).unwrap().contains("hunter2"));
     // The loader refuses what it doesn't know, and so does the listing.
     assert!(schema::effective::<Config>(br#"{"settings": {"drain": 1}}"#).is_err());
 }

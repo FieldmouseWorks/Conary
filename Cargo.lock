@@ -218,6 +218,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "regex",
+ "rustix",
  "schemars",
  "serde",
  "serde_json",

@@ -508,9 +508,26 @@ GitHub can't say when the head was pushed: the earliest check suite on it)
 goes to a judge with the reason `changed` instead of landing on it.
 
 A head with no word yet waits in `review` for half an hour after the flow
-first saw it, then the flow asks for a look (`AskReview`): a PR comment,
-`@codex review` and why, at most once an hour per head, counted as asked
-only once GitHub took it. After two hours the owner hears of it. Findings
+first saw it, then the flow asks for a look (`AskReview`), at most once an
+hour per head. The connector takes that ask from no App, so a configuration
+can name a door that posts it as someone it does take it from:
+
+```json
+{"review_ask": {"command": ["/absolute/path/to/door"], "repos": ["owner/repo"]}}
+```
+
+In a listed repository the flow runs the command, without a shell, with the
+repository, the PR's number and the head after its arguments, and with no
+`GH_TOKEN` or `GITHUB_TOKEN` of its own; what it prints goes to the flow's
+standard error. Exit 0 counts the head as asked; anything else isn't, and a
+later pass runs it again. It runs in a process group of its own: with no
+answer in three minutes, the group is killed, so nothing it started posts
+an ask the flow didn't count. Acting as that
+person is the door's alone: on a burrow-managed host it's
+[burrow-review-ask](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-review-ask/src/lib.rs),
+for the repositories in `autoland.askAsOwner.repos`. In any other repository
+the ask is a PR comment of the flow's own, `@codex review` and why, counted
+as asked only once GitHub took it. After two hours the owner hears of it. Findings
 with open threads go to a fix; findings whose every thread is answered on
 an unchanged head are asked for again once they've settled
 (`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops

@@ -43,6 +43,10 @@ pub struct Config {
     /// The verifier of producers' evidence. Unset, permission to land waits.
     #[schemars(extend("x-spender" = false))]
     pub evidence: Option<Evidence>,
+    /// The door that asks the reviewer for a late review where it takes no
+    /// App's ask. Unset, the flow asks with its own comment everywhere.
+    #[schemars(extend("x-spender" = false))]
+    pub review_ask: Option<super::ask::ReviewAsk>,
 }
 /// Keys of `execution` are plugin kinds, as the plugin contract names them.
 fn kinds(schema: &mut schemars::Schema) {
