@@ -531,6 +531,9 @@ pub struct Facts {
     pub open: bool,
     pub draft: bool,
     pub trusted: bool,
+    /// Opened by an App (a `Bot` account): the review connector reviews no
+    /// head of such a PR unasked, so the flow asks at once.
+    pub by_app: bool,
     pub complete: bool,
     pub labels: BTreeSet<String>,
     pub merging: Merge,
@@ -666,6 +669,10 @@ pub struct Memory {
     /// again for the same head only an hour later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<(String, u64)>,
+    /// The head the reviewer was first asked to look at, and when: the clock
+    /// [`super::review::LOST`] runs on, which asking again doesn't restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_asked: Option<(String, u64)>,
     #[serde(with = "super::persist::pairs")]
     pub handed: BTreeMap<Kind, Revision>,
     pub lost_jobs: BTreeSet<String>,

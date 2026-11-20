@@ -1,16 +1,18 @@
 //! The reviewer's part of a PR's step, as burrow's steward takes it
 //! (review_step.py, and the review part of step.py): what the reviewer said
 //! of the head ([`super::reviews`]) and what that leaves the PR waiting on.
-//! The reviewer reviews each push on its own; the flow only asks it to look
-//! again when a look is owed that no push will bring.
+//! The reviewer reviews each push of a person's PR on its own; the flow asks
+//! it to look when a look is owed that no push will bring, and at once for
+//! each head of an App's PR, which it reviews only when asked.
 use super::decide::{self, Decision};
 use super::*;
 
-/// A push the reviewer hasn't begun on after this long is asked for, and
-/// after [`LOST`] the owner hears of it: it reviews each push within
-/// minutes when its usage lasts.
+/// A push to a person's PR the reviewer hasn't begun on after this long is
+/// asked for: it reviews each such push within minutes when its usage lasts.
 pub(super) const QUIET: u64 = 30 * 60;
-/// See [`QUIET`].
+/// A head the reviewer has said nothing of this long after it was first
+/// asked for (or, never asked, after the flow first saw it) is the owner's
+/// to hear of.
 pub(super) const LOST: u64 = 120 * 60;
 /// One head is asked for at most this often.
 const AGAIN: u64 = 3600;
@@ -93,12 +95,14 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
                     );
                 }
                 let description = format!("Waiting for {name}'s review of this commit");
+                let head = head_short(f);
+                if f.by_app {
+                    let why =
+                        format!("{head} was pushed to an App's PR, reviewed only when asked.");
+                    return ask(f, m, now, &why, &description);
+                }
                 if age >= QUIET {
-                    let head = &f.revision.head;
-                    let why = format!(
-                        "No review of {} came after its push.",
-                        &head[..head.len().min(7)]
-                    );
+                    let why = format!("No review of {head} came after its push.");
                     return ask(f, m, now, &why, &description);
                 }
                 return wait(
@@ -145,10 +149,20 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     }
 }
 
+fn head_short(f: &Facts) -> &str {
+    let head = &f.revision.head;
+    &head[..head.len().min(7)]
+}
+
 /// Whether the owner should hear that no review came: one of the reviewers
-/// has said nothing of a head the flow first saw [`LOST`] ago.
+/// has said nothing of a head [`LOST`] after it was first asked for, or,
+/// never asked, after the flow first saw it.
 pub(super) fn overdue(f: &Facts, m: &Memory, now: u64) -> bool {
+    let since = match &m.first_asked {
+        Some((head, at)) if head == &f.revision.head => (*at).max(m.seen),
+        _ => m.seen,
+    };
     f.classified.review()
-        && now.saturating_sub(m.seen) >= LOST
+        && now.saturating_sub(since) >= LOST
         && f.reviewers.values().any(|r| r.verdict.is_none())
 }

@@ -527,7 +527,11 @@ person is the door's alone: on a burrow-managed host it's
 [burrow-review-ask](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-review-ask/src/lib.rs),
 for the repositories in `autoland.askAsOwner.repos`. In any other repository
 the ask is a PR comment of the flow's own, `@codex review` and why, counted
-as asked only once GitHub took it. After two hours the owner hears of it. Findings
+as asked only once GitHub took it. A PR an App opened (its author a `Bot`
+account) is asked for on the pass that first sees each head, since the
+connector reviews none of its heads unasked. Two hours after a head's first
+ask (or, never asked, after the flow first saw it) the owner hears of it;
+asking again doesn't restart that clock. Findings
 with open threads go to a fix; findings whose every thread is answered on
 an unchanged head are asked for again once they've settled
 (`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops
