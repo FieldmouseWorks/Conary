@@ -86,7 +86,7 @@ another issue are not scheduled again here.
 | `read-sized-to-data` | [FP9](#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | Partly: a failed pass books its own recovery (#351), but conaryd runs passes one at a time |
 | `recover-by-kind` | [FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Not built: a cancelled check waits for someone else to rerun it |
 | `repair-ahead-of-red` | [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Open |
-| `publish-only-news` | [#316](https://github.com/FieldmouseWorks/Conary/issues/316) | Open |
+| `publish-only-news` | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s U5 ([m6-upkeep.md](m6-upkeep.md)) | Designed |
 | `scope-below-a-repo` | [#313](https://github.com/FieldmouseWorks/Conary/issues/313); FP2's pause leaves room for it | Open |
 
 ## Steward issues whose substance lands here

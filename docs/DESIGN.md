@@ -111,7 +111,7 @@ milestone's exit check in the [roadmap](#12-roadmap) includes it.
 | `read-sized-to-data` | A read of GitHub pages to the end of what it reads, with a deadline of its own. One that fails, is refused or overruns delays only its repository's pass and leaves the last facts in place, recorded as degraded | [FP9](m6-properties.md#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) |
 | `recover-by-kind` | At an expired stage the flow tries, once per stall, the recovery GitHub allows: a head behind its base is updated, and a cancelled check is brought back the way its kind permits, never one GitHub won't rerun. A refused recovery isn't tried again in that stall, and the status quotes GitHub's error | [FP8](m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) |
 | `scope-below-a-repo` | Not yet stated | [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
-| `publish-only-news` | Not yet stated | [#316](https://github.com/FieldmouseWorks/Conary/issues/316) |
+| `publish-only-news` | A published list of what's stuck is one issue whose body is edited in place. A comment, and with it a job's turn, goes up only for a new item someone can act on; a cleared or reworded item edits the body and posts nothing. The job reads the list from the machine, never from the body's edit history | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s task U5 ([m6-upkeep.md](m6-upkeep.md#u5-upkeep-the-owner-and-stuck-issues-kept-in-place-notifying-only-for-news)) |
 | `repair-ahead-of-red` | Not yet stated | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
 
 #### Acceptance, lesson by lesson
