@@ -4,7 +4,7 @@
 use super::flow_pass_case::{Case, REPO};
 use super::head;
 use crate::flow::*;
-use crate::sim::Call;
+use crate::sim::{Call, On};
 use crate::train::{Mark, train_branch};
 use conary_core::ledger::State;
 
@@ -95,6 +95,8 @@ fn a_held_train_repos_pass_lands_its_green_candidate() {
     // What it changed under the PR books its next pass at once.
     let next = reports[0].next.as_ref().unwrap();
     assert!(next.wait_until.is_some_and(|at| at <= jobs::now() + 3));
+    // The pass it booked finds the PR closed, and nothing left to do.
+    assert_eq!(c.pass(jobs::now() + 3, false).len(), 0);
 }
 
 #[test]
@@ -108,6 +110,14 @@ fn a_held_train_repos_pass_sends_a_red_candidate_away() {
     assert_eq!(state(&c, id), State::Red);
     assert_eq!(c.hub.marked(), [(head(3), Mark::Red)]);
     assert_eq!(joined(&c), 0);
+    // The pass it booked hands the red PR to a fix, as the steward does.
+    let after = c.pass(jobs::now() + 2, false);
+    assert_eq!(after[0].error, None);
+    let next = after[0].next.as_ref().unwrap();
+    assert_eq!(
+        (next.stage, &next.step),
+        (Stage::Fix, &Step::HandFix(Kind::Red))
+    );
 }
 
 #[test]
@@ -147,23 +157,26 @@ fn a_pr_in_the_train_that_wasnt_seen_to_stops_the_step() {
 }
 
 #[test]
-fn a_paused_repo_doesnt_step() {
+fn a_pause_written_after_the_trains_prs_were_decided_keeps_the_step_off() {
     let c = train_repo();
     let (id, commit) = seated_and_gating(&c);
     gate(&c, &commit, "success");
-    pause::pause(
-        c.dir.path(),
-        &repo(),
-        &Pause {
+    // Another PR, decided after the seated one: the pause comes as it's
+    // labelled, once the seated PR's decision went through.
+    super::flow_pass_slots::another(&c, 5);
+    let root = c.dir.path().to_path_buf();
+    c.hub.race(On::from(Call::FlowStage).pr(5), move |_| {
+        let paused = Pause {
             scope: Scope::Repository,
-            reason: "test".into(),
+            reason: "while the pass ran".into(),
             at: 0,
-        },
-    )
-    .unwrap();
-    c.pass(jobs::now() + 1, false);
+        };
+        pause::pause(&root, &repo(), &paused).unwrap();
+    });
+    let reports = c.pass(jobs::now() + 1, false);
+    assert_eq!((reports[0].pr, &reports[0].error), (3, &None));
+    assert_eq!(state(&c, id), State::Gating);
     assert_eq!(c.hub.count(Call::Land), 0);
-    assert_ne!(state(&c, id), State::Green);
 }
 
 #[test]
