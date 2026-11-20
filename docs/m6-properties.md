@@ -122,9 +122,9 @@ shouldn't have. So:
 | FP6 repeated deadline stalls | | Yes | |
 | FP7 a CI wait costs nothing | | Yes | |
 | FP8 recovery by kind | | Yes: else a cancelled check waits forever | |
-| FP9 per-repository reads | | | #315: remi is one repository |
+| FP9 per-repository reads | | | [S2g](m6-cutover.md#s2g-burrow) and the first `allow` of a paused repository conaryd holds: before that, conaryd passes only remi and Conary |
 | FP10 owner only for doors, once per decision | | Yes: at #314 an owner call is a marked review | |
-| FP11 review-loop breakers | | | #315 |
+| FP11 review-loop breakers | | | [S2g](m6-cutover.md#s2g-burrow): elsewhere a loop past the cap waits for the judge plugin or the handback |
 | FP12 history-sized deadlines | | | #321's exit check |
 
 FP11 isn't a #314 prerequisite because the steward it replaces on remi has
