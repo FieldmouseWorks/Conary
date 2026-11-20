@@ -79,6 +79,7 @@ fn a_change_in_the_train_below_its_class_replays_and_is_named() {
     b.ok(Body::Leave {
         change: old,
         why: Left::Below,
+        trunk: None,
     });
     let train = b.ledger.train(&repo()).unwrap();
     assert_eq!(train.in_flight(), None);
@@ -180,6 +181,7 @@ fn a_change_raised_since_it_joined_is_named_to_leave_not_reseat() {
     b.ok(Body::Leave {
         change: reclassed,
         why: Left::Below,
+        trunk: None,
     });
     let replayed = Ledger::replay(&b.ops).expect("the log replays");
     for ledger in [&b.ledger, &replayed] {
