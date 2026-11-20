@@ -117,6 +117,9 @@ pub(crate) fn act<G: Write>(
                 }
                 // Asked only once the door said so, or GitHub took the comment.
                 record.memory.asked = Some((f.revision.head.clone(), pass.now));
+                if record.memory.first_asked.as_ref().map(|(h, _)| h) != Some(&f.revision.head) {
+                    record.memory.first_asked = Some((f.revision.head.clone(), pass.now));
+                }
             }
             Step::HandFix(kind) => {
                 let (problems, handed) = super::handoff::problems(f, *kind)?.into_iter().unzip();

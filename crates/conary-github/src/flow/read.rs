@@ -86,6 +86,7 @@ pub fn read(
         open: pull.state == "open",
         draft: extra.draft,
         trusted: trusted_authors.contains(&pull.user.login),
+        by_app: pull.user.kind == "Bot",
         complete: extra.complete,
         labels,
         merging: Merge::from_github(&extra.merge_state),
