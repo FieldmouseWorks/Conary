@@ -505,11 +505,13 @@ fn execute(
     input.rewind()?;
     let mut output = tempfile::tempfile()?;
     let start = Instant::now();
-    let mut child = Command::new(path)
-        .stdin(input)
-        .stdout(output.try_clone()?)
-        .stderr(Stdio::inherit())
-        .spawn()?;
+    // Its own process group, so that ending it ends whatever it started too.
+    let mut child = crate::group::spawn(
+        Command::new(path)
+            .stdin(input)
+            .stdout(output.try_clone()?)
+            .stderr(Stdio::inherit()),
+    )?;
     let status = loop {
         let result = (|| {
             if cancelled.is_some_and(Path::exists) {
@@ -527,8 +529,7 @@ fn execute(
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(2)),
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::group::kill(&mut child);
                 return Err(e);
             }
         }

@@ -339,8 +339,10 @@ attestation; deployment must trust that plugin to report its identity.
 
 The caller supplies a wall-clock deadline and maximum stdout response size
 in bytes, applying separately to describe and every work invocation. The
-runner polls the process and stdout size, kills and reaps the executable on
-a breach, and never parses more than the cap. File-backed stdio prevents
+runner polls the process and stdout size, and on a breach or cancellation
+kills the executable's whole process group (it starts the executable as that
+group's leader, so whatever the plugin started goes too) and reaps it. It
+never parses more than the cap. File-backed stdio prevents
 blocking on a plugin that doesn't consume its request or leaves a pipe open.
 Size enforcement occurs at polling intervals; this is not a disk quota.
 A deadline breach, size breach, nonzero exit (including a signal), malformed

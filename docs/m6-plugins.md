@@ -108,8 +108,8 @@ The plugin and its producer are separate processes for three reasons:
 
 - conaryd runs as the same user as authoring jobs today. A key held in the
   plugin's process would be readable by them.
-- When a work invocation is cancelled, the runner kills the plugin process
-  with SIGKILL and nothing else. That can't be trapped.
+- When a work invocation is cancelled, the runner kills the plugin's process
+  group with SIGKILL and nothing else. That can't be trapped.
 - The work outlives a short process: an engine session, or a build.
 
 ### Only the flow may ask, and GitHub must agree
