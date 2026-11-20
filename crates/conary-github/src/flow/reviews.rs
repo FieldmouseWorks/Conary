@@ -67,11 +67,10 @@ impl Since {
     }
 }
 
-/// The comment that asks the connector for a review of the head, as its
-/// docs give it, and why.
-pub(super) fn ask(why: &str) -> String {
-    format!("@codex review\n\n{why}")
-}
+/// The comment that asks the connector for a review of the head: the bare
+/// trigger. The connector reads any text after it as a task and posts no
+/// review, so the why stays in the flow's own record, never in the comment.
+pub(super) const ASK: &str = "@codex review";
 
 /// The summary comment's state for one kind of review.
 #[derive(serde::Deserialize)]

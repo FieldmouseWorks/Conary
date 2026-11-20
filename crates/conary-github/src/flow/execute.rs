@@ -105,7 +105,7 @@ pub(crate) fn act<G: Write>(
             Step::Wait { .. } | Step::Retry { .. } => {}
             Step::Settle => permission(pass, github, f, &next.step, record)?,
 
-            Step::AskReview(why) => {
+            Step::AskReview(_) => {
                 match pass
                     .config
                     .review_ask
@@ -113,7 +113,7 @@ pub(crate) fn act<G: Write>(
                     .filter(|a| a.covers(&f.repo))
                 {
                     Some(door) => door.ask(&f.repo, f.number, &f.revision.head)?,
-                    None => github.comment(&repo, f.number, &super::reviews::ask(why))?,
+                    None => github.comment(&repo, f.number, super::reviews::ASK)?,
                 }
                 // Asked only once the door said so, or GitHub took the comment.
                 record.memory.asked = Some((f.revision.head.clone(), pass.now));
