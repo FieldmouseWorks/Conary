@@ -386,8 +386,14 @@ fn fresh_authorization_observations_cannot_drop_blocking_or_missing_checks() {
                 ledger: None,
             };
             assert!(
-                crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
-                    .is_err(),
+                crate::flow::evidence::authorize(
+                    &pass,
+                    &c.hub,
+                    &facts,
+                    &Step::Merge,
+                    &mut Default::default()
+                )
+                .is_err(),
                 "{machine} {state}"
             );
         }
@@ -427,8 +433,14 @@ fn configured_machine_proofs_cannot_be_replaced_by_neutral_or_skipped_runs() {
             ledger: None,
         };
         assert!(
-            crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
-                .is_err()
+            crate::flow::evidence::authorize(
+                &pass,
+                &c.hub,
+                &facts,
+                &Step::Merge,
+                &mut Default::default()
+            )
+            .is_err()
         );
     }
 }
@@ -453,7 +465,7 @@ fn authorized(c: &Case) -> std::result::Result<(), String> {
         dry_run: true,
         ledger: None,
     };
-    crate::flow::evidence::authorize(&pass, &c.hub, &facts, &mut Default::default())
+    crate::flow::evidence::authorize(&pass, &c.hub, &facts, &Step::Merge, &mut Default::default())
         .map_err(|e| e.to_string())
 }
 

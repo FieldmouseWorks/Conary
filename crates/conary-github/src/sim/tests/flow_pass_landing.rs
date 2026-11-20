@@ -351,3 +351,98 @@ fn a_merge_whose_trailers_cant_all_be_read_isnt_made() {
         assert!(c.record().landing.is_none());
     }
 }
+
+/// A repo whose gate (`fresh / check`) runs only in its train's candidates,
+/// never on a PR's head, as remi's does; `train` says whether its PRs land
+/// through the train.
+fn gate_on_candidates_only(train: bool) -> Case {
+    let mut c = Case::new();
+    c.clean_review();
+    c.config.settings.train = train;
+    c.config.evidence.as_mut().unwrap().require = vec!["fresh / check".into()];
+    c
+}
+
+fn next(report: &[Report]) -> Next {
+    assert_eq!(report[0].error, None);
+    report[0].next.clone().unwrap()
+}
+
+#[test]
+fn a_train_pr_joins_and_waits_in_the_train_while_its_gate_runs_only_on_the_candidate() {
+    let c = gate_on_candidates_only(true);
+    let now = jobs::now();
+    let dry = next(&c.pass(now, true));
+    assert_eq!(dry.step, Step::JoinTrain, "{}", dry.description);
+    assert_eq!(next(&c.pass(now, false)).step, Step::JoinTrain);
+    let seated = next(&c.pass(now + 1, false));
+    assert_eq!(
+        (seated.stage, seated.step),
+        (Stage::Train, Step::Wait { until: None }),
+        "{}",
+        seated.description
+    );
+    assert!(seated.description.starts_with("In the train"));
+}
+
+#[test]
+fn a_train_pr_still_needs_its_head_s_attested_negative_to_join() {
+    let c = gate_on_candidates_only(true);
+    c.hub.remove_check(&head(3), "negative");
+    let n = next(&c.pass(jobs::now(), true));
+    assert_eq!(
+        (n.stage, n.step),
+        (Stage::Proof, Step::Wait { until: None })
+    );
+    assert!(n.description.starts_with("negative"), "{}", n.description);
+}
+
+#[test]
+fn a_pr_that_lands_itself_needs_the_gate_attested_on_its_head() {
+    // Landing directly: the gate is asked of the head that lands.
+    let c = gate_on_candidates_only(false);
+    let n = next(&c.pass(jobs::now(), true));
+    assert_eq!(
+        (n.stage, n.step),
+        (Stage::Proof, Step::Wait { until: None })
+    );
+    assert_eq!(
+        n.description,
+        "fresh / check: no attested check run (statuses cannot attest)"
+    );
+    // And a train repo's PR is asked it too, for any grant but the train's.
+    let c = gate_on_candidates_only(true);
+    let facts = read(
+        &c.hub,
+        &REPO.parse().unwrap(),
+        3,
+        &c.policy,
+        c.config.settings.clone(),
+        &c.config.trusted_authors,
+    )
+    .unwrap();
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: jobs::now(),
+        dry_run: true,
+        ledger: None,
+    };
+    for grant in [Step::Merge, Step::Settle] {
+        let refused = crate::flow::evidence::authorize(
+            &pass,
+            &c.hub,
+            &facts,
+            &grant,
+            &mut Default::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refused.starts_with("fresh / check: no attested check run"),
+            "{refused}"
+        );
+    }
+}
