@@ -168,7 +168,7 @@ pub struct Live<T> {
     restart: Vec<String>,
     waiting: Mutex<Vec<String>>,
 }
-impl<T: JsonSchema + Serialize + DeserializeOwned> Live<T> {
+impl<T: JsonSchema + Serialize + DeserializeOwned + Consistent> Live<T> {
     pub fn open(path: &Path) -> Result<Self> {
         let (value, _) = load::<T>(&std::fs::read(path)?)?;
         Ok(Self {
@@ -258,13 +258,25 @@ pub struct Listing {
 /// written as an object, the one form the schema describes (serde would
 /// also take a struct as a positional array). Returns the file as JSON too.
 /// Its errors never quote a value: see [`quiet`].
-pub fn load<T: JsonSchema + DeserializeOwned>(file: &[u8]) -> Result<(T, Value)> {
+pub fn load<T: JsonSchema + DeserializeOwned + Consistent>(file: &[u8]) -> Result<(T, Value)> {
     let raw = serde_json::from_slice::<Unique>(file).map_err(quiet)?.0;
     let loaded: T = serde_json::from_slice(file).map_err(quiet)?;
     let schema = of::<T>()?;
     objects(&schema, &schema, &raw, "")?;
+    loaded.consistent()?;
     Ok((loaded, raw))
 }
+/// What a configuration's options must say together, beyond what each one's
+/// type says, checked by [`load`] once the file has parsed: every reader
+/// refuses a file whose options disagree, as it refuses one that doesn't
+/// parse. Its errors name options and repositories, never a secret's value.
+pub trait Consistent {
+    fn consistent(&self) -> Result<()> {
+        Ok(())
+    }
+}
+impl Consistent for super::Config {}
+impl Consistent for crate::reuse::Settings {}
 /// Why a configuration file doesn't read, without any of its values: serde
 /// quotes a value of the wrong type or form, and a secret's value (a token
 /// command's credential) may be the one quoted, even as the whole document.
@@ -415,7 +427,9 @@ fn shape<'a>(schema: &'a Value, option: &'a Value) -> Shape<'a> {
 /// options of a section, of a set `null`able one and of each entry of a map
 /// of them are listed one by one. A secret's value is never shown, only that
 /// it's set.
-pub fn effective<T: JsonSchema + Serialize + DeserializeOwned>(file: &[u8]) -> Result<Listing> {
+pub fn effective<T: JsonSchema + Serialize + DeserializeOwned + Consistent>(
+    file: &[u8],
+) -> Result<Listing> {
     let schema = of::<T>()?;
     let (loaded, raw) = load::<T>(file)?;
     let value = serde_json::to_value(loaded)?;

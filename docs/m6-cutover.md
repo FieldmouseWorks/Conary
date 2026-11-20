@@ -99,9 +99,9 @@ stays one setting.
 
 ## What blocks every group
 
-**X1, one flow configuration per repository.** conaryd reads one flow
-configuration for every repository it lands (`flow_config` in its events
-file). burrow refuses a `burrow.landing.conaryd` list whose repositories
+**X1, one flow configuration per repository.** Before X1a, conaryd read one
+flow configuration for every repository it landed (`flow_config` in its
+events file, which now takes [one per repository](conaryd.md)). burrow refuses a `burrow.landing.conaryd` list whose repositories
 render different ones (`modules/autoland/landing.nix`). Conary's
 hosted-runner evidence can't share remi's `fresh / check`, so no group can
 switch without per-repository configuration. burrow's shadow already

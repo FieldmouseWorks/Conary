@@ -472,3 +472,130 @@ fn a_worker_that_outlives_its_daemon_wakes_the_next_ones_pass() {
         assert!(queue.take(crate::flow::jobs::now()).unwrap().is_none());
     }
 }
+
+/// One conaryd lands two repositories, each under a flow configuration of
+/// its own: a pass reads its repository's file and no other, at the pass,
+/// so one repository's evidence, train or broken file never reaches the
+/// other's. The file that gives every repository one stays valid, and the
+/// events file is refused where its repositories and their files disagree.
+#[test]
+fn each_repository_passes_under_its_own_flow_configuration() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let ledger = root.join("ledger");
+    conary_core::log::load_or_create_key(&conary_core::log::key_path(&ledger)).unwrap();
+    std::fs::write(root.join("policy.json"), b"{}").unwrap();
+    let path = root.join("events.json");
+    let events = |repos: serde_json::Value, flow_config: serde_json::Value| {
+        let config = json!({
+            "listen": "127.0.0.1:0",
+            "secret_path": root.join("secret"),
+            "repos": repos,
+            "data": root.join("data"),
+            "flow_config": flow_config,
+            "policy": root.join("policy.json"),
+            "token_command": "true",
+            "anchor_repo": null,
+            "worker": "/nonexistent",
+            "api": "http://127.0.0.1:1",
+        });
+        std::fs::write(&path, config.to_string()).unwrap();
+    };
+    let flow = |name: &str, config: serde_json::Value| {
+        std::fs::write(root.join(name), config.to_string()).unwrap();
+    };
+    let evidence = json!({"evidence": {
+        "signer": "o/ci/.github/workflows/gate.yml",
+        "require": ["gate"],
+        "negative": "negative",
+    }});
+    let train = json!({"settings": {"train": true}});
+    let each = json!({"o/r": root.join("r.json"), "O/S": root.join("s.json")});
+    flow("r.json", evidence.clone());
+    flow("s.json", json!({}));
+    events(json!(["o/r", "o/s"]), each.clone());
+    let live = Live::open(&path).unwrap();
+    let queue = Arc::new(Queue::open(&root.join("data")).unwrap());
+    // Every pass here fails before GitHub, and its error says what its flow
+    // needs: one with evidence or the train on the anchor_repo none is
+    // given, one with neither on reading the ledger, never anchored.
+    let pass = |repo: &str| {
+        live.work(&ledger, &Work { repo: repo.into() }, &queue)
+            .unwrap_err()
+            .to_string()
+    };
+    let needs_anchor = |repo: &str| {
+        let error = pass(repo);
+        match (
+            error.contains("require anchor_repo"),
+            error.contains("no anchor for the op log"),
+        ) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => panic!("{repo}'s pass failed on neither: {error}"),
+        }
+    };
+
+    // o/r's evidence is its own: o/s, with none, needs no ledger.
+    assert!(needs_anchor("o/r"), "o/r's evidence needs the ledger");
+    assert!(!needs_anchor("o/s"), "o/r's evidence reached o/s");
+
+    // Each file is read at its repository's pass: the train turned on for
+    // o/s alone, and o/r's evidence taken away, swap them.
+    flow("r.json", json!({}));
+    flow("s.json", train.clone());
+    assert!(needs_anchor("o/s"), "o/s's train needs the ledger");
+    assert!(!needs_anchor("o/r"), "o/s's train reached o/r");
+
+    // A file that doesn't load fails its own repository's pass alone.
+    flow("s.json", json!({"nope": 1}));
+    let broken = pass("o/s");
+    assert!(broken.contains("doesn't declare"), "{broken}");
+    flow("r.json", evidence);
+    let other = pass("o/r");
+    assert!(other.contains("require anchor_repo"), "{other}");
+
+    // One file for every repository stays valid.
+    flow("flow.json", train);
+    events(json!(["o/r", "o/s"]), json!(root.join("flow.json")));
+    assert!(needs_anchor("o/r") && needs_anchor("o/s"));
+
+    // A listed repository with no file, a file for one not listed, one
+    // repository named twice and a key that isn't one are refused, by the
+    // daemon as it starts and at the next pass.
+    for (repos, flow_config, refused) in [
+        (
+            json!(["o/r", "o/s", "o/t"]),
+            each.clone(),
+            "flow_config gives o/t no file",
+        ),
+        (
+            json!(["o/r"]),
+            each.clone(),
+            "flow_config names O/S, which repos doesn't list",
+        ),
+        (
+            json!(["o/r", "o/s"]),
+            json!({"o/r": "/r", "o/s": "/s", "O/s": "/s"}),
+            "names o/s twice",
+        ),
+        (
+            json!(["o/r", "o/s"]),
+            json!({"o/r": "/r", "o/s": "/s", "o": "/t"}),
+            "a key that isn't OWNER/REPO",
+        ),
+    ] {
+        events(repos, flow_config);
+        let open = Live::open(&path).err().map(|e| e.to_string());
+        assert!(
+            open.as_deref().is_some_and(|e| e.contains(refused)),
+            "{open:?}"
+        );
+        let read = live.read().err().map(|e| e.to_string());
+        assert!(
+            read.as_deref().is_some_and(|e| e.contains(refused)),
+            "{read:?}"
+        );
+    }
+}

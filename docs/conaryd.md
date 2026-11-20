@@ -97,11 +97,31 @@ those is logged once, by its name, as waiting for a restart. The
 [settings schema](flow.md#the-settings-schema) declares them so, and
 `cn flow settings --events-config PATH` lists them apart.
 
-`flow_config` is the [pass configuration](flow.md). `worker` names the installed
+`flow_config` is the [pass configuration](flow.md): one file every listed
+repository's pass reads, as above, or an object giving each listed
+repository its own, so repositories with different evidence or trains land
+through one conaryd:
+
+```json
+"flow_config": {
+  "example/project": "/etc/conary/flow/example/project.json",
+  "example/other": "/etc/conary/flow/example/other.json"
+}
+```
+
+A pass reads its own repository's file, at the pass, through the loader
+`cn flow settings --config` uses, and no other: one repository's broken file
+fails only its passes. The events file is refused, as conaryd starts and at
+the next delivery or pass, when the object leaves a listed repository out,
+names one `repos` doesn't list, names one twice in any case, or has a key
+that isn't `OWNER/REPO`; `cn flow settings --events-config` refuses it the
+same way and lists which file each repository reads.
+
+`worker` names the installed
 `cn` executable that runs owned plugin jobs. `api` optionally overrides the
 GitHub API root. The token command has the same contract as `cn`'s token command.
-The ledger is the daemon's `--ledger`; `anchor_repo` may be null only when the
-flow does not require evidence or train operations. Keep data, policy, config
+The ledger is the daemon's `--ledger`; `anchor_repo` may be null only when no
+repository's flow requires evidence or train operations. Keep data, policy, config
 and the secret file private to the service user. The secret file contains the
 exact secret bytes, without a trailing newline; its value never appears in
 configuration. Put TLS termination in front of the configured HTTP address.
