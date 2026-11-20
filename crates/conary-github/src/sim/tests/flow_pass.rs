@@ -28,6 +28,7 @@ fn lifecycle(train: bool) {
             now,
             dry_run: false,
             ledger: None,
+            review_ask: None,
         }
         .run(&c.hub, &REPO.parse().unwrap(), None, store.as_mut())
         .unwrap()
@@ -206,6 +207,7 @@ fn pass_train_joins_through_the_existing_train_module() {
         now,
         dry_run: false,
         ledger: None,
+        review_ask: None,
     };
     let results = pass
         .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store))

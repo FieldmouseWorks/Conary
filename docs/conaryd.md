@@ -82,6 +82,7 @@ The file is machine-owned JSON, with unknown fields rejected:
   "flow_config": "/etc/conary/flow.json",
   "policy": "/etc/conary/policy.json",
   "token_command": "/usr/local/bin/conary-token",
+  "review_ask_commands": {"example/project": "/usr/local/bin/review-ask"},
   "anchor_repo": "example/ledger",
   "worker": "/usr/local/bin/cn"
 }
@@ -100,6 +101,15 @@ those is logged once, by its name, as waiting for a restart. The
 `flow_config` is the [pass configuration](flow.md). `worker` names the installed
 `cn` executable that runs owned plugin jobs. `api` optionally overrides the
 GitHub API root. The token command has the same contract as `cn`'s token command.
+`review_ask_commands`, optional, gives a repository (`OWNER/REPO`) the
+command the flow asks the reviewer for a late look through, in place of a
+comment on the token's App, which Codex's connector ignores. It runs
+without a shell as `COMMAND REPO PR HEAD`. Exit 0 says it asked, or chose
+not to, and the flow remembers the ask for that head; anything else is a
+failed ask, which nothing remembers, so the next pass asks again. No comment
+goes up either way. A repository with none is asked with the App's comment.
+`cn flow` takes the same command as `--review-ask-command`
+(`CONARY_REVIEW_ASK_COMMAND`).
 The ledger is the daemon's `--ledger`; `anchor_repo` may be null only when the
 flow does not require evidence or train operations. Keep data, policy, config
 and the secret file private to the service user. The secret file contains the

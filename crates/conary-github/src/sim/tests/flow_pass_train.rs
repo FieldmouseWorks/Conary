@@ -134,6 +134,7 @@ fn a_dry_run_or_one_prs_pass_doesnt_step() {
         now: jobs::now(),
         dry_run: false,
         ledger: None,
+        review_ask: None,
     };
     pass.run(&c.hub, &repo(), Some(3), Some(&mut store))
         .unwrap();

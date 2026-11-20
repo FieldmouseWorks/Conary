@@ -256,6 +256,7 @@ fn landing_switches_hold_the_step_they_keep_off() {
             now: 4000,
             dry_run: true,
             ledger: None,
+            review_ask: None,
         };
         // A pass reads the configuration's settings into each PR's facts.
         let mut f = f.clone();

@@ -76,6 +76,8 @@ pub(super) struct Case {
     pub(super) config: flow::Config,
     pub(super) policy: conary_core::Policy,
     pub(super) deferred: Deferred,
+    /// The pass's review ask command; `None` asks with a comment.
+    pub(super) review_ask: Option<String>,
 }
 impl Case {
     pub(super) fn new() -> Self {
@@ -139,6 +141,7 @@ impl Case {
             config,
             policy: conary_core::Policy::parse(b"{}").unwrap(),
             deferred: Deferred(RefCell::new(vec![])),
+            review_ask: None,
         };
         case.good_ci(&head(3));
         case
@@ -153,6 +156,7 @@ impl Case {
             now,
             dry_run: dry,
             ledger: None,
+            review_ask: self.review_ask.as_deref(),
         };
         if dry {
             pass.ledger = Some(store.ledger());

@@ -87,6 +87,7 @@ fn a_connector_clean_head_lands_on_attested_ci_and_the_ledger_records_its_word()
         now: crate::flow::jobs::now(),
         dry_run: false,
         ledger: None,
+        review_ask: None,
     }
     .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store))
     .unwrap();
@@ -185,6 +186,7 @@ fn missing_or_passing_negative_never_authorizes_direct_or_train_permission() {
                 now: crate::flow::jobs::now(),
                 dry_run: false,
                 ledger: None,
+                review_ask: None,
             }
             .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store))
             .unwrap();
@@ -224,6 +226,7 @@ fn a_train_admission_records_the_verified_negative() {
         now: crate::flow::jobs::now(),
         dry_run: false,
         ledger: None,
+        review_ask: None,
     }
     .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store))
     .unwrap();
@@ -582,6 +585,7 @@ fn a_train_departure_revokes_permission_even_if_its_label_write_fails() {
             now: time,
             dry_run: false,
             ledger: None,
+            review_ask: None,
         }
         .run(&c.hub, &REPO.parse().unwrap(), None, Some(store))
         .unwrap()

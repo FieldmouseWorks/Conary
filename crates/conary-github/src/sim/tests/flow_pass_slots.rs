@@ -45,6 +45,7 @@ pub(super) fn kick(c: &Case, pr: u64, dry: bool, now: u64) -> Vec<Report> {
         now,
         dry_run: dry,
         ledger: None,
+        review_ask: None,
     }
     .run(&c.hub, &REPO.parse().unwrap(), Some(pr), None)
     .unwrap()

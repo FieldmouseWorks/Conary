@@ -142,6 +142,7 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             now: now + 2,
             dry_run: dry,
             ledger: None,
+            review_ask: None,
         }
         .run(&c.hub, &REPO.parse().unwrap(), Some(5), None)
         .unwrap();

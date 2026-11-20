@@ -301,6 +301,7 @@ fn read_only_ledger_access_cannot_submit_a_merge() {
         now: jobs::now(),
         dry_run: false,
         ledger: Some(store.ledger()),
+        review_ask: None,
     }
     .run(&c.hub, &REPO.parse().unwrap(), None, None)
     .unwrap();
@@ -429,6 +430,7 @@ fn a_pr_that_lands_itself_needs_the_gate_attested_on_its_head() {
         now: jobs::now(),
         dry_run: true,
         ledger: None,
+        review_ask: None,
     };
     for grant in [Step::Merge, Step::Settle] {
         let refused = crate::flow::evidence::authorize(

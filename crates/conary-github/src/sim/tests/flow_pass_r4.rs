@@ -384,6 +384,7 @@ fn fresh_authorization_observations_cannot_drop_blocking_or_missing_checks() {
                 now: jobs::now(),
                 dry_run: true,
                 ledger: None,
+                review_ask: None,
             };
             assert!(
                 crate::flow::evidence::authorize(
@@ -431,6 +432,7 @@ fn configured_machine_proofs_cannot_be_replaced_by_neutral_or_skipped_runs() {
             now: jobs::now(),
             dry_run: true,
             ledger: None,
+            review_ask: None,
         };
         assert!(
             crate::flow::evidence::authorize(
@@ -464,6 +466,7 @@ fn authorized(c: &Case) -> std::result::Result<(), String> {
         now: jobs::now(),
         dry_run: true,
         ledger: None,
+        review_ask: None,
     };
     crate::flow::evidence::authorize(&pass, &c.hub, &facts, &Step::Merge, &mut Default::default())
         .map_err(|e| e.to_string())

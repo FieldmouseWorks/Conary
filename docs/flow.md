@@ -508,9 +508,11 @@ GitHub can't say when the head was pushed: the earliest check suite on it)
 goes to a judge with the reason `changed` instead of landing on it.
 
 A head with no word yet waits in `review` for half an hour after the flow
-first saw it, then the flow asks for a look (`AskReview`): a PR comment,
-`@codex review` and why, at most once an hour per head, counted as asked
-only once GitHub took it. After two hours the owner hears of it. Findings
+first saw it, then the flow asks for a look (`AskReview`), at most once an
+hour per head: through the repository's review ask command where it has
+one ([conaryd](conaryd.md#verified-flow-events)), counted as asked only once
+it exits 0, since the connector takes no App's ask; elsewhere a PR comment,
+`@codex review` and why, counted as asked only once GitHub took it. After two hours the owner hears of it. Findings
 with open threads go to a fix; findings whose every thread is answered on
 an unchanged head are asked for again once they've settled
 (`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops

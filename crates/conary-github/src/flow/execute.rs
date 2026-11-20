@@ -106,8 +106,9 @@ pub(crate) fn act<G: Write>(
             Step::Settle => permission(pass, github, f, &next.step, record)?,
 
             Step::AskReview(why) => {
-                github.comment(&repo, f.number, &super::reviews::ask(why))?;
-                // Asked only once GitHub took the comment.
+                super::reviews::request(github, pass.review_ask, f, why)?;
+                // Asked only once GitHub took the comment, or the command
+                // said it asked.
                 record.memory.asked = Some((f.revision.head.clone(), pass.now));
             }
             Step::HandFix(kind) => {

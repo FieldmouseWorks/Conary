@@ -183,6 +183,7 @@ fn events(dir: &Path, change: impl FnOnce(&mut Value)) {
         "flow_config": dir.join("flow.json"),
         "policy": dir.join("policy.json"),
         "token_command": "env TOKEN_KEY=hush true",
+        "review_ask_commands": {},
         "anchor_repo": null,
         "worker": "/nonexistent",
         "api": "http://127.0.0.1:1",
@@ -260,6 +261,7 @@ fn only_a_restart_only_option_keeps_its_started_value() {
             "repos" => json!(["x/y"]),
             "anchor_repo" => json!("x/y"),
             "token_command" => json!("other"),
+            "review_ask_commands" => json!({"x/y": "other"}),
             "api" => json!("http://other"),
             "secret_path" | "data" | "flow_config" | "policy" | "worker" => json!("/other"),
             _ => panic!("{name}: give it another value here"),
@@ -564,6 +566,7 @@ fn every_reader_refuses_a_duplicate_key_and_a_positional_struct() {
         "flow_config",
         "policy",
         "token_command",
+        "review_ask_commands",
         "anchor_repo",
         "worker",
         "api",
@@ -591,4 +594,34 @@ fn every_reader_refuses_a_duplicate_key_and_a_positional_struct() {
     }
     std::fs::write(&path, &object).unwrap();
     assert_eq!(live.read().unwrap().data, live.started().data);
+}
+
+/// A repository's review ask command is its own, found whatever the case
+/// of its name; a repository with none has none, and a key that isn't
+/// `OWNER/REPO` is refused.
+#[test]
+fn a_review_ask_command_is_its_repository_s() {
+    let dir = tempfile::tempdir().unwrap();
+    let load = |change: fn(&mut Value)| {
+        events(dir.path(), change);
+        schema::load::<Runtime>(&std::fs::read(dir.path().join("events.json")).unwrap())
+            .map(|(runtime, _)| runtime)
+    };
+    let runtime = load(|_| {}).unwrap();
+    assert_eq!(runtime.review_ask(&"o/s".parse().unwrap()), None);
+    let runtime = load(|c| {
+        c["review_ask_commands"] = json!({"O/S": "/bin/ask --as owner"});
+    })
+    .unwrap();
+    assert_eq!(
+        runtime.review_ask(&"o/s".parse().unwrap()),
+        Some("/bin/ask --as owner")
+    );
+    assert_eq!(runtime.review_ask(&"o/t".parse().unwrap()), None);
+    assert!(
+        load(|c| {
+            c["review_ask_commands"] = json!({"nobody": "/bin/ask"});
+        })
+        .is_err()
+    );
 }

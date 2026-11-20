@@ -49,6 +49,13 @@ pub struct Runtime {
     /// arguments may carry a credential, so its value is never printed.
     #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub token_command: String,
+    /// The command that asks the reviewer for a look at a head in each
+    /// repository (`OWNER/REPO`), run without a shell as `COMMAND REPO PR
+    /// HEAD`; its exit 0 says it asked. A repository with none is asked with
+    /// a comment on the token's App, which Codex's connector ignores.
+    #[serde(default, deserialize_with = "review_asks")]
+    #[schemars(extend("x-spender" = false))]
+    pub review_ask_commands: std::collections::BTreeMap<String, String>,
     /// The repository the ledger is anchored in. `null` only when the flow
     /// needs no evidence or train.
     #[schemars(extend("x-spender" = false))]
@@ -71,6 +78,17 @@ fn repos<'de, D: serde::Deserializer<'de>>(
         .into_iter()
         .map(|s| s.parse().map_err(serde::de::Error::custom))
         .collect()
+}
+/// Each key a repository's `OWNER/REPO`.
+fn review_asks<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<std::collections::BTreeMap<String, String>, D::Error> {
+    let asks = std::collections::BTreeMap::<String, String>::deserialize(d)?;
+    for repo in asks.keys() {
+        repo.parse::<conary_core::op::Repo>()
+            .map_err(serde::de::Error::custom)?;
+    }
+    Ok(asks)
 }
 fn repo_names<S: serde::Serializer>(
     repos: &[conary_core::op::Repo],
@@ -176,12 +194,21 @@ impl Runtime {
             now: flow::jobs::now(),
             dry_run: false,
             ledger: observed.as_ref(),
+            review_ask: self.review_ask(repo),
         };
         let reports = pass.run(&api, repo, None, anchored.as_mut().map(|a| &mut a.store));
         if let Some(anchored) = &mut anchored {
             anchored.publish(&api)?;
         }
         reports
+    }
+    /// The review ask command of `repo`, if it has one.
+    pub fn review_ask(&self, repo: &conary_core::op::Repo) -> Option<&str> {
+        let repo = repo.to_string();
+        self.review_ask_commands
+            .iter()
+            .find(|(r, _)| r.eq_ignore_ascii_case(&repo))
+            .map(|(_, command)| command.as_str())
     }
     /// Launches this repository's workers, and kicks it again as each one
     /// exits, so the next pass reads its answer, its failure or its

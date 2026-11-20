@@ -16,6 +16,7 @@ fn run(c: &Case, only: Option<u64>, dry: bool) -> Vec<Report> {
         now: jobs::now() + 10_000,
         dry_run: dry,
         ledger: None,
+        review_ask: None,
     }
     .run(&c.hub, &REPO.parse().unwrap(), only, Some(&mut store))
     .unwrap()
@@ -246,6 +247,7 @@ fn unsent_and_failed_merge_intents_can_be_revalidated_and_retried() {
                 now: jobs::now() + 20_000 + n * 20_000,
                 dry_run: false,
                 ledger: None,
+                review_ask: None,
             }
             .run(&c.hub, &REPO.parse().unwrap(), Some(3), Some(&mut store))
             .unwrap();

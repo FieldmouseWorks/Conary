@@ -161,6 +161,7 @@ fn a_pause_written_during_a_pass_stops_the_prs_after_it() {
         now,
         dry_run: false,
         ledger: None,
+        review_ask: None,
     }
     .run(&c.hub, &repo(), None, Some(&mut c.store.borrow_mut()))
     .unwrap();
@@ -425,6 +426,7 @@ fn start_workers(
         now,
         dry_run: false,
         ledger: None,
+        review_ask: None,
     };
     for (purpose, task) in tasks.into_iter().skip(which.start).take(which.len()) {
         pass.start(&facts, purpose, task, vec![], &mut record, &data)

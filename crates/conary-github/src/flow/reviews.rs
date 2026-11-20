@@ -73,6 +73,42 @@ pub(super) fn ask(why: &str) -> String {
     format!("@codex review\n\n{why}")
 }
 
+/// Asks the reviewer for a look at the head. With a review ask command, that
+/// command does it, run without a shell as `COMMAND REPO PR HEAD`, and only
+/// its exit 0 says it asked: the connector takes its ask from no App, so a
+/// machine names a command that asks as someone it does take one from.
+/// Without one, the flow's own token comments [`ask`]. Errors name the
+/// program, never its arguments or what it printed.
+pub(super) fn request<G: super::Write>(
+    github: &G,
+    command: Option<&str>,
+    f: &super::Facts,
+    why: &str,
+) -> super::persist::Result<()> {
+    let repo = f.repo.to_string();
+    let Some(command) = command else {
+        github.comment(&repo, f.number, &ask(why))?;
+        return Ok(());
+    };
+    let argv: Vec<&str> = command.split_whitespace().collect();
+    let [program, args @ ..] = argv.as_slice() else {
+        return Err("the review ask command is empty".into());
+    };
+    let asked = format!("the review ask command ({program}) for {repo}#{}", f.number);
+    let status = std::process::Command::new(program)
+        .args(args)
+        .args([repo.as_str(), &f.number.to_string(), &f.revision.head])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|e| format!("{asked}: {e}"))?;
+    if !status.success() {
+        return Err(format!("{asked}: {status}").into());
+    }
+    Ok(())
+}
+
 /// The summary comment's state for one kind of review.
 #[derive(serde::Deserialize)]
 struct State {

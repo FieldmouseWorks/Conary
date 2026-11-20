@@ -92,6 +92,11 @@ pub struct Args {
     api: String,
     #[arg(long, env = "CONARY_TOKEN_COMMAND", hide_env_values = true)]
     token_command: Option<String>,
+    /// Asks the reviewer for a look at a head, run without a shell as
+    /// `COMMAND REPO PR HEAD`; its exit 0 says it asked. Unset, the token
+    /// comments the ask.
+    #[arg(long, env = "CONARY_REVIEW_ASK_COMMAND")]
+    review_ask_command: Option<String>,
     /// Required for train operations or recording negative evidence.
     #[arg(long, env = "CONARY_ANCHOR_REPO")]
     anchor_repo: Option<String>,
@@ -162,6 +167,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
         now: jobs::now(),
         dry_run,
         ledger: observed.as_ref(),
+        review_ask: args.review_ask_command.as_deref(),
     };
     let reports = pass
         .run(

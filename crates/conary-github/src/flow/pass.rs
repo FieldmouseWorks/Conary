@@ -77,6 +77,10 @@ pub struct Pass<'a> {
     pub now: u64,
     pub dry_run: bool,
     pub ledger: Option<&'a conary_core::Ledger>,
+    /// The command that asks the reviewer for a look at a head, run without
+    /// a shell as `COMMAND REPO PR HEAD` ([`super::reviews::request`]).
+    /// `None` asks with a comment on the flow's own token.
+    pub review_ask: Option<&'a str>,
 }
 impl Pass<'_> {
     pub fn run<G: Write>(
