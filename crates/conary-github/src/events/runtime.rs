@@ -88,8 +88,9 @@ impl FlowConfig {
 }
 impl flow::schema::Consistent for Runtime {
     /// Each listed repository has its flow configuration, and only they do:
-    /// a key that isn't one, names one twice, or names a repository not
-    /// listed is refused with the file, so no pass reads another's.
+    /// a key that isn't one, names a repository not listed, or names one
+    /// twice is refused with the file, so no pass reads another's. Only a
+    /// listed repository is named in the refusal.
     fn consistent(&self) -> Result<()> {
         let FlowConfig::Each(files) = &self.flow_config else {
             return Ok(());
@@ -99,11 +100,12 @@ impl flow::schema::Consistent for Runtime {
             let repo = key
                 .parse::<Repo>()
                 .map_err(|_| "flow_config has a key that isn't OWNER/REPO")?;
+            // Checked first, so no repository but a listed one is named.
+            if !self.repos.contains(&repo) {
+                return Err("flow_config names a repository repos doesn't list".into());
+            }
             if named.contains(&repo) {
                 return Err(format!("flow_config names {repo} twice").into());
-            }
-            if !self.repos.contains(&repo) {
-                return Err(format!("flow_config names {repo}, which repos doesn't list").into());
             }
             named.push(repo);
         }

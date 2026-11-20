@@ -257,7 +257,8 @@ pub struct Listing {
 /// a duplicate or unknown key is refused, and with every struct in it
 /// written as an object, the one form the schema describes (serde would
 /// also take a struct as a positional array). Returns the file as JSON too.
-/// Its errors never quote a value: see [`quiet`].
+/// Its errors never quote a value (see [`quiet`]); [`Consistent`]'s name
+/// only the repositories the file lists.
 pub fn load<T: JsonSchema + DeserializeOwned + Consistent>(file: &[u8]) -> Result<(T, Value)> {
     let raw = serde_json::from_slice::<Unique>(file).map_err(quiet)?.0;
     let loaded: T = serde_json::from_slice(file).map_err(quiet)?;
@@ -269,7 +270,7 @@ pub fn load<T: JsonSchema + DeserializeOwned + Consistent>(file: &[u8]) -> Resul
 /// What a configuration's options must say together, beyond what each one's
 /// type says, checked by [`load`] once the file has parsed: every reader
 /// refuses a file whose options disagree, as it refuses one that doesn't
-/// parse. Its errors name options and repositories, never a secret's value.
+/// parse. Its errors name options and listed repositories, never another value.
 pub trait Consistent {
     fn consistent(&self) -> Result<()> {
         Ok(())

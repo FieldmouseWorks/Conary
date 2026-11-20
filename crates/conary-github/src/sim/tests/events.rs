@@ -573,7 +573,7 @@ fn each_repository_passes_under_its_own_flow_configuration() {
         (
             json!(["o/r"]),
             each.clone(),
-            "flow_config names O/S, which repos doesn't list",
+            "flow_config names a repository repos doesn't list",
         ),
         (
             json!(["o/r", "o/s"]),
