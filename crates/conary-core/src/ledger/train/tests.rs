@@ -420,7 +420,8 @@ fn a_new_head_or_a_close_takes_a_change_out() {
     assert_eq!(
         b.record(Body::Leave {
             change: a,
-            why: Left::Unready
+            why: Left::Unready,
+            trunk: None
         }),
         Err(Invalid::NotInTrain)
     );
@@ -453,6 +454,7 @@ fn a_refused_merge_puts_the_changes_after_it_back() {
     b.ok(Body::Leave {
         change: changes[1],
         why: Left::Refused,
+        trunk: None,
     });
     assert_eq!(
         b.state(id),
@@ -524,6 +526,7 @@ fn a_half_is_built_whole_and_without_changes_that_left() {
     b.ok(Body::Leave {
         change: q,
         why: Left::Unready,
+        trunk: None,
     });
     assert_eq!(b.next(8).unwrap(), [r]);
     let newer = b.build(8);
@@ -619,6 +622,7 @@ fn the_trains_ops_read_back_as_written() {
         Body::Leave {
             change: a,
             why: Left::Conflict,
+            trunk: None,
         },
         Body::Candidate {
             candidate,
@@ -660,6 +664,7 @@ fn the_trains_ops_read_back_as_written() {
     let json = serde_json::to_value(Body::Leave {
         change: a,
         why: Left::Refused,
+        trunk: None,
     })
     .unwrap();
     assert_eq!(json["op"], "leave");
@@ -735,7 +740,11 @@ fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_afte
             for c in [p, q, r] {
                 b.join(c);
             }
-            b.ok(Body::Leave { change: q, why });
+            b.ok(Body::Leave {
+                change: q,
+                why,
+                trunk: None,
+            });
             let revision = b.current(q);
             let held = Body::Join {
                 change: q,
@@ -751,6 +760,7 @@ fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_afte
         b.ok(Body::Leave {
             change: r,
             why: Left::Unready,
+            trunk: None,
         });
         assert_eq!(b.record(held), Err(Invalid::Held(as_held)));
         b.push(q, 'b');
@@ -761,6 +771,7 @@ fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_afte
         b.ok(Body::Leave {
             change: p,
             why: Left::Unready,
+            trunk: None,
         });
         b.ok(held);
         assert!(b.joined().contains(&q));
@@ -790,6 +801,7 @@ fn a_change_that_wont_merge_or_changes_nothing_joins_again_once_what_it_was_afte
         b.ok(Body::Leave {
             change: p,
             why: Left::Unready,
+            trunk: None,
         });
         b.join(p);
         b.ok(held);
@@ -808,6 +820,7 @@ fn a_conflict_left_while_a_candidate_is_in_flight_is_after_the_changes_ahead_of_
     b.ok(Body::Leave {
         change: q,
         why: Left::Conflict,
+        trunk: None,
     });
     let revision = b.current(q);
     let held = Body::Join {
@@ -821,6 +834,7 @@ fn a_conflict_left_while_a_candidate_is_in_flight_is_after_the_changes_ahead_of_
     b.ok(Body::Leave {
         change: p,
         why: Left::Unready,
+        trunk: None,
     });
     b.ok(held);
 }
@@ -838,6 +852,7 @@ fn a_refused_change_joins_again_once_trunk_moves() {
     b.ok(Body::Leave {
         change: changes[1],
         why: Left::Refused,
+        trunk: None,
     });
     let revision = b.current(changes[1]);
     let again = Body::Join {
@@ -891,11 +906,13 @@ fn a_green_candidate_can_be_dropped_only_alone_or_on_passes_nobody_attested() {
     b.ok(Body::Leave {
         change: r,
         why: Left::Unready,
+        trunk: None,
     });
     assert!(!b.ledger.train(&repo()).unwrap().alone(r));
 }
 
 mod alone;
+mod empty;
 mod land;
 
 #[test]

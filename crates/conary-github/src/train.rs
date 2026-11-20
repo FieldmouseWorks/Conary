@@ -360,7 +360,11 @@ fn out(
     said: &str,
 ) -> Result<Leaving, TrainError> {
     let change = change_of(store, repo, pr)?;
-    let body = Body::Leave { change, why };
+    let body = Body::Leave {
+        change,
+        why,
+        trunk: None,
+    };
     match store.ledger().check(&body) {
         Ok(()) => {}
         Err(Invalid::NotInTrain) => return Ok(Leaving::NotIn),
@@ -760,12 +764,15 @@ fn in_flight_or_built(
                 base,
             } => {
                 let pr = pr_of(store, change);
+                // Empty with nothing merged before it: trunk at `base` already
+                // does what it does.
+                let trunk = (why == Left::Empty && onto.is_empty()).then(|| base.clone());
                 if why == Left::Empty {
                     stepped.empty.push(Empty { pr, onto, base });
                 } else {
                     stepped.conflicts.push(Conflict { pr, onto, base });
                 }
-                store.record(Body::Leave { change, why })?;
+                store.record(Body::Leave { change, why, trunk })?;
             }
         }
     }

@@ -137,6 +137,9 @@ struct Hold {
     moves: u64,
     /// The changes it wouldn't merge after, or merged after to no effect.
     ahead: Vec<ChangeId>,
+    /// For an empty merge onto trunk alone, the trunk commit it was merged
+    /// onto.
+    trunk: Option<CommitId>,
 }
 
 /// One repo's train.
@@ -201,12 +204,22 @@ impl Train {
         still.then_some(h.why)
     }
 
+    /// The trunk commit `change`'s head at `revision` merged onto, with
+    /// nothing before it, to no effect, while that holds it out: what it
+    /// does was on that commit already.
+    pub fn empty_on(&self, change: ChangeId, revision: RevisionId) -> Option<&CommitId> {
+        match self.held(change, revision)? {
+            Held::Empty => self.held[&change].trunk.as_ref(),
+            Held::Red | Held::Conflict | Held::Refused => None,
+        }
+    }
+
     /// Trunk moved under the train.
     pub(super) fn moved(&mut self) {
         self.moves += 1;
     }
 
-    fn hold(&mut self, change: ChangeId, why: Held, ahead: Vec<ChangeId>) {
+    fn hold(&mut self, change: ChangeId, why: Held, ahead: Vec<ChangeId>, trunk: Option<CommitId>) {
         let Some(seat) = self.seat(change) else {
             return;
         };
@@ -215,6 +228,7 @@ impl Train {
             revision: seat.revision,
             moves: self.moves,
             ahead,
+            trunk,
         };
         self.held.insert(change, hold);
     }
@@ -519,7 +533,7 @@ impl Ledger {
                     train.raised.insert(*change, raised.clone());
                 }
             }
-            Body::Leave { change, why } => {
+            Body::Leave { change, why, trunk } => {
                 let repo = self.changes[change].repo.clone();
                 match why {
                     Left::Unready | Left::Below => {}
@@ -531,11 +545,12 @@ impl Ledger {
                         } else {
                             Held::Conflict
                         };
-                        train.hold(*change, why, ahead);
+                        let trunk = trunk.clone().filter(|_| why == Held::Empty);
+                        train.hold(*change, why, ahead, trunk);
                     }
                     Left::Refused => {
                         let train = self.trains.get_mut(&repo).expect("check: it's in it");
-                        train.hold(*change, Held::Refused, Vec::new());
+                        train.hold(*change, Held::Refused, Vec::new(), None);
                     }
                 }
                 let seat = self.trains[&repo]
@@ -648,7 +663,7 @@ impl Ledger {
             Verdict::Green => return,
             // Red alone, the change leaves; red with others, it splits.
             Verdict::Red if changes.len() == 1 => {
-                train.hold(changes[0], Held::Red, Vec::new());
+                train.hold(changes[0], Held::Red, Vec::new(), None);
                 train.remove(changes[0]);
             }
             Verdict::Red => {
