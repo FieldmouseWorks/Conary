@@ -3,12 +3,17 @@
 # The repo is public (#12), so hosted minutes cost nothing, and no PR, a fork's
 # included, runs on remi. Jobs the flake can't hold (browsers, VMs) go
 # alongside.
+#
+# Conary lands through its merge train (docs/m6-cutover.md, "Every repository
+# lands through its train"): a push to a conary/train/ branch is a candidate,
+# main with the PRs in it on top, and the gate on it attests the tree that
+# lands, which is the only run conaryd counts for a required check.
 name: flake
 on:
   # A PR retargeted onto another branch runs from flake-retarget.yml.
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "conary/train/**"]
 permissions:
   contents: read
 jobs:
