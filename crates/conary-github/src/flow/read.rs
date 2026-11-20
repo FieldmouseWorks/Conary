@@ -71,7 +71,9 @@ pub fn read(
             ApiError::new("PR moved between flow reads"),
         ));
     }
-    if !extra.complete {
+    if extra.complete {
+        reads.answered(Reading::Snapshot);
+    } else {
         reads.met(
             Reading::Snapshot,
             "GitHub's snapshot stopped short of the PR's reviews, comments, labels or threads"

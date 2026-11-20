@@ -404,6 +404,8 @@ pub(super) fn checks(
             });
         }
     }
+    // Every cancelled run's suite was there to tell what became of it.
+    reads.answered(Reading::Cancelled);
     Ok(Result {
         checks,
         docs,

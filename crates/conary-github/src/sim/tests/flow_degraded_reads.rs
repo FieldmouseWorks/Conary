@@ -33,49 +33,80 @@ fn once(h: &Hub, call: Call) {
     h.race(call, move |h| h.race(call, move |h| h.heal(call)));
 }
 
-/// One read of the family: how a test makes it fail this pass, what the
-/// decision names, and the calls that heal it, or catch up.
+/// The PR's stored snapshot, edited.
+fn snap(h: &Hub, edit: fn(&mut Snapshot)) {
+    let mut snapshot = h.snapshot(REPO, 3).unwrap();
+    edit(&mut snapshot);
+    h.flow_snapshot(REPO, 3, snapshot);
+}
+
+/// One read of the family: how a test makes it fail or stop short this
+/// pass, the read the decision names, how GitHub answers again, and
+/// whether the PR lands then.
 struct Row {
     read: &'static str,
     arm: fn(&Hub),
-    heal: &'static [Call],
+    heal: fn(&Hub),
+    /// Whether the PR lands once it heals: one handed to the owner stays
+    /// theirs.
+    lands: bool,
 }
 
-/// Each read a reviewed, green PR's decision takes, failing while every
-/// other answers. Main went on past the swallowed ones as if they'd
-/// answered, or failed the PR with GitHub's error, and recorded none.
+/// Each read a reviewed, green PR's decision takes, failing or stopping
+/// short while every other answers. Main went on past the swallowed ones as
+/// if they'd answered, or failed the PR with GitHub's error, and recorded
+/// none.
 const ROWS: &[Row] = &[
     // Reads the decision can't go on without: it waits, naming the read.
     Row {
         read: "pull",
         arm: |h| h.fail(Call::FlowSnapshot),
-        heal: &[Call::FlowSnapshot],
+        heal: |h| h.heal(Call::FlowSnapshot),
+        lands: true,
     },
     Row {
         read: "base",
         arm: |h| h.fail(Call::Branch),
-        heal: &[Call::Branch],
+        heal: |h| h.heal(Call::Branch),
+        lands: true,
     },
     Row {
         read: "files",
         arm: |h| h.fail(Call::Files),
-        heal: &[Call::Files],
+        heal: |h| h.heal(Call::Files),
+        lands: true,
     },
     Row {
         read: "checks",
         arm: |h| h.fail(Call::Statuses),
-        heal: &[Call::Statuses],
+        heal: |h| h.heal(Call::Statuses),
+        lands: true,
     },
     Row {
         read: "reviews",
         arm: |h| h.fail(Call::Comments),
-        heal: &[Call::Comments],
+        heal: |h| h.heal(Call::Comments),
+        lands: true,
     },
     // Reads it goes on past, holding what they were for failed.
     Row {
         read: "commits",
         arm: |h| h.fail(Call::CompareCommits),
-        heal: &[Call::CompareCommits],
+        heal: |h| h.heal(Call::CompareCommits),
+        lands: true,
+    },
+    Row {
+        read: "checks",
+        arm: |h| snap(h, |s| s.checks_complete = false),
+        heal: |h| snap(h, |s| s.checks_complete = true),
+        lands: true,
+    },
+    // Handed to the owner, as before, and named.
+    Row {
+        read: "snapshot",
+        arm: |h| snap(h, |s| s.complete = false),
+        heal: |h| snap(h, |s| s.complete = true),
+        lands: false,
     },
     // A run whose suite a snapshot behind GitHub doesn't hold: whether its
     // workflow is still running can't be told, where main counted it green.
@@ -85,7 +116,8 @@ const ROWS: &[Row] = &[
             h.stale(Call::FlowSnapshot);
             h.check_run(&head(3), "late", "success", None);
         },
-        heal: &[Call::FlowSnapshot],
+        heal: |h| h.fresh(Call::FlowSnapshot),
+        lands: true,
     },
     // Evidence's shared reads, failing once the decision's own answered:
     // the reviews after a check's attestation is read, and the head's
@@ -93,7 +125,8 @@ const ROWS: &[Row] = &[
     Row {
         read: "reviews",
         arm: |h| h.race(Call::Artifacts, |h| once(h, Call::Reviews)),
-        heal: &[],
+        heal: |_| {},
+        lands: true,
     },
     Row {
         read: "observations",
@@ -102,66 +135,113 @@ const ROWS: &[Row] = &[
                 h.race(Call::Comments, |h| once(h, Call::FlowSnapshot))
             })
         },
-        heal: &[],
+        heal: |_| {},
+        lands: true,
     },
 ];
 
+/// The row's whole story, panicking at the first thing that doesn't hold.
+fn run(row: &Row) {
+    let c = Case::new();
+    let now = jobs::now() + 10_000;
+    // In the ledger, which a degradation is recorded against, and then
+    // reviewed clean.
+    c.pass(now - 1, false);
+    c.clean_review();
+    for pass in 0..2 {
+        (row.arm)(&c.hub);
+        let reports = c.pass(now + pass, false);
+        let three = decided(&reports, 3);
+        assert!(names(&three, row.read), "{three}");
+        // Counted failed: nothing is granted, and nothing lands.
+        assert!(
+            !matches!(
+                three["step"].as_str(),
+                Some("Merge" | "Settle" | "JoinTrain")
+            ),
+            "{three}"
+        );
+        assert_eq!(c.hub.count(Call::Merge), 0, "{three}");
+        assert!(c.record().live.is_empty(), "{three}");
+        // Recorded once while it lasts.
+        assert_eq!(naming(&c, "degraded", row.read), 1);
+        (row.heal)(&c.hub);
+    }
+    // `cn flow status` names it from the last decision.
+    let shown = serde_json::to_value(
+        status(c.dir.path(), &REPO.parse().unwrap(), &c.config, now + 2).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        shown["degraded"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|d| d["read"] == row.read)),
+        "{shown}"
+    );
+    // GitHub answers again: the same read clears it, and the PR lands
+    // unless it went to the owner.
+    let reports = c.pass(now + 2, false);
+    let three = decided(&reports, 3);
+    assert!(!names(&three, row.read), "{three}");
+    assert_eq!(naming(&c, "restored", row.read), 1);
+    assert_eq!(naming(&c, "degraded", row.read), 1);
+    assert_eq!(
+        c.hub.pull(REPO, 3).unwrap().is_merged(),
+        row.lands,
+        "{three}"
+    );
+}
+
 #[test]
 fn a_read_that_fails_is_recorded_once_counts_failed_and_is_named() {
-    for row in ROWS {
-        let c = Case::new();
-        let now = jobs::now() + 10_000;
-        // In the ledger, which a degradation is recorded against, and then
-        // reviewed clean.
-        c.pass(now - 1, false);
-        c.clean_review();
-        for pass in 0..2 {
-            (row.arm)(&c.hub);
-            let reports = c.pass(now + pass, false);
-            let three = decided(&reports, 3);
-            assert!(names(&three, row.read), "{}: {three}", row.read);
-            // Counted failed: nothing is granted, and nothing lands.
-            assert!(
-                !matches!(
-                    three["step"].as_str(),
-                    Some("Merge" | "Settle" | "JoinTrain")
-                ),
-                "{}: {three}",
-                row.read
-            );
-            assert_eq!(c.hub.count(Call::Merge), 0, "{}: {three}", row.read);
-            assert!(c.record().live.is_empty(), "{}: {three}", row.read);
-            // Recorded once while it lasts.
-            assert_eq!(naming(&c, "degraded", row.read), 1, "{}", row.read);
-            for call in row.heal {
-                c.hub.heal(*call);
-                c.hub.fresh(*call);
-            }
-        }
-        // `cn flow status` names it from the last decision.
-        let shown = serde_json::to_value(
-            status(c.dir.path(), &REPO.parse().unwrap(), &c.config, now + 2).unwrap(),
-        )
+    let failed: Vec<String> = ROWS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            std::panic::catch_unwind(|| run(row))
+                .err()
+                .map(|_| format!("row {i} ({})", row.read))
+        })
+        .collect();
+    assert!(failed.is_empty(), "failed: {}", failed.join(", "));
+}
+
+/// A pass kicked for PR 4 alone, so it doesn't visit PR 3.
+fn kick(c: &Case, now: u64) {
+    let mut store = c.store.borrow_mut();
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now,
+        dry_run: false,
+        ledger: None,
+    };
+    pass.run(&c.hub, &REPO.parse().unwrap(), Some(4), Some(&mut store))
         .unwrap();
-        assert!(
-            shown["degraded"]
-                .as_array()
-                .is_some_and(|d| d.iter().any(|d| d["read"] == row.read)),
-            "{}: {shown}",
-            row.read
-        );
-        // GitHub answers again: the same read clears it, and the PR lands.
-        let reports = c.pass(now + 2, false);
-        let three = decided(&reports, 3);
-        assert!(!names(&three, row.read), "{}: {three}", row.read);
-        assert_eq!(naming(&c, "restored", row.read), 1, "{}", row.read);
-        assert_eq!(naming(&c, "degraded", row.read), 1, "{}", row.read);
-        assert!(
-            c.hub.pull(REPO, 3).unwrap().is_merged(),
-            "{}: {three}",
-            row.read
-        );
-    }
+}
+
+/// What occupancy's reads of a PR the pass doesn't visit meet: GitHub's,
+/// and the pause's. Main reserved every slot for it and recorded nothing.
+#[test]
+fn an_unvisited_pr_s_reads_that_fail_are_recorded() {
+    let c = Case::new();
+    let now = jobs::now();
+    c.pass(now, false);
+    c.hub.fail(Call::Files);
+    kick(&c, now + 1);
+    assert_eq!(naming(&c, "degraded", "files"), 1);
+    c.hub.heal(Call::Files);
+    kick(&c, now + 2);
+    assert_eq!(naming(&c, "restored", "files"), 1);
+    let pause = crate::flow::persist::dir(c.dir.path(), &REPO.parse().unwrap()).join("pause");
+    std::fs::write(&pause, b"{\"scope\":\"everything\"}").unwrap();
+    kick(&c, now + 3);
+    assert_eq!(naming(&c, "degraded", "pause"), 1);
+    std::fs::remove_file(&pause).unwrap();
+    kick(&c, now + 4);
+    assert_eq!(naming(&c, "restored", "pause"), 1);
 }
 
 /// A PR the pass doesn't visit, holding a live grant, whose read fails:
@@ -175,20 +255,7 @@ fn an_unvisited_pr_whose_read_fails_loses_its_grant() {
     c.pass(now, false);
     assert!(c.record().live.contains(&head(3)));
     c.hub.fail(Call::Pull.pr(3));
-    {
-        let mut store = c.store.borrow_mut();
-        let pass = Pass {
-            config: &c.config,
-            policy: &c.policy,
-            root: c.dir.path(),
-            launcher: &c.deferred,
-            now: now + 1,
-            dry_run: false,
-            ledger: None,
-        };
-        pass.run(&c.hub, &REPO.parse().unwrap(), Some(4), Some(&mut store))
-            .unwrap();
-    }
+    kick(&c, now + 1);
     assert!(c.record().live.is_empty());
     assert_eq!(naming(&c, "degraded", "pull"), 1);
     // The PR reads again: its decision's read clears it.
