@@ -313,6 +313,9 @@ pub struct Settings {
     /// Whether PRs into the default branch land through the merge train.
     #[schemars(extend("x-spender" = true))]
     pub train: bool,
+    /// The most changes one of the train's candidates holds.
+    #[schemars(extend("x-spender" = false))]
+    pub train_size: std::num::NonZeroUsize,
     /// The account a fix job pushes as. Set, a push to the branch by anyone
     /// else stops that PR's fix job.
     #[schemars(extend("x-spender" = false))]
@@ -451,6 +454,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             train: false,
+            train_size: crate::train::DEFAULT_SIZE,
             job_login: None,
             proof_slots: Some(0),
             proof_timeout: 10800,

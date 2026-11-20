@@ -146,6 +146,44 @@
     ]
   },
   {
+    "event": "workflow_run",
+    "payload": {
+      "repository": {
+        "full_name": "o/r",
+        "default_branch": "main"
+      },
+      "action": "completed",
+      "workflow_run": {
+        "head_branch": "topic",
+        "pull_requests": [
+          {
+            "number": 3
+          }
+        ]
+      }
+    },
+    "prs": [
+      3
+    ]
+  },
+  {
+    "event": "workflow_run",
+    "payload": {
+      "repository": {
+        "full_name": "o/r",
+        "default_branch": "main"
+      },
+      "action": "completed",
+      "workflow_run": {
+        "head_branch": "conary/train/synthetic",
+        "pull_requests": []
+      }
+    },
+    "prs": [
+      null
+    ]
+  },
+  {
     "event": "status",
     "payload": {
       "repository": {

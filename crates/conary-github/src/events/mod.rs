@@ -36,6 +36,9 @@ const EVENTS: &[(&str, Target)] = &[
     ("issue_comment", Target::Issue),
     ("check_suite", Target::Check("check_suite")),
     ("check_run", Target::Check("check_run")),
+    // A run finishing on a train's candidate, which belongs to no PR, kicks
+    // the repo: its pass steps the train.
+    ("workflow_run", Target::Check("workflow_run")),
     ("status", Target::Repository),
     ("push", Target::DefaultPush),
 ];
