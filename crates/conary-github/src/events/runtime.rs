@@ -4,8 +4,9 @@ use crate::{
     Api, Tokens, anchor,
     flow::{self, persist::Result},
 };
-use conary_core::{Policy, log, reader};
+use conary_core::{Policy, log, op::Repo, reader};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// conaryd's events configuration file. A running daemon reads it again at
@@ -39,9 +40,11 @@ pub struct Runtime {
         "x-needs" = "a restart of conaryd: it opens its mailbox there once, as it starts"
     ))]
     pub data: PathBuf,
-    /// The flow's configuration file.
+    /// The flow's configuration: one file every listed repository's pass
+    /// reads, or an object giving each listed repository its own file, keyed
+    /// `OWNER/REPO`. A pass reads its own repository's file and no other.
     #[schemars(extend("x-spender" = false))]
-    pub flow_config: PathBuf,
+    pub flow_config: FlowConfig,
     /// The classification policy file.
     #[schemars(extend("x-spender" = false))]
     pub policy: PathBuf,
@@ -49,8 +52,8 @@ pub struct Runtime {
     /// arguments may carry a credential, so its value is never printed.
     #[schemars(extend("x-spender" = false, "x-secret" = true))]
     pub token_command: String,
-    /// The repository the ledger is anchored in. `null` only when the flow
-    /// needs no evidence or train.
+    /// The repository the ledger is anchored in. `null` only when no
+    /// repository's flow needs evidence or the train.
     #[schemars(extend("x-spender" = false))]
     pub anchor_repo: Option<String>,
     /// The installed `cn` that runs the flow's plugin jobs.
@@ -60,6 +63,57 @@ pub struct Runtime {
     #[serde(default = "api")]
     #[schemars(extend("x-spender" = false))]
     pub api: String,
+}
+/// Which flow configuration file each repository's pass reads.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum FlowConfig {
+    /// One file, read by every listed repository's pass.
+    One(PathBuf),
+    /// Each listed repository's own file, keyed `OWNER/REPO`.
+    Each(BTreeMap<String, PathBuf>),
+}
+impl FlowConfig {
+    /// The file `repo`'s pass reads.
+    pub fn of(&self, repo: &Repo) -> Result<&Path> {
+        match self {
+            Self::One(path) => Ok(path),
+            Self::Each(files) => files
+                .iter()
+                .find(|(key, _)| key.parse::<Repo>().is_ok_and(|key| key == *repo))
+                .map(|(_, path)| path.as_path())
+                .ok_or_else(|| format!("flow_config gives {repo} no file").into()),
+        }
+    }
+}
+impl flow::schema::Consistent for Runtime {
+    /// Each listed repository has its flow configuration, and only they do:
+    /// a key that isn't one, names a repository not listed, or names one
+    /// twice is refused with the file, so no pass reads another's. Only a
+    /// listed repository is named in the refusal.
+    fn consistent(&self) -> Result<()> {
+        let FlowConfig::Each(files) = &self.flow_config else {
+            return Ok(());
+        };
+        let mut named: Vec<Repo> = Vec::new();
+        for key in files.keys() {
+            let repo = key
+                .parse::<Repo>()
+                .map_err(|_| "flow_config has a key that isn't OWNER/REPO")?;
+            // Checked first, so no repository but a listed one is named.
+            if !self.repos.contains(&repo) {
+                return Err("flow_config names a repository repos doesn't list".into());
+            }
+            if named.contains(&repo) {
+                return Err(format!("flow_config names {repo} twice").into());
+            }
+            named.push(repo);
+        }
+        match self.repos.iter().find(|repo| !named.contains(repo)) {
+            Some(repo) => Err(format!("flow_config gives {repo} no file").into()),
+            None => Ok(()),
+        }
+    }
 }
 fn api() -> String {
     "https://api.github.com".into()
@@ -141,7 +195,7 @@ impl Runtime {
             .iter()
             .find(|r| r.to_string().eq_ignore_ascii_case(&work.repo))
             .ok_or("unlisted repository")?;
-        let config = flow::Config::load(&self.flow_config)?;
+        let config = flow::Config::load(self.flow_config.of(repo)?)?;
         let policy = Policy::load(&self.policy)?;
         let api = Api::new(&self.api, Tokens::command(&self.token_command)?)
             .with_event_queue(std::sync::Arc::clone(queue));
