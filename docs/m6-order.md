@@ -30,7 +30,9 @@ and remi's at `ec6b9f5`. The issues linked here own the live state.
 - A **switch** is the moment something live starts deciding differently.
   One switch is open at a time on the whole machine. Each is followed by a
   settle period, in which no other switch opens and no deploy goes out that
-  changes one of proj's units or what a gate run decides.
+  changes one of proj's units or what a gate run decides. Handing a paused
+  repository to conaryd decides nothing until it's allowed, so the allow is
+  its switch ([m6-cutover.md](m6-cutover.md#every-group-the-same-way)).
 
 Both burrow designs already say this of themselves ("two engines swapped on
 one machine in one week is how you can't tell which one broke it"). This
@@ -206,7 +208,7 @@ it's two days of normal work with nothing traced to the switch.
 | | Switch | Owner | Opens when |
 | --- | --- | --- | --- |
 | S1 | remi lands through conaryd | [#314](https://github.com/FieldmouseWorks/Conary/issues/314) | Every 5c task is live on remi, #313 has landed, the producers' keys are provisioned, and every kind of shadow disagreement is judged, with none left that is the flow's error ([the shadow is a dry run](#the-shadow-is-a-dry-run-not-a-target)) |
-| S2 | Every other repository, burrow among them, a group at a time | [#315](https://github.com/FieldmouseWorks/Conary/issues/315) and the tasks it files | S1 has settled. burrow's part starts by turning its train on (fence 10) |
+| S2 | Every other repository, burrow among them, a group at a time | [m6-cutover.md](m6-cutover.md) (#315's plan) and the tasks it files | S1 has settled. burrow's part starts by turning its train on (fence 10). Each group's own conditions are in the plan |
 | S3 | Hosted runs substitute from the build store, and the kept builds go | [burrow#989](https://github.com/FieldmouseWorks/burrow/issues/989) | burrow's part of S2 has settled, and the store's shadow has twenty good reports |
 | S4 | The steward's Python is deleted | The tasks #316 files | Every repository lands through conaryd |
 | S5 | One plan a run | [burrow#990](https://github.com/FieldmouseWorks/burrow/issues/990) | S3 has settled |
@@ -260,7 +262,7 @@ Work on any of these before the steward is deleted is work done twice.
   and effort (burrow#825, burrow#826) arrive in the plugin request's
   `execution`, so tasks J and R deliver them. The review limits and judge
   triggers (burrow#748) are the flow's settings and its `why`.
-- **Model-run proofs.** wend's proof job (burrow#646) is C3's and #315's.
+- **Model-run proofs.** wend's proof job (burrow#646) is C3's, and becomes a program in [S2e](m6-cutover.md#s2e-wend).
 - **`needs-peter` on a PR.** At S1 an owner call is a GitHub review that
   carries the flow's marker ([flow.md](flow.md#person-approval)), not a
   label someone takes off.
