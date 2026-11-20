@@ -392,7 +392,11 @@ burrow's drain uses. `priority_labels` maps labels to levels (by default
 keeps an owner's `first` label maps it to `high`). A PR takes the highest
 level its labels are mapped to, or `default_priority` (`medium`) with none.
 A label maps to one level: it's a key of that map, and the loader refuses
-a key given twice.
+a key given twice. A fix for the repository's red default branch is `high`
+whatever its labels, so nobody has to label it: a trusted author's PR from
+an `autoland/red-` branch in the repository itself into the default branch
+([`flow::red_fix`](../crates/conary-github/src/flow/priority.rs), the same
+test that lets it skip waiting on the red branch's own runs).
 
 Proof slots, train admission and a targeted kick's view of the other PRs
 go in one order ([`flow::Rank`](../crates/conary-github/src/flow/priority.rs)):

@@ -132,6 +132,7 @@ pub fn read(
         stacked_on: None,
         open_prs: BTreeSet::new(),
         queue: BTreeMap::new(),
+        red_fix: super::red_fix(&pull, trusted_authors),
         base_held: false,
         queued_merge: pull.auto_merge.is_some(),
         train: TrainState::default(),
@@ -160,7 +161,12 @@ pub fn read(
     facts.open_prs = open.iter().map(|p| p.number).collect();
     facts.queue = open
         .iter()
-        .map(|p| (p.number, super::Rank::of(&facts.settings, p)))
+        .map(|p| {
+            (
+                p.number,
+                super::Rank::of(&facts.settings, trusted_authors, p),
+            )
+        })
         .collect();
     facts.stacked_on = open
         .iter()
@@ -250,18 +256,7 @@ pub fn read(
         None
     };
     facts.base_tip = tip.clone();
-    let own_branch = pull
-        .head
-        .repo
-        .as_ref()
-        .and_then(|r| r.full_name.as_ref())
-        .is_some_and(|r| r.eq_ignore_ascii_case(&repository));
-    if facts.branch.starts_with("autoland/red-")
-        && facts.trusted
-        && !facts.draft
-        && own_branch
-        && facts.revision.base == facts.default_branch
-    {
+    if facts.red_fix && !facts.draft {
         facts.base_held = extra
             .default_branch
             .as_ref()

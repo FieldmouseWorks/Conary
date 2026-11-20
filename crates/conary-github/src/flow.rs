@@ -11,7 +11,7 @@ mod history;
 mod markers;
 mod priority;
 pub use degraded::{Degradation, Degraded};
-pub use priority::{Level, Rank, StallAfter};
+pub use priority::{Level, RED_FIX_BRANCH, Rank, StallAfter, red_fix};
 mod proofs;
 mod read;
 mod state;
