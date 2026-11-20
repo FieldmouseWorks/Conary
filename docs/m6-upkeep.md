@@ -143,7 +143,7 @@ None of these is a new extraction task.
 - **Conary hard-codes the stage label names, and the owner's name with
   them.** `Stage::label` in `flow/write.rs` has `"waiting: Peter"`. burrow
   names that label `waiting: ${owner}` (`labels.nix`). That's a machine
-  value in a library (`reusable-modules`). **C3** takes it.
+  value in a library (`reusable-modules`). **C3** and **C3b** take it.
 - **Conary's lock-file grace is 140 seconds short.** C2 says why.
 
 ## The tasks
@@ -155,7 +155,10 @@ carries the `first` label. Each one:
   its issue, and runs them against the Rust;
 - shows in its PR that each ported test fails when the moved code is broken;
 - switches what it moves on in the same PR, and deletes the Python or nix
-  wiring it replaced.
+  wiring it replaced;
+- deletes the Python test cases it ported, and names in its PR the Rust test
+  that replaces each one. A case deleted without a named replacement is the
+  P1 "tests deleted to get green".
 
 **Python edits.** A task may edit the steward's Python only to delete a call
 it replaces, or to point one at the Rust. That's the one exception to
@@ -167,25 +170,45 @@ stays until D.
 **Lanes.** The tasks run in two new lanes, each one task at a time:
 
 - **burrow upkeep** (`crates/burrow-upkeep`, except what the burrow M6 lane
-  owns, and the upkeep wiring in `modules/autoland.nix`): U1, U5, U2, U4,
-  U3, U6. U5 goes early because it ends a live cost: the stuck issue's
-  comments wake a job each time.
+  owns, and the upkeep wiring in `modules/autoland.nix`): U1, U2, U4, U5,
+  U3, U6.
 - **burrow renovate** (`crates/burrow-renovate`, `crates/lock-age`,
   `modules/updates.nix`, `modules/updates/`): N1, N3, N2.
 
-C1 to C3 join the Conary flow lane.
+Four tasks go in existing lanes. C1 to C3 go in the Conary flow lane. I1 goes
+in the burrow proj lane, ahead of U5. C3b goes in the burrow M6 lane, after
+burrow#724.
 
-**Switches.** Each deploy that carries a U or N task is a switch on
-[the calendar](m6-order.md#switches). It's a small one: it moves no landing
-decision. Before it merges, its PR shows the new code's `--dry` output
-against the live repos, matching what the steward last did. Its measured
-acceptance is one day of normal work with no stall traced to it. These
-switches go in the gaps between S1, S2's groups and S4. Each lands as soon
-as one opens; none waits on S2.
+The new lanes' PRs carry `first` as M6 work. They count toward
+[fence 11](m6-order.md#fences)'s cap of two burrow PRs in CI at a time, and
+yield to the burrow M6 and proj lanes within it.
 
-**Start now: every task but U6 and D.** None of them is in the landing
-path, and none waits on a cutover. U6 waits on C1 and U5. D waits on
-[the gate](#the-gate).
+**Switches.** Each deploy that carries a U, N or I task is a switch on
+[the calendar](m6-order.md#switches). It moves no landing decision, so it's a
+small one. A merged burrow PR goes live at remi's next pin bump, so landing
+is the switch:
+
+- **Before it merges.** The task's PR shows its new code's `--dry` output
+  against the live repos, matching what the steward last did.
+- **The `hold`.** Once review and CI settle, the PR takes `hold`, and keeps
+  it until no other switch is in its settle period. Its own job lifts the
+  hold. While S1 is open, as it is on the day this was written, that means
+  once S1 settles.
+- **Acceptance.** One day of normal work with no stall traced to it.
+
+These switches fill the gaps between S1, S2's groups and S4. None waits on
+S2.
+
+**Start now: every task but U5, U6 and the D tasks.** "Start" means build and
+review. Landing waits for a gap, as above. None of these is a landing step,
+and none waits on a cutover.
+
+- U1 does reach the landing path: it repoints conaryd's live token command
+  on remi. So it lands in a gap like the rest, and its PR shows a conaryd pass
+  on remi reading GitHub through the new command.
+- U5 waits on I1.
+- U6 waits on C1 and U5.
+- The D tasks wait on [the gate](#the-gate).
 
 ### U1: upkeep: the App's token for conaryd and cn, without the steward
 
@@ -221,6 +244,14 @@ for a repo whose upkeep fails. A rate limit defers it through
 
 The steward's calls to `settle`, `watch` and `hooks` are deleted. The
 steward keeps `discover` for its own landing pass until D.
+
+**Serialisation.** Until D, the pass takes the steward's `pass.lock` (an
+exclusive `flock` on the same file) for each repo it acts on. So it never
+runs beside the steward's pass. That is the lock the upkeep subcommands run
+under today. `repo-OWNER_NAME.json` has three writers: the steward,
+`settle.rs` and `hook.rs`. The two Rust writers already carry each other's
+fields through (`#[serde(flatten)] rest`), so under the one lock no write is
+lost. D drops the shared lock along with the steward.
 
 **Parity:** the settle, hook and upkeep cases of `tests/autoland/upkeeping.py`
 and `app.py`, `limits.py`'s rate-limit case, and `passes.py`'s cases for
@@ -282,12 +313,20 @@ parity:
 
 - **The stuck issue's body is edited in place.** It holds the whole current
   list. Today's stuck issue is the opposite: its body never changes, and
-  every change posts the whole list as a new comment. That was done because
-  proj's inbox can't trust a body whose edit history GitHub has pruned
-  (burrow `e524bfd`). U5 removes that need:
-  - the stuck issue's job reads the current list from the machine
-    (`burrow-upkeep publish --show`), never from the body or a comment;
-  - the inbox doesn't wake on the issue's edits.
+  every change posts the whole list as a new comment (burrow `e524bfd`).
+  Two things in proj's inbox stood in the way:
+  - **It trusts a body only through its edit history.** It reads the body
+    with its first 100 edits (`inbox/written.rs`) and fails closed past
+    them. So U5 opens a fresh issue carrying the list before the old one's
+    edits reach 90, closes the old one with a link to the new, and posts no
+    other comment.
+  - **Any edit re-hands the issue's job** (`inbox/jobs.rs`, "The issue has
+    changed since you were handed it"). That's a turn per edit. I1 ends it
+    for the publisher's own edits to its own issue.
+
+  The job reads the current list from the machine
+  (`burrow-upkeep publish --show`), so an edit it isn't woken for loses it
+  nothing.
 - **A comment goes up only for a new item someone can act on.** It names
   that item alone. A cleared item, a reworded item, or a PR moving within
   its stage edits the body and posts nothing.
@@ -312,6 +351,23 @@ The steward's `publish` and `escalated` are deleted.
 
 **Closes:** burrow#1046 and burrow#1244. Its PR names each in full, under
 [fence 8](m6-order.md#fences).
+
+### I1: proj inbox: the publisher's own edits don't re-hand the stuck issue's job
+
+Issue: [burrow#1311](https://github.com/FieldmouseWorks/burrow/issues/1311).
+
+**Lane:** burrow proj, after the stage it's on, behind the fixes in
+[fence 7](m6-order.md#fences) (burrow#975 has landed).
+
+An edit to an issue's body by the account that opened it, an issue
+`burrow.proj.inbox.authors`'s machine account opened, doesn't count as the
+issue changing under its job. Edits by anyone else still do, and the trust
+check in `written.rs` is unchanged.
+
+**Parity:** the inbox's existing tests for a changed issue pass. A new case,
+where the machine's own body edit to its own issue starts no turn, fails on
+main. A second new case, where another account's edit to the same issue
+still re-hands the job, also passes.
 
 ### U6: upkeep: conaryd's stalls and owner notices, to the watchdog and the two issues
 
@@ -395,8 +451,9 @@ added. Lane: Conary flow, after the tasks open there.
 Issue: [#491](https://github.com/FieldmouseWorks/Conary/issues/491).
 
 In `flow/state.rs`, the grace while a refresh is pending is `3600 + run`.
-`lock_wait.interval` has `3600 + 20 + run`. The flow's deadline, and with it
-an overdue lock-file PR, therefore comes 140 seconds early. One test fixes
+`lock_wait.interval` has `3600 + 20 + run`. So the flow's deadline, and with
+it an overdue lock-file PR, comes 80 seconds early (the drain counts the
+interval four times), or 140 when a release wait is pending too. One test fixes
 the value to what `tests/renovate-sweep.py` pins.
 
 ### C3: flow: stage label names from the configuration (Conary)
@@ -404,17 +461,25 @@ the value to what `tests/renovate-sweep.py` pins.
 Issue: [#492](https://github.com/FieldmouseWorks/Conary/issues/492).
 
 `Stage::label`'s names, the owner's `waiting: Peter` among them, come from
-the flow configuration. burrow renders them from `labels.nix`, so they're no
-longer hard-coded. The defaults name no person.
+the flow configuration. The defaults name no person. Until C3b renders
+remi's names, the flow keeps today's names.
+
+### C3b: autoland: render the stage label names into the flow configuration
+
+Issue: [burrow#1312](https://github.com/FieldmouseWorks/burrow/issues/1312).
+
+The flow configuration's renderer (`shadow.nix`, or burrow#724's
+renderer once it lands) writes C3's label names from `labels.nix`. **Lane:**
+burrow M6, after burrow#724. **Waits on:** C3.
+
+**Parity:** a check fails when the rendered names differ from `labels.nix`'s.
 
 ### D: delete the steward's Python (S4)
 
-Issue: [burrow#1310](https://github.com/FieldmouseWorks/burrow/issues/1310).
+**Waits on:** [the gate](#the-gate). D is three tasks, one PR each, landing
+in this order.
 
-**Waits on:** [the gate](#the-gate). It's three PRs, each landing in this
-order, one after the other.
-
-**1. burrow.** Delete:
+**D1, burrow** ([burrow#1310](https://github.com/FieldmouseWorks/burrow/issues/1310)). Delete:
 
 - `modules/autoland/*.py`, `tests/autoland/`, `checks/autoland.nix`,
   `checks/autoland-path.nix`;
@@ -433,18 +498,24 @@ Update `probe.nix`, `machineMd`, `docs/front-door.md`,
 `docs/repo-baseline.md` and `docs/landing.md` to say what replaced each
 piece.
 
-**2. remi.** Drop the `repos.py` caller from `checks.undo`, and the options
-burrow no longer has.
+**D2, remi** ([remi#1463](https://github.com/FieldmouseWorks/remi/issues/1463)). Drop the `repos.py` caller from `checks.undo`, and
+the options burrow no longer has. It lands with D1's pin bump, since remi's
+gate breaks on a burrow without `repos.py`.
 
-**3. Conary.** Delete the legacy judgment readers listed above, and update
-[m6.md](m6.md) and this page.
+**D3, Conary** ([#494](https://github.com/FieldmouseWorks/Conary/issues/494)).
+
+- Delete the legacy judgment readers listed above.
+- Move `publish-only-news` to `built` in the register, pointing at U5's
+  tests, unless an earlier Conary PR that touches the register has done so.
+- Update [m6.md](m6.md) and this page.
 
 **Check:** `steward.py` is absent, which is #321's check. Also, `rg` finds no
 `autoland-steward`, `steward.py` or `modules/autoland/.*\.py` in burrow,
 remi or Conary.
 
 **Closes**, each by its full name, or with a comment saying where its
-substance went:
+substance went. These calls come from the issues' titles. D1 reads each
+issue's body and makes the call itself:
 
 | Issue | What happens to it |
 | --- | --- |
