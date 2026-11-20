@@ -26,8 +26,9 @@ pub struct ReviewAsk {
     /// repository (`OWNER/REPO`), the PR's number and the head's commit
     /// after them. Exit 0 says the head needs no ask from the flow again;
     /// anything else says it wasn't asked, and the next pass tries again.
+    /// Its arguments may carry a credential, so its value is never printed.
     #[serde(deserialize_with = "argv")]
-    #[schemars(length(min = 1), extend("x-spender" = false))]
+    #[schemars(length(min = 1), extend("x-spender" = false, "x-secret" = true))]
     pub command: Vec<String>,
     /// The repositories it asks in, as `OWNER/REPO`. In any other the flow
     /// posts the ask as its own comment.
