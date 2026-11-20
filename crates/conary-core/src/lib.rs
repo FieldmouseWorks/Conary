@@ -3,6 +3,7 @@
 //! CLI are thin layers over it.
 
 pub mod git;
+pub mod group;
 pub mod id;
 pub mod ledger;
 pub mod lessons;

@@ -74,15 +74,17 @@ impl ReviewAsk {
         for token in TOKENS {
             command.env_remove(token);
         }
-        let mut child = command.spawn().map_err(|e| format!("{asked}: {e}"))?;
+        // Its own group: at the deadline, whatever it started ends with it,
+        // so nothing it began posts after the flow took it for not asked.
+        let mut child =
+            conary_core::group::spawn(&mut command).map_err(|e| format!("{asked}: {e}"))?;
         let start = Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
             }
             if start.elapsed() >= DEADLINE {
-                let _ = child.kill();
-                let _ = child.wait();
+                conary_core::group::kill(&mut child);
                 return Err(format!("{asked}: no answer in {}s", DEADLINE.as_secs()).into());
             }
             std::thread::sleep(Duration::from_millis(20));
