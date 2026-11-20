@@ -618,6 +618,9 @@ pub struct Facts {
     pub open_prs: BTreeSet<u64>,
     /// Where each open PR stands in line for a proof slot.
     pub queue: BTreeMap<u64, Rank>,
+    /// Whether it's a fix for its repository's red default branch
+    /// ([`super::red_fix`]).
+    pub red_fix: bool,
     pub base_held: bool,
     pub queued_merge: bool,
     pub train: TrainState,
@@ -639,6 +642,7 @@ impl Facts {
         Rank::new(
             &self.settings,
             self.labels.iter().map(String::as_str),
+            self.red_fix,
             self.created_at,
             self.number,
         )

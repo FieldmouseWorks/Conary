@@ -152,7 +152,9 @@ impl Pass<'_> {
         }
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
         // Proof slots, train joins and dry runs' virtual slots go in line.
-        pulls.sort_by_key(|p| super::Rank::of(&self.config.settings, p));
+        pulls.sort_by_key(|p| {
+            super::Rank::of(&self.config.settings, &self.config.trusted_authors, p)
+        });
         if !self.dry_run {
             super::switches::opened(
                 self.root,
@@ -206,7 +208,8 @@ impl Pass<'_> {
                     let next = super::degraded::waiting(
                         occupancy.degraded(pr),
                         |w| occupancy.again(pr, w),
-                        super::Rank::of(&self.config.settings, &pull).level,
+                        super::Rank::of(&self.config.settings, &self.config.trusted_authors, &pull)
+                            .level,
                         store.as_deref().map(Store::ledger).or(self.ledger),
                         repo,
                         pr,
