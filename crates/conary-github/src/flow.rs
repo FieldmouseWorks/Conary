@@ -40,10 +40,12 @@ pub mod jobs;
 mod write;
 pub use write::{SETTLED, Write, review_body};
 
+mod ask;
 mod execute;
 pub(crate) mod observe;
 mod pass;
 pub mod schema;
+pub use ask::ReviewAsk;
 pub use pass::{Config, Pass, Plugins, Report};
 
 mod judging;

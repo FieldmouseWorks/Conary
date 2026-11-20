@@ -106,8 +106,16 @@ pub(crate) fn act<G: Write>(
             Step::Settle => permission(pass, github, f, &next.step, record)?,
 
             Step::AskReview(why) => {
-                github.comment(&repo, f.number, &super::reviews::ask(why))?;
-                // Asked only once GitHub took the comment.
+                match pass
+                    .config
+                    .review_ask
+                    .as_ref()
+                    .filter(|a| a.covers(&f.repo))
+                {
+                    Some(door) => door.ask(&f.repo, f.number, &f.revision.head)?,
+                    None => github.comment(&repo, f.number, &super::reviews::ask(why))?,
+                }
+                // Asked only once the door said so, or GitHub took the comment.
                 record.memory.asked = Some((f.revision.head.clone(), pass.now));
             }
             Step::HandFix(kind) => {

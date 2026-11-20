@@ -64,7 +64,7 @@ pub struct Runtime {
 fn api() -> String {
     "https://api.github.com".into()
 }
-fn repos<'de, D: serde::Deserializer<'de>>(
+pub(crate) fn repos<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Vec<conary_core::op::Repo>, D::Error> {
     Vec::<String>::deserialize(d)?
@@ -72,7 +72,7 @@ fn repos<'de, D: serde::Deserializer<'de>>(
         .map(|s| s.parse().map_err(serde::de::Error::custom))
         .collect()
 }
-fn repo_names<S: serde::Serializer>(
+pub(crate) fn repo_names<S: serde::Serializer>(
     repos: &[conary_core::op::Repo],
     s: S,
 ) -> std::result::Result<S::Ok, S::Error> {
