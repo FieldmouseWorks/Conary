@@ -387,6 +387,36 @@ fn pass_releases_the_repository_lock_with_an_inherited_descriptor() {
 }
 
 #[test]
+fn pass_asks_at_once_for_an_apps_head_and_keeps_the_first_ask() {
+    // The connector reviews no head of an App's PR unasked, so waiting out
+    // the quiet half hour would only delay it.
+    let c = Case::new();
+    c.hub
+        .edit_pull(REPO, 3, |p| p["user"]["type"] = json!("Bot"));
+    let now = flow::jobs::now();
+    let report = c.pass(now, false);
+    assert!(matches!(
+        report[0].next.as_ref().unwrap().step,
+        Step::AskReview(_)
+    ));
+    assert_eq!(c.record().memory.asked, Some((head(3), now)));
+    assert_eq!(c.record().memory.first_asked, Some((head(3), now)));
+    // Asked again an hour on, the first ask stays what LOST counts from.
+    c.pass(now + 3600, false);
+    assert_eq!(c.record().memory.asked, Some((head(3), now + 3600)));
+    assert_eq!(c.record().memory.first_asked, Some((head(3), now)));
+    let asks = c
+        .hub
+        .comments(REPO, 3)
+        .unwrap()
+        .into_iter()
+        .filter_map(|c| c.body)
+        .filter(|b| b.starts_with("@codex review\n\n"))
+        .count();
+    assert_eq!(asks, 2);
+}
+
+#[test]
 fn pass_an_ask_that_failed_is_not_remembered_and_is_asked_again() {
     let c = Case::new();
     let now = flow::jobs::now();

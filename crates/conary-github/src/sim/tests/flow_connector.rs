@@ -51,6 +51,66 @@ fn the_owner_hears_when_no_review_comes_for_two_hours() {
     assert_eq!(c.pass(7300).owner_notice, None);
 }
 
+/// An App opened it: the connector reviews none of its heads unasked.
+fn an_apps() -> Case {
+    let c = unreviewed();
+    c.hub
+        .edit_pull(REMI, 3, |p| p["user"]["type"] = json!("Bot"));
+    c
+}
+
+#[test]
+fn an_apps_head_is_asked_for_on_the_pass_that_first_sees_it() {
+    let mut c = an_apps();
+    let first = c.pass(60);
+    assert_eq!(first.stage, Stage::Review);
+    assert!(matches!(&first.step, Step::AskReview(why) if why.contains(&head(3)[..7])));
+    // Still at most once an hour for the head.
+    c.memory.asked = Some((head(3), 60));
+    c.memory.first_asked = Some((head(3), 60));
+    assert_eq!(
+        c.pass(1800).step,
+        Step::Wait {
+            until: Some(60 + 3600)
+        }
+    );
+    assert!(matches!(c.pass(3660).step, Step::AskReview(_)));
+}
+
+#[test]
+fn a_persons_head_still_waits_quiet_before_its_ask() {
+    let mut c = unreviewed();
+    assert_eq!(c.pass(60).step, Step::Wait { until: Some(1800) });
+}
+
+#[test]
+fn the_owner_hears_two_hours_after_the_first_ask_however_often_asked_again() {
+    let mut c = an_apps();
+    c.pass(60);
+    c.memory.asked = Some((head(3), 60));
+    c.memory.first_asked = Some((head(3), 60));
+    // Asked again an hour on: the clock still runs from the first ask.
+    c.memory.asked = Some((head(3), 3660));
+    assert_eq!(c.pass(60 + 7199).owner_notice, None);
+    assert_eq!(
+        c.pass(60 + 7200).owner_notice,
+        Some(OwnerNotice::NoReviewer)
+    );
+    // A person's head asked for after its quiet half hour: from that ask.
+    let mut c = unreviewed();
+    c.pass(0);
+    c.memory.asked = Some((head(3), 1800));
+    c.memory.first_asked = Some((head(3), 1800));
+    assert_eq!(c.pass(7200).owner_notice, None);
+    assert_eq!(
+        c.pass(1800 + 7200).owner_notice,
+        Some(OwnerNotice::NoReviewer)
+    );
+    // An ask of another head doesn't hold this one's clock.
+    c.memory.first_asked = Some((head(2), 5000));
+    assert_eq!(c.pass(7200).owner_notice, Some(OwnerNotice::NoReviewer));
+}
+
 #[test]
 fn a_review_under_way_is_waited_for() {
     let c = unreviewed();
