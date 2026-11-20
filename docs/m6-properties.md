@@ -122,9 +122,9 @@ shouldn't have. So:
 | FP6 repeated deadline stalls | | Yes | |
 | FP7 a CI wait costs nothing | | Yes | |
 | FP8 recovery by kind | | Yes: else a cancelled check waits forever | |
-| FP9 per-repository reads | | | [S2g](m6-cutover.md#s2g-burrow) and the first `allow` of a paused repository conaryd holds: before that, conaryd passes only remi and Conary |
+| FP9 per-repository reads | | | [S2f](m6-cutover.md#s2f-burrow) and the first `allow` of a paused repository conaryd holds: before that, conaryd passes only remi and Conary |
 | FP10 owner only for doors, once per decision | | Yes: at #314 an owner call is a marked review | |
-| FP11 review-loop breakers | | | [S2g](m6-cutover.md#s2g-burrow): elsewhere a loop past the cap waits for the judge plugin or the handback |
+| FP11 review-loop breakers | | | [S2f](m6-cutover.md#s2f-burrow): elsewhere a loop past the cap waits for the judge plugin or the handback |
 | FP12 history-sized deadlines | | | #321's exit check |
 
 FP11 isn't a #314 prerequisite because the steward it replaces on remi has
@@ -536,8 +536,10 @@ FP1 ──► FP2 ──► FP3 ──► FP4 ──► FP5 ──► FP6 ──
   ──► FP10 ──► #313 ──► FP9 ──► FP11 ──► FP12
 ```
 
-The cutover prerequisites come first, then #313. FP9, FP11 and FP12 follow
-it in the lane, before #315 and #321. FP11 also waits on SJ, which runs in
+The cutover prerequisites come first, then #313. FP9 and FP11 follow it in
+the lane, before the S2 groups that need them
+([m6-cutover.md](m6-cutover.md#plugins-and-the-flow-properties-that-wait)),
+and FP12 before #321. FP11 also waits on SJ, which runs in
 the burrow M6 lane after J, beside these.
 
 ## Filing

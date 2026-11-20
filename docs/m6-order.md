@@ -30,7 +30,9 @@ and remi's at `ec6b9f5`. The issues linked here own the live state.
 - A **switch** is the moment something live starts deciding differently.
   One switch is open at a time on the whole machine. Each is followed by a
   settle period, in which no other switch opens and no deploy goes out that
-  changes one of proj's units or what a gate run decides.
+  changes one of proj's units or what a gate run decides. Handing a paused
+  repository to conaryd decides nothing until it's allowed, so the allow is
+  its switch ([m6-cutover.md](m6-cutover.md#every-group-the-same-way)).
 
 Both burrow designs already say this of themselves ("two engines swapped on
 one machine in one week is how you can't tell which one broke it"). This
