@@ -255,7 +255,7 @@ fn the_connectors_findings_go_through_a_fix_to_another_look() {
             .unwrap()
             .iter()
             .filter_map(|c| c.body.as_deref())
-            .any(|b| b.starts_with("@codex review") && b.contains(&asked))
+            .any(|b| b == "@codex review")
     );
     assert_eq!(c.record().memory.asked.map(|(h, _)| h), Some(head(3)));
 }

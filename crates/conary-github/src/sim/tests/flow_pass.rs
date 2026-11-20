@@ -55,7 +55,7 @@ fn lifecycle(train: bool) {
         .unwrap()
         .into_iter()
         .filter_map(|c| c.body)
-        .filter(|b| b.starts_with("@codex review\n\n"))
+        .filter(|b| b == "@codex review")
         .collect();
     assert_eq!(asks.len(), 1, "{asks:?}");
     assert_eq!(c.record().memory.asked, Some((head(3), now + 1800)));
@@ -411,7 +411,7 @@ fn pass_asks_at_once_for_an_apps_head_and_keeps_the_first_ask() {
         .unwrap()
         .into_iter()
         .filter_map(|c| c.body)
-        .filter(|b| b.starts_with("@codex review\n\n"))
+        .filter(|b| b == "@codex review")
         .count();
     assert_eq!(asks, 2);
 }
@@ -446,7 +446,7 @@ fn pass_an_ask_that_failed_is_not_remembered_and_is_asked_again() {
         .unwrap()
         .into_iter()
         .filter_map(|c| c.body)
-        .filter(|b| b.starts_with("@codex review\n\n"))
+        .filter(|b| b == "@codex review")
         .count();
     assert_eq!(asks, 1);
 }
