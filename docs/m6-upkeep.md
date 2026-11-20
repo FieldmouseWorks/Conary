@@ -189,6 +189,8 @@ path, and none waits on a cutover. U6 waits on C1 and U5. D waits on
 
 ### U1: upkeep: the App's token for conaryd and cn, without the steward
 
+Issue: [burrow#1301](https://github.com/FieldmouseWorks/burrow/issues/1301).
+
 `burrow-upkeep` gains a token command for `CONARY_TOKEN_COMMAND`:
 `token OWNER/REPO --bare`. It prints the bare token, mints it as `token`
 does, and exits 75 when GitHub can't be asked. The flow's `token`
@@ -200,6 +202,8 @@ exit 75 passes through. The test that `cn` fetches a token through the new
 command comes from `tests/autoland/app.py`.
 
 ### U2: upkeep: its own pass over every repo (discovery, settings, hooks, Renovate dashboard and flaky jobs)
+
+Issue: [burrow#1303](https://github.com/FieldmouseWorks/burrow/issues/1303).
 
 `burrow-upkeep CONFIG pass [OWNER/REPO]`:
 
@@ -227,6 +231,8 @@ open burrow proj-lane PR that edits that file.
 
 ### U3: upkeep: a repo's lifecycle (baseline job, renames, a repo remade under a deleted one's name)
 
+Issue: [burrow#1305](https://github.com/FieldmouseWorks/burrow/issues/1305).
+
 U2's pass takes over:
 
 - `known.json`, `baseline-failed.json` and the baseline job (the
@@ -246,6 +252,8 @@ baseline case.
 
 ### U4: upkeep: delete the branches nothing needs, in every repo
 
+Issue: [burrow#1304](https://github.com/FieldmouseWorks/burrow/issues/1304).
+
 U2's pass runs `branches` itself. It reads every open PR's head and base with
 one paged REST list, forks' and drafts' PRs included, as `in_use`. That means
 conaryd's repos get it too. The steward's `branches` call and its `in_use`
@@ -255,6 +263,8 @@ bookkeeping are deleted.
 repo's merged branch is deleted. It fails on main.
 
 ### U5: upkeep: the owner and stuck issues, kept in place, notifying only for news
+
+Issue: [burrow#1302](https://github.com/FieldmouseWorks/burrow/issues/1302).
 
 `burrow-upkeep publish` keeps both issues in `notify.repo`. It reads:
 
@@ -305,6 +315,8 @@ The steward's `publish` and `escalated` are deleted.
 
 ### U6: upkeep: conaryd's stalls and owner notices, to the watchdog and the two issues
 
+Issue: [burrow#1306](https://github.com/FieldmouseWorks/burrow/issues/1306).
+
 **Waits on:** C1 and U5.
 
 For each repo conaryd holds, U2's pass reads C1's export:
@@ -323,6 +335,8 @@ leaves to burrow for remi#1248.
 against a conaryd-held repo's export.
 
 ### N1: renovate: major verdicts sealed in Rust, and in the form Conary reads
+
+Issue: [burrow#1307](https://github.com/FieldmouseWorks/burrow/issues/1307).
 
 `burrow-renovate` signs and checks major verdicts itself:
 
@@ -344,6 +358,8 @@ sweep's `ok` in the sim, and it fails on main.
 
 ### N2: renovate: the lock-file wait in Rust
 
+Issue: [burrow#1309](https://github.com/FieldmouseWorks/burrow/issues/1309).
+
 `burrow-renovate` reads when an age-refused refresh may go again, and its own
 limits, itself. That's `when`, `ripe` and `--limits`, ported. The `lock-wait`
 program, `lockWaitSrc` and `tools.lockWait` are deleted. lock-age's
@@ -355,6 +371,8 @@ use of `lock_wait.py` stays until D.
 
 ### N3: renovate: coverage from the landing record, not `repos.json`
 
+Issue: [burrow#1308](https://github.com/FieldmouseWorks/burrow/issues/1308).
+
 renovate-sweep counts a repo as covered when the landing record gives it to
 conaryd, and takes its proofs from the flow configuration. For repos the
 steward holds, it reads `repos.json` until D. D deletes that reader and the
@@ -365,12 +383,16 @@ is covered. It fails on main.
 
 ### C1: flow: export each PR's overdue stage and owner notice (Conary)
 
+Issue: [#490](https://github.com/FieldmouseWorks/Conary/issues/490).
+
 `cn flow status OWNER/REPO --json` adds, for each open PR, the overdue stage
 with its `since` and `due`, and its owner notice. It reads only the data
 directory, as `cn flow status` does now. When FP10 lands, its subject key is
 added. Lane: Conary flow, after the tasks open there.
 
 ### C2: flow: the lock-file grace includes the sweep's 20-second gap (Conary)
+
+Issue: [#491](https://github.com/FieldmouseWorks/Conary/issues/491).
 
 In `flow/state.rs`, the grace while a refresh is pending is `3600 + run`.
 `lock_wait.interval` has `3600 + 20 + run`. The flow's deadline, and with it
@@ -379,11 +401,15 @@ the value to what `tests/renovate-sweep.py` pins.
 
 ### C3: flow: stage label names from the configuration (Conary)
 
+Issue: [#492](https://github.com/FieldmouseWorks/Conary/issues/492).
+
 `Stage::label`'s names, the owner's `waiting: Peter` among them, come from
 the flow configuration. burrow renders them from `labels.nix`, so they're no
 longer hard-coded. The defaults name no person.
 
 ### D: delete the steward's Python (S4)
+
+Issue: [burrow#1310](https://github.com/FieldmouseWorks/burrow/issues/1310).
 
 **Waits on:** [the gate](#the-gate). It's three PRs, each landing in this
 order, one after the other.
