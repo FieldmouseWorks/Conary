@@ -118,6 +118,48 @@ fn tells_github_unavailable_from_a_request_refused() {
 }
 
 #[test]
+fn a_refusal_keeps_what_github_said_of_it() {
+    // A write GitHub won't take says which of its causes it was.
+    let invalid = r#"{"message":"Invalid tree info","errors":[{"resource":"Tree","field":"base_tree","code":"invalid"}],"documentation_url":"https://docs.github.com"}"#;
+    let (base, _heads) = github(vec![whole("422 Unprocessable Entity", invalid).leak()]);
+    let err = Api::new(&base, Tokens::given("t"))
+        .send::<serde_json::Value>(false, "/repos/o/r/git/trees", &serde_json::json!({}))
+        .unwrap_err();
+    assert!(!err.unavailable);
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "GitHub: {base}/repos/o/r/git/trees: http status: 422: Invalid tree info \
+             [{{\"code\":\"invalid\",\"field\":\"base_tree\",\"resource\":\"Tree\"}}]"
+        )
+    );
+    // Any refused status, a read's too, and GitHub's own trouble.
+    let said = r#"{"message":"Bad credentials"}"#;
+    assert!(
+        error_with("401 Unauthorized", "", said)
+            .to_string()
+            .ends_with("http status: 401: Bad credentials")
+    );
+    let said = r#"{"message":"Server Error"}"#;
+    let err = error_with("502 Bad Gateway", "", said);
+    assert!(err.unavailable);
+    assert!(err.to_string().ends_with("http status: 502: Server Error"));
+    // An answer that isn't GitHub's says nothing more than its status.
+    assert!(
+        error_with("422 Unprocessable Entity", "", "<html>")
+            .to_string()
+            .ends_with("http status: 422")
+    );
+    // A long or many-lined message comes on one line, cut short.
+    let long = format!(r#"{{"message":"one\ntwo  {}"}}"#, "x".repeat(1000));
+    let said = error_with("422 Unprocessable Entity", "", &long).to_string();
+    let said = said.split("http status: 422: ").nth(1).unwrap();
+    assert!(said.starts_with("one two xxx"), "{said}");
+    assert!(said.ends_with('…'), "{said}");
+    assert_eq!(said.chars().count(), MAX_SAID + 1);
+}
+
+#[test]
 fn no_answer_at_all_is_github_unavailable() {
     // A port nothing listens on.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
