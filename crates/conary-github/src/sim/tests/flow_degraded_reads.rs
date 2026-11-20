@@ -101,6 +101,12 @@ const ROWS: &[Row] = &[
         heal: |h| snap(h, |s| s.checks_complete = true),
         lands: true,
     },
+    Row {
+        read: "merge_tree",
+        arm: |h| h.fail(Call::Commit),
+        heal: |h| h.heal(Call::Commit),
+        lands: true,
+    },
     // Handed to the owner, as before, and named.
     Row {
         read: "snapshot",
@@ -133,6 +139,24 @@ const ROWS: &[Row] = &[
         arm: |h| {
             h.race(Call::Comments, |h| {
                 h.race(Call::Comments, |h| once(h, Call::FlowSnapshot))
+            })
+        },
+        heal: |_| {},
+        lands: true,
+    },
+    // Evidence's re-read of the head's checks stops short, and only it.
+    Row {
+        read: "observations",
+        arm: |h| {
+            h.race(Call::Comments, |h| {
+                h.race(Call::Comments, |h| {
+                    snap(h, |s| s.checks_complete = false);
+                    h.race(Call::FlowSnapshot, |h| {
+                        h.race(Call::FlowSnapshot, |h| {
+                            snap(h, |s| s.checks_complete = true)
+                        })
+                    });
+                })
             })
         },
         heal: |_| {},
@@ -262,4 +286,31 @@ fn an_unvisited_pr_whose_read_fails_loses_its_grant() {
     c.hub.heal(Call::Pull);
     c.pass(now + 2, false);
     assert_eq!(naming(&c, "restored", "pull"), 1);
+}
+
+/// A read that answered the decision and fails when its permission is
+/// about to be used: the merge tree, which nothing else the scope compares
+/// shows. Main merged.
+#[test]
+fn a_read_that_fails_before_permission_is_used_withdraws_it() {
+    let c = Case::new();
+    let now = jobs::now() + 10_000;
+    c.pass(now - 1, false);
+    c.clean_review();
+    // Occupancy's read, the decision's, then the scope's.
+    c.hub.race(Call::Commit, |h| {
+        h.race(Call::Commit, |h| {
+            h.race(Call::Commit, |h| once(h, Call::Commit))
+        })
+    });
+    let reports = c.pass(now, false);
+    let three = reports.iter().find(|r| r.pr == 3).unwrap();
+    assert!(!c.hub.pull(REPO, 3).unwrap().is_merged(), "{three:?}");
+    assert!(
+        three
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("GitHub's test merge")),
+        "{three:?}"
+    );
 }

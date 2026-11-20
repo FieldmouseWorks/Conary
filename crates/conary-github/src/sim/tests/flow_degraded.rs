@@ -21,15 +21,25 @@ pub(super) fn ops(c: &Case, op: &str) -> Vec<Value> {
 }
 /// The PR's decision, as JSON. A degraded path it waits on at no stage (a
 /// record or answer that didn't read, or a read it couldn't go on without)
-/// is the PR's error too, so the pass is booked again to read it again;
-/// anything else is none.
+/// is the PR's error too, so the pass is booked again to read it again: the
+/// description, and for a read, GitHub's error after it. Anything else is
+/// none.
 pub(super) fn decided(reports: &[Report], pr: u64) -> Value {
     let report = reports.iter().find(|r| r.pr == pr).unwrap();
     let next = serde_json::to_value(report.next.as_ref().unwrap()).unwrap();
     let description = next["description"].as_str().unwrap();
     let waits = next["stage"].is_null() && description.starts_with("Degraded: ");
+    let read = next["degraded"][0]["path"] == "read";
     match &report.error {
-        Some(error) => assert!(waits && error.starts_with(description), "#{pr}: {error}"),
+        Some(error) => assert!(
+            waits
+                && if read {
+                    error.starts_with(&format!("{description}; "))
+                } else {
+                    error == description
+                },
+            "#{pr}: {error}"
+        ),
         None => assert!(!waits, "#{pr}: {next}"),
     }
     next

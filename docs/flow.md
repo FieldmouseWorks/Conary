@@ -440,17 +440,22 @@ paths it records:
     snapshot; `pulls`: the open PRs; `base`: the base branch's tip;
     `files`; `checks`: the head's runs and statuses; `cancelled`: a
     cancelled run's annotations; `pushes`; `reviews`: the PR's reviews and
-    comments; `pause`: the repository's pause). The PR waits at no stage,
-    naming it, and nothing acts for it. Its error books the pass again.
+    comments; `pause`: the repository's pause, which a writing pass meets
+    first stopping work, as an error, so only a dry run's decision names
+    it). The PR waits at no stage, naming it, and nothing acts for it. Its
+    error books the pass again.
   - Reads it goes on past, each holding what it was for failed: `checks`
     when GitHub lists more check suites than one read holds, or a run's
     suite isn't in the snapshot (the check is pending); `fork`, the docs
     lane's fork point (the lane's word is stale); `cancelled`, a cancelled
     run whose suite isn't in the snapshot (taken as not replaced);
-    `commits`, a comparison that fails, stops short or has a commit without
-    its message, and `trailers` (authorship is unknown, or a judge is
-    asked); `merge_tree`, GitHub's test merge (what the merge changes is
-    unknown); `diff` (the gates count as edited); `default_branch`, no
+    `commits`, a comparison that fails or has a commit without its message,
+    and `trailers` (authorship is unknown, and it waits); `commits`, a
+    comparison GitHub stops short (a judge is asked, and the judge's word
+    lands it); `merge_tree`, GitHub's test merge (what the merge changes is
+    unknown, so it doesn't land; a train PR still joins, since the train's
+    candidate merges it again and checks that); `diff` (the gates count as
+    edited); `default_branch`, no
     observation of the default branch's CI for a fix of it (the base is
     held); `snapshot`, a snapshot that stops short of the PR's reviews,
     comments, labels or threads (the owner merges it). A stale test merge,
@@ -460,7 +465,8 @@ paths it records:
     granted, and the PR waits at the proof stage.
   - A PR the pass doesn't visit that holds a live permission keeps it only
     while its read says it's open: a read that fails withdraws it, as a
-    closed PR's is, and records `pull`.
+    closed PR's is, and records `pull`. A PR that's closed isn't read
+    again, so that stays recorded.
   - Occupancy's read of each open PR, for its proof slots, and of the
     pause: what it meets is recorded for a PR the pass doesn't visit, and
     its slots are held as before. A visited PR's own decision reads it

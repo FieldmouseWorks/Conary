@@ -56,6 +56,18 @@ fn gate_edits_and_unread_diffs_need_review() {
         let (n, f) = decision(diff, ".github/workflows/ci.yml");
         assert!(f.gate_edited);
         assert!(matches!(n.step, Step::AskReview(_)), "{:?}", n.step);
+        // A diff that doesn't read is a degraded read, and one that does
+        // answers it.
+        let diff_read = Degraded::Read {
+            read: Reading::Diff,
+        };
+        assert_eq!(
+            f.reads.met.iter().any(|d| d.what == diff_read),
+            diff.is_none(),
+            "{:?}",
+            f.reads
+        );
+        assert_eq!(f.reads.answered.contains(&diff_read), diff.is_some());
     }
     let (n, f) = decision(Some(PIN), ".github/CODEOWNERS");
     assert!(f.gate_edited);
@@ -122,4 +134,34 @@ fn gate_renames_are_edits_but_a_rename_elsewhere_keeps_the_bots_exemption() {
             assert_eq!(step, Step::Merge);
         }
     }
+}
+
+/// A commit that comes without its message is a degraded read of the
+/// commits: authorship is unknown, and the PR waits.
+#[test]
+fn a_commit_without_its_message_is_a_degraded_read() {
+    let (h, _, m) = super::flow::setup();
+    h.commit_details(&head(3), None, None, None);
+    let f = read(
+        &h,
+        &REMI.parse().unwrap(),
+        3,
+        &conary_core::Policy::parse(b"{}").unwrap(),
+        crate::sim::settings(),
+        &["owner".into()],
+    )
+    .unwrap();
+    assert!(!f.authorship_known);
+    assert!(
+        f.reads.met.iter().any(|d| d.what
+            == Degraded::Read {
+                read: Reading::Commits
+            }),
+        "{:?}",
+        f.reads
+    );
+    assert!(!matches!(
+        next(&f, &m, 4000).0.step,
+        Step::Merge | Step::Settle | Step::JoinTrain
+    ));
 }

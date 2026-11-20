@@ -89,6 +89,12 @@ fn docs_runs_for_another_fork_or_base_never_prove_this_pr() {
         let fork = if missing { TRUNK.to_owned() } else { head(99) };
         let f = s.read(&[Run::docs(1, &fork, "success")], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
+        // A fork point that doesn't read is a degraded read.
+        let fork = Degraded::Read {
+            read: Reading::Fork,
+        };
+        assert_eq!(f.reads.met.iter().any(|d| d.what == fork), missing);
+        assert_eq!(f.reads.answered.contains(&fork), !missing);
     }
     for verdict in ["success", "failure"] {
         let s = Scenario::new();

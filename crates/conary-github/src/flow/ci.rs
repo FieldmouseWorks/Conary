@@ -222,10 +222,17 @@ pub(super) fn checks(
         .collect();
     // A base branch that's gone has no fork point: that's GitHub's answer.
     let fork = if said.iter().any(|(_, (b, f))| *b == base && f.is_some()) {
-        let tip = reads
-            .take(Reading::Fork, source.branch(repo, base))
-            .flatten();
-        tip.and_then(|tip| reads.take(Reading::Fork, source.merge_base(repo, &tip, head)))
+        match source.branch(repo, base) {
+            Ok(Some(tip)) => reads.take(Reading::Fork, source.merge_base(repo, &tip, head)),
+            Ok(None) => {
+                reads.answered(Reading::Fork);
+                None
+            }
+            Err(e) => {
+                reads.met(Reading::Fork, super::degraded::why(&e));
+                None
+            }
+        }
     } else {
         None
     };

@@ -132,10 +132,16 @@ pub struct ReadError {
 }
 impl ReadError {
     pub(crate) fn new(read: Reading, error: crate::ApiError) -> Self {
+        let why = why(&error);
+        Self::with(read, why, error)
+    }
+    /// A read GitHub answered whose answer can't be used, for the fixed
+    /// reason `why`.
+    pub(crate) fn with(read: Reading, why: String, error: crate::ApiError) -> Self {
         Self {
             degradation: Degradation {
                 what: Degraded::Read { read },
-                why: why(&error),
+                why,
             },
             error,
         }

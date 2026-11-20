@@ -152,13 +152,16 @@ impl Pass<'_> {
                     if selected || closed {
                         super::ledger::withdraw_live(pr, data, &mut record)?;
                     }
-                    if let (Some(unread), Some(store)) = (unread, store.as_deref_mut()) {
-                        super::degraded::record(store, repo, pr, &[unread], |_| false)?;
-                    }
+                    let recorded = match (unread, store.as_deref_mut()) {
+                        (Some(unread), Some(store)) => {
+                            super::degraded::record(store, repo, pr, &[unread], |_| false)
+                        }
+                        _ => Ok(()),
+                    };
                     let cleaned = super::ledger::cleanup(github, repo, pr, data, &mut record);
                     // A cancellation/read error must not preserve a live
                     // permission: revocation and cleanup still run above.
-                    cancelled.and(reconciled).and(cleaned)
+                    cancelled.and(reconciled).and(recorded).and(cleaned)
                 })();
                 if let Err(error) = result {
                     recovery.push((pr, error.to_string()));

@@ -46,6 +46,9 @@ pub trait Read: Source + crate::branches::Branches {
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
 
+/// Why a read GitHub answered with something that doesn't parse degraded.
+const UNPARSED: &str = "GitHub's answer didn't parse";
+
 /// Read once, then decide without I/O. Only the configured trusted authors
 /// may enter the pipeline. Classification comes from policy, including rename
 /// sources and raised labels; a PR cannot select its own class. A read it
@@ -66,8 +69,9 @@ pub fn read(
     let extra = reads.ask(Reading::Pull, source.snapshot(&repository, pr))?;
     let revision = Revision::from(&pull);
     if extra.revision != revision {
-        return Err(ReadError::new(
+        return Err(ReadError::with(
             Reading::Pull,
+            "the PR moved between its reads".into(),
             ApiError::new("PR moved between flow reads"),
         ));
     }
@@ -161,7 +165,7 @@ pub fn read(
             .as_deref()
             .map(super::reviews::timestamp)
             .transpose()
-            .map_err(|e| ReadError::new(Reading::Pull, e))?,
+            .map_err(|e| ReadError::with(Reading::Pull, UNPARSED.into(), e))?,
         last_reply_at: 0,
         session: pull
             .body
@@ -261,7 +265,7 @@ pub fn read(
         extra.since,
         &facts.settings,
     )
-    .map_err(|e| ReadError::new(Reading::Reviews, e))?;
+    .map_err(|e| ReadError::with(Reading::Reviews, UNPARSED.into(), e))?;
     facts.judgment = markers.judgment;
     facts.judgment_generation = markers.judgment_generation;
     facts.major_generation = markers.major_generation;
