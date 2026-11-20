@@ -1,0 +1,120 @@
+{
+  "conary": "note v1",
+  "change": "6vt020phf2ctv0k8ak0es4j3rk",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 509,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/509",
+  "summary": "ci: run the gate on the merge train's candidates",
+  "task": "fieldmouseworks/conary#506",
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "09e55b0201944f2856ac8c3b0319e15304299c39a413ae4a803c2cc3821bb096",
+    "before": "356de1abb36ef366b31496ec1228037a219a13da",
+    "after": "66163d6348fa7b50b3d3d57fcabad5ebc72d27d7",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795197365466
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784328028/job/136455027064"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784328028/job/136455027025"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784328028/job/136455026658"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784323416/job/136455010629"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443/job/136455002783"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#509)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784322443"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (actions)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784323416/job/136455224704"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/509#issuecomment-7046243848 at 2026-11-20T17:33:58Z"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/44784328028/job/136455076876"
+    }
+  ]
+}
