@@ -140,8 +140,12 @@ pub(crate) fn words<'a>(
         let verdict = match (code.status.as_deref(), code.has_any_findings) {
             (Some("completed"), Some(false)) => Verdict::Clean,
             (Some("completed"), Some(true)) => Verdict::Findings,
-            // Begun, or a state this doesn't know: not a verdict yet.
-            _ => Verdict::Running,
+            (Some("running"), _) => Verdict::Running,
+            // Ended with no word on findings (completed with none, failed,
+            // skipped, cancelled), or a state this doesn't know: nothing is
+            // under way, so it says nothing and the head is asked for again.
+            // Waiting on it would wait forever.
+            _ => continue,
         };
         said.push(Word {
             verdict,
@@ -290,12 +294,25 @@ mod tests {
             ("completed", Some(false), Verdict::Clean),
             ("completed", Some(true), Verdict::Findings),
             ("running", None, Verdict::Running),
-            // A state this doesn't know is no verdict yet.
-            ("completed", None, Verdict::Running),
         ] {
             assert_eq!(
                 said(&[], &[summary(HEAD, status, findings, T)]),
                 (Some(verdict), 0)
+            );
+        }
+        // Ended with no word on findings, or a state this doesn't know: no
+        // review is under way, so it says nothing (#513).
+        for (status, findings) in [
+            ("completed", None),
+            ("failed", None),
+            ("skipped", None),
+            ("cancelled", None),
+            ("queued-somehow", Some(false)),
+        ] {
+            assert_eq!(
+                said(&[], &[summary(HEAD, status, findings, T)]),
+                (None, 0),
+                "{status}"
             );
         }
         assert_eq!(
@@ -324,6 +341,10 @@ mod tests {
         let findings = receipt(HEAD, &HEAD[..10], "2026-11-18T02:00:00Z");
         let clean = summary(HEAD, "completed", Some(false), "2026-11-18T01:00:00Z");
         assert_eq!(said(&[findings], &[clean]), (Some(Verdict::Findings), 1));
+        // A later summary with no word on findings doesn't hide them.
+        let findings = receipt(HEAD, &HEAD[..10], "2026-11-18T00:00:00Z");
+        let none = summary(HEAD, "completed", None, "2026-11-18T01:00:00Z");
+        assert_eq!(said(&[findings], &[none]), (Some(Verdict::Findings), 1));
     }
 
     /// What the connector posted on two PRs, as GitHub's REST API gave it
