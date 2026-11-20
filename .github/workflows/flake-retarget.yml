@@ -23,4 +23,4 @@ jobs:
     with:
       # flake.yml's gate exactly, so a push can reuse this run's pass too.
       gate-reuse: true
-      gate-reuse-lookup: https://remi.conary.io/conary/gate-reuse
+      gate-reuse-lookup: https://remi.fieldmouseworks.com/conary/gate-reuse
