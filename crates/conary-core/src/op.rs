@@ -296,6 +296,8 @@ pub enum Reading {
     Observations,
     /// The repository's pause.
     Pause,
+    /// The head's tree, which a check's deadlines are counted on.
+    Tree,
 }
 
 impl std::fmt::Display for Reading {
@@ -318,6 +320,7 @@ impl std::fmt::Display for Reading {
             Self::DefaultBranch => "the default branch's CI",
             Self::Observations => "the head's checks before permission",
             Self::Pause => "the repository's pause",
+            Self::Tree => "the head's tree",
         })
     }
 }

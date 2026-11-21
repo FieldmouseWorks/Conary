@@ -35,6 +35,11 @@ pub struct Work {
     pub deadline: u64,
     pub posted: bool,
     pub recipes: std::collections::BTreeMap<String, Recipe>,
+    /// The tree a proof or its preparation was asked to run on, which its
+    /// deadlines are counted against. None for other work, and for work
+    /// saved before the flow kept it, which counts toward no tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
     /// A proof its preparation said needs no proof slot, so holds none.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub slotless: bool,
@@ -66,6 +71,16 @@ pub struct Attempt {
     pub at: u64,
     pub tries: u32,
     pub acknowledged: bool,
+}
+impl Work {
+    /// Whether this work's invocation reached its deadline: it ended
+    /// without an answer by then, whether the worker said so, the plugin
+    /// ran out its time, or the worker was lost and the pass said so for it
+    /// ([`completion`]). Read from the completion alone, so a dry run
+    /// that writes nothing tells it the same.
+    pub fn reached_deadline(&self, completion: &Completion) -> bool {
+        matches!(completion.result, Some(Err(_))) && completion.at >= self.deadline
+    }
 }
 impl Sent {
     pub fn is_empty(&self) -> bool {

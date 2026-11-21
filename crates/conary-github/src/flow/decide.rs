@@ -515,6 +515,11 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
 }
 
 fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {
+    // A check stalled on its deadlines starts nothing, and is retried for
+    // nothing: decided before any retry is counted.
+    if let Some(stall) = super::proofs::stalled(f) {
+        return wait(Stage::Proof, None, &stall.to_string());
+    }
     let plan = super::proofs::next(f, now);
     // With no program to run, only model-run checks are left: they wait,
     // with their reason, and no earlier proof is retried for them.
