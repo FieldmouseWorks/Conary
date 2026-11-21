@@ -862,7 +862,9 @@ any repository switches over.
 ### Where the shadow differs from the steward
 
 Each kind of disagreement remi's shadow showed (2026-11-13 to 11-16,
-[#410](https://github.com/FieldmouseWorks/Conary/issues/410)) was judged
+[#410](https://github.com/FieldmouseWorks/Conary/issues/410)), and
+Conary's from 2026-11-21
+([#505](https://github.com/FieldmouseWorks/Conary/issues/505)), was judged
 against what GitHub shows for the PR. A kind where the flow was wrong is
 fixed and isn't listed. These are the rest. A disagreement of one of these
 kinds is accounted for; any other is a finding.
@@ -872,9 +874,11 @@ reviewer's word the same way ([Review](#review)), but the flow counts a
 judgment only as a sealed issuance with its basis, and a job only one it
 started. The steward's judgments are `autoland-judgment:` markers with no
 basis, and nothing attests them. So where the steward's judge settled a PR
-the flow still asks a judge (remi#1301: the steward's judge said land),
-and while the steward's own fix job has the branch the flow sees no job of
-its own. A dry run has no memory of when it first saw a head, so where the
+the flow still asks a judge (remi#1301: the steward's judge said land).
+Where that settle seated the PR in the steward's train, the flow takes it
+out first (`LeaveTrain`) and asks its own judge on the next pass (Conary#539:
+its description was edited after Codex's clean review). And while the
+steward's own fix job has the branch, the flow sees no job of its own. A dry run has no memory of when it first saw a head, so where the
 steward has already asked the reviewer for a look the flow still waits its
 half hour; both say `review`.
 
