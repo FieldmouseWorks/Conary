@@ -304,8 +304,6 @@ pub struct Anchored {
     pub store: Store,
     repo: String,
     key: VerifyingKey,
-    /// The move on the ref this writer last checked the log against.
-    kept: Kept,
 }
 
 pub fn open(
@@ -328,49 +326,38 @@ pub fn open(
         store,
         repo: repo.to_owned(),
         key: remote.key,
-        kept,
     })
 }
 
 impl Anchored {
     /// Moves the anchor on GitHub to the log's head, and keeps a copy beside
     /// the log for readers, all under the ledger's lock. Other writers may
-    /// have written and moved the ref since this one last checked it, so the
-    /// ref is read again as it stands: its tip and every move since that
-    /// check must name this ledger, go forward and be held by the log, and
-    /// the move is made on that tip, only if it's still there. Nothing to
-    /// move when the ref already names the log's head.
+    /// have written and moved the ref since this one checked it, so the ref
+    /// is read again as it stands: its tip and every move since the newest
+    /// check any writer kept beside the log must name this ledger, go
+    /// forward and be held by the log, and the move is made on that tip,
+    /// only if it's still there. Nothing to move when the ref already names
+    /// the log's head.
     pub fn publish(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
-        let Self {
-            store,
-            repo,
-            key,
-            kept,
-        } = self;
+        let Self { store, repo, key } = self;
         let writer = store.writer()?;
+        let checked = log::load_checked(writer.lock().dir())?;
         let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
         same_ledger(repo, &remote, key)?;
-        for a in checkpoints(anchors, repo, &tip, &remote, Some(&kept.commit))?
+        for a in checkpoints(anchors, repo, &tip, &remote, checked.at.as_deref())?
             .into_iter()
             .chain(remote.anchor)
         {
             writer.check(a)?;
         }
         let head = writer.head();
-        let moved = if head == remote.anchor {
-            tip
+        let at = if head == remote.anchor {
+            tip.commit
         } else {
             let message = message(key, head);
-            let commit = anchors.set(repo, REF, Some(&tip.commit), &message)?;
-            Kept {
-                commit,
-                message,
-                parents: vec![tip.commit],
-            }
+            anchors.set(repo, REF, Some(&tip.commit), &message)?
         };
-        log::save_anchor(writer.lock(), head, &moved.commit)?;
-        drop(writer);
-        *kept = moved;
+        log::save_anchor(writer.lock(), head, &at)?;
         Ok(())
     }
 }

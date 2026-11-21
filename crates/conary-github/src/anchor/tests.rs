@@ -207,6 +207,30 @@ fn writers_that_take_turns_keep_every_op_and_the_anchor_at_the_head() {
     });
 }
 
+// A writer open since before another's move checks the ref against the
+// newest check kept beside the log, not its own older one: a ref put back
+// to where it stood when this writer opened is refused, as opening would.
+#[test]
+fn a_ref_put_back_behind_another_writers_move_is_refused() {
+    crate::sim::unblocked(60, || {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fake::default();
+        init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        let opened = f.refs.borrow()[REF].clone();
+        let writer = || {
+            let key = log::load_signing_key(&key_path(dir.path())).unwrap();
+            open(dir.path(), key, &f, REPO).unwrap()
+        };
+        let (mut a, mut b) = (writer(), writer());
+        observe(&mut b.store, 1);
+        b.publish(&f).unwrap();
+        // The ref is put back to where it stood when `a` opened.
+        f.refs.borrow_mut().insert(REF.into(), opened);
+        observe(&mut a.store, 2);
+        assert!(matches!(a.publish(&f), Err(AnchorError::Lost(_))));
+    });
+}
+
 #[test]
 fn a_log_that_lost_ops_or_its_anchor_is_refused() {
     let f = Fake::default();

@@ -75,6 +75,33 @@ fn a_step_holds_the_ledgers_lock_throughout() {
     assert!(!held());
 }
 
+// Joining and leaving hold it too, from their first look at the ledger
+// through the train's status they set and the op they record: a departure
+// in a flow pass can't overwrite a landing a step started meanwhile.
+#[test]
+fn every_train_operation_holds_the_ledgers_lock_throughout() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[3, 4]);
+    let lock = dir.path().join("lock");
+    let watch = |call: Call| {
+        let seen: std::rc::Rc<std::cell::Cell<Option<bool>>> = Default::default();
+        let (theirs, lock) = (std::rc::Rc::clone(&seen), lock.clone());
+        hub.race(call, move |_| {
+            let held = std::fs::File::open(&lock).unwrap().try_lock().is_err();
+            theirs.set(Some(held));
+        });
+        seen
+    };
+    let joined = watch(Call::Mark);
+    join_all(&mut store, &hub, &[3, 4]);
+    assert_eq!(joined.get(), Some(true));
+    gating(&step_once(&mut store, &hub));
+    let left = watch(Call::Mark);
+    leave(&mut store, &hub, &hub, &repo(), 4, Left::Unready).unwrap();
+    assert_eq!(left.get(), Some(true));
+}
+
 #[test]
 fn trunk_that_moved_meanwhile_isnt_the_candidates_tree() {
     let dir = tempfile::tempdir().unwrap();
