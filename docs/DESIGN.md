@@ -421,8 +421,10 @@ one.
 
 A path that half-worked is recorded too: a `degraded` op names the change,
 its revision, what degraded (`what`: the flow's record of the change's work,
-a worker's answer with the job and the kind of work it answers for, or an
-evidence lookup that couldn't tell, with the check it was for) and `why`, a
+a worker's answer with the job and the kind of work it answers for, an
+evidence lookup that couldn't tell, with the check it was for, or a read of
+GitHub the flow's decision took that failed or stopped short, with which
+read, from a closed set) and `why`, a
 line of at most 200 bytes built from the failure's kind, never from text a
 file, a plugin or GitHub put in it. Whatever came through it counts as its
 check's failure, never a pass. The ledger holds a path degraded for a

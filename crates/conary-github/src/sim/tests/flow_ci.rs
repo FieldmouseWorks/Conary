@@ -112,6 +112,7 @@ fn cancelled_timeout_is_red_and_annotations_are_read_lazily() {
             &["owner".into()]
         )
         .unwrap_err()
+        .error
         .unavailable
     );
 }

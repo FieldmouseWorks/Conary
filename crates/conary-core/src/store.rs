@@ -159,6 +159,12 @@ mod tests {
                 },
                 r#"{"path":"lookup","check":"gate"}"#,
             ),
+            (
+                Degraded::Read {
+                    read: crate::op::Reading::MergeTree,
+                },
+                r#"{"path":"read","read":"merge_tree"}"#,
+            ),
         ];
         for (what, spelled) in &paths {
             assert_eq!(serde_json::to_string(what).unwrap(), *spelled);
@@ -184,8 +190,8 @@ mod tests {
         let replayed = Ledger::replay(&ops).unwrap();
         let c = replayed.change(change).unwrap();
         assert_eq!(c.degradations, written);
-        assert_eq!(c.degradations.len(), 3);
-        assert_eq!(c.degraded(revision).count(), 2);
+        assert_eq!(c.degradations.len(), paths.len());
+        assert_eq!(c.degraded(revision).count(), paths.len() - 1);
     }
 
     #[test]
