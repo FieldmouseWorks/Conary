@@ -496,6 +496,7 @@ impl Pass<'_> {
                             }
                         }
                     }
+                    super::recover::answered(&mut next, &record.memory);
                     data.save(pr, &record)?;
                 }
                 next.wait_until = next

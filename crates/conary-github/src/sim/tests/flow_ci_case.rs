@@ -12,6 +12,8 @@ pub(super) const BLANK_DOCS: &str = "check / docs only into ${{ github.event.pul
 pub(super) const BLANK_LANE: &str = "check / lane into ${{ github.event.pull_request.base.ref }}";
 pub(super) const GATE: &str = "check / check";
 pub(super) const TWIN: &str = ".github/workflows/flake-retarget.yml";
+/// A suite's workflow run id is this past the suite's.
+pub(super) const RUN: u64 = 9000;
 
 #[derive(Clone)]
 pub(super) struct Run {
@@ -31,6 +33,7 @@ impl Run {
                     id: "flake".into(),
                     name: "flake".into(),
                     path: Some(".github/workflows/flake.yml".into()),
+                    run: Some(RUN + suite),
                 }),
             },
             checks: jobs
@@ -77,6 +80,7 @@ impl Run {
             id: id.into(),
             name: "flake".into(),
             path: path.map(str::to_owned),
+            run: Some(RUN + self.suite),
         });
         self
     }

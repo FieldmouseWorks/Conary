@@ -14,6 +14,8 @@ pub use degraded::{Degradation, Degraded, Mark, ReadError, Reading, Reads};
 pub use priority::{Level, RED_FIX_BRANCH, Rank, StallAfter, red_fix};
 mod proofs;
 mod read;
+mod recover;
+pub use recover::{Answer, Recovered, Recovery};
 mod state;
 #[cfg(test)]
 pub(crate) use proofs::selected;

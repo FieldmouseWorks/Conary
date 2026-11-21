@@ -84,7 +84,7 @@ another issue are not scheduled again here.
 | `owner-only-for-doors` | [FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision), then [#314](https://github.com/FieldmouseWorks/Conary/issues/314) and [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Not built: "Too much to read" and "Two jobs ended without their answer" list the owner |
 | `waiting-costs-nothing` | [FP7](#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall), then [#317](https://github.com/FieldmouseWorks/Conary/issues/317) | Built for the flow's wait on CI: no wake booked, and a check's clock starts with its run ([flow.md](flow.md#deadlines)); #317's post-landing review open |
 | `read-sized-to-data` | [FP9](#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | Partly: a failed pass books its own recovery (#351), but conaryd runs passes one at a time |
-| `recover-by-kind` | [FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Not built: a cancelled check waits for someone else to rerun it |
+| `recover-by-kind` | [FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Built: at a wait's deadline the flow updates a head behind its base, or asks GitHub once to run a cancelled or timed-out check again by its kind, and quotes a refusal ([flow.md](flow.md#deadlines)) |
 | `repair-ahead-of-red` | [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Open |
 | `publish-only-news` | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s U5 ([m6-upkeep.md](m6-upkeep.md)) | Designed |
 | `scope-below-a-repo` | [#313](https://github.com/FieldmouseWorks/Conary/issues/313); FP2's pause leaves room for it | Open |

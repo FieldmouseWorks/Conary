@@ -71,7 +71,10 @@ fn a_title_rename_counts_as_an_edit() {
 }
 #[test]
 fn reads_mergeability_threads_and_suite_identity_without_writes() {
-    let (base, requests) = github(vec![answer(snapshot())]);
+    let mut v = snapshot();
+    v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["checkSuites"]["nodes"]
+        [0]["workflowRun"]["databaseId"] = json!(4242);
+    let (base, requests) = github(vec![answer(v)]);
     let api = Api::new(&base, Tokens::given("test-token"));
     let s = api.snapshot("o/r", 7).unwrap();
     assert_eq!(s.merge_state, "BEHIND");
@@ -106,6 +109,8 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     assert!(s.complete && s.checks_complete);
     assert_eq!(s.suites[&11].status, "in_progress");
     assert_eq!(s.suites[&11].workflow.as_ref().unwrap().id, "w");
+    // The workflow run's own id, which its rerun is asked by.
+    assert_eq!(s.suites[&11].workflow.as_ref().unwrap().run, Some(4242));
     // When the PR last changed without a push, and its push: the earliest
     // check suite on its head, as the reviewer's word is read against them.
     let at = |t: &str| t.parse::<jiff::Timestamp>().unwrap().as_second() as u64;

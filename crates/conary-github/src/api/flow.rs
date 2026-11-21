@@ -19,7 +19,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
   renames: timelineItems(last:1,itemTypes:[RENAMED_TITLE_EVENT]) { nodes { ... on RenamedTitleEvent { createdAt } } }
   commits(last:1) { nodes { commit { oid checkSuites(first:100) {
    pageInfo { hasNextPage } nodes { databaseId createdAt status conclusion app { slug }
-    workflowRun { file { path } workflow { id name } }
+    workflowRun { databaseId file { path } workflow { id name } }
    }
   } } } }
  } }
@@ -191,7 +191,9 @@ struct App {
     slug: String,
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Run {
+    database_id: Option<u64>,
     file: Option<File>,
     workflow: Flow,
 }
@@ -312,6 +314,7 @@ impl Read for Api {
                             id: r.workflow.id,
                             name: r.workflow.name,
                             path: r.file.map(|f| f.path),
+                            run: r.database_id,
                         }),
                     },
                 );

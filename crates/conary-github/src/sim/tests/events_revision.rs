@@ -20,6 +20,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
             wait_until: Some(at),
             overdue_at: None,
             queued: None,
+            recovery: None,
             description: "waiting".into(),
             proof: None,
             wait_on: None,

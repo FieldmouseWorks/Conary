@@ -90,6 +90,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         m.strikes.clear();
         m.retry = None;
         m.handed.clear();
+        m.recovered.clear();
         // Lost findings survive pushes, indexed by base; old judgments do
         // not, since their Revision must match below.
     }
@@ -151,8 +152,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     } else {
         decision
     };
-    let (stage, step, description) = super::train::apply(f, decision);
-    let description = description.chars().take(140).collect::<String>();
+    let (stage, mut step, description) = super::train::apply(f, decision);
+    let mut description = description.chars().take(140).collect::<String>();
     let no_reviewer = super::review::overdue(f, &m, now);
     let red = f.checks.iter().any(|c| c.state == Ci::Red);
     let own_conflict = f.merging == Merge::Conflict
@@ -200,6 +201,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             || (f.stacked_on.is_some() && stage == Stage::Base)
             || matches!(step, Step::ListOwner));
     let mut queued = None;
+    let mut recovery = None;
     let overdue_at = if watched {
         let duration = if f.labels.contains(&f.settings.hold_label) {
             f.settings.hold_stall_after
@@ -284,7 +286,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                     .saturating_add(duration),
             )
         };
-        m.wait = Some(Wait {
+        let wait = Wait {
             head: f.revision.head.clone(),
             base: f.revision.base.clone(),
             stage,
@@ -292,7 +294,18 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             failure,
             since,
             due: due.unwrap_or(u64::MAX),
-        });
+        };
+        // Past its deadline, a wait is brought back as GitHub allows, once
+        // in its stall. The wait stays what was decided, so the stall's
+        // clock runs on whatever the status says.
+        if !failing && let Some(look) = super::recover::look(f, &m, stage, &step, &wait, now) {
+            if let Some(ask) = look.step {
+                step = ask;
+            }
+            description = look.recovery.describe();
+            recovery = Some(look.recovery);
+        }
+        m.wait = Some(wait);
         due
     } else {
         m.wait = None;
@@ -314,6 +327,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             },
             overdue_at,
             queued,
+            recovery,
             owner_notice,
             wait_on: watched.then(|| {
                 if f.labels.contains(&f.settings.hold_label) {

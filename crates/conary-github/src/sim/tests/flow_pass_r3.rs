@@ -51,6 +51,7 @@ fn suite(c: &Case, id: u64, target: &str) {
                     id: "gate".into(),
                     name: "gate".into(),
                     path: Some(".github/workflows/flake.yml".into()),
+                    run: None,
                 }),
             },
         );

@@ -295,6 +295,7 @@ pub(crate) fn waiting(
         wait_until: None,
         overdue_at: None,
         queued: None,
+        recovery: None,
         proof: None,
         wait_on: None,
         on_usage: false,
