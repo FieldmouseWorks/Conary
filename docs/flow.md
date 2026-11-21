@@ -187,7 +187,8 @@ held until it exits, so a daemon that didn't launch it can wait for its exit.
 The invocation has an absolute deadline: job timeout for review/fix/judge,
 proof timeout for prepare and proof. Describe and work share that deadline. A later pass
 turns a lost worker into a failed job at its deadline; it never relaunches the
-same invocation. Cancellation creates a marker the runner checks before
+same invocation, and a check's second deadline on one tree is a
+[stall](#deadlines). Cancellation creates a marker the runner checks before
 accepting a response. A crash between saving ownership and launching waits
 until that deadline, rather than risking two fixers. Deployment must retain
 worker processes after the invoking pass exits, and supply plugin sandbox
@@ -472,7 +473,9 @@ paths it records:
     lands it); `merge_tree`, GitHub's test merge (what the merge changes is
     unknown, so it doesn't land; a train PR still joins, since the train's
     candidate merges it again and checks that); `diff` (the gates count as
-    edited); `default_branch`, no
+    edited); `tree`, the head's tree, read once a check has reached its
+    [deadline twice](#deadlines) on one tree (whether this is that tree is
+    unknown, so nothing starts for it); `default_branch`, no
     observation of the default branch's CI for a fix of it (the base is
     held); `snapshot`, a snapshot that stops short of the PR's reviews,
     comments, labels or threads (the owner merges it). A stale test merge,
@@ -677,6 +680,30 @@ recipe set:
 - **`proof`** then runs the checks. It takes a slot, in the queue order
   above, unless its preparation answered `slot: false`.
 
+### Deadlines
+
+A deadline work keeps hitting is a stall to fix, not a retry
+(`limits-are-design-bugs` in [lessons.toml](lessons.toml)). Each
+preparation and proof keeps the tree it was asked to run on, and one that
+reaches its deadline without an answer (the plugin ran out its time, or
+its worker was lost and a later pass said so for it; stopped work doesn't
+count) counts once for each check it was asked for, against that check's
+recipe and that tree. The flow's records of its work are the count's one
+home, so a restart or a dry run reads the same count.
+
+The first deadline a check reaches on a tree is retried as any failed job
+is. At the second on the same tree, as its recipe stands, the flow starts
+nothing more for it, neither preparation nor proof: the PR waits at the
+proof stage, overdue at once, saying `Stalled:` with the check, the tree's
+first twelve digits and both deadlines. The count is the check's, not its
+invocation's: a preparation's deadline and a proof's add up. A new tree or
+a changed recipe starts the count again; a new head on the same tree
+doesn't, so once a check has reached its deadline twice on any tree, the
+flow reads the head's tree before deciding. A read of it that fails is the
+degraded `tree` read: whether the head is on the stalled tree can't be told,
+so nothing starts until it reads. Work saved before trees were kept counts
+toward no tree.
+
 A `Job` recipe is a model-run check, not a proof, and is never sent to a
 proof plugin: its check waits, with that reason. A targeted kick reads the
 other open PRs' [place in line](#priority) even before their first pass; dry
@@ -684,7 +711,8 @@ runs reserve virtual slots within the pass in the same order.
 
 A refused write is saved as a failure observation for the next decision.
 Retry passes still revoke permission while leaving the failed substantive
-action until its deadline. Three strikes make the wait overdue. One PR's
+action until its deadline. Three strikes make the wait overdue, as a check
+[stalled on its deadlines](#deadlines) does at once. One PR's
 read, plugin or write failure is reported on that PR and does not stop
 processing the others.
 

@@ -199,6 +199,7 @@ mod tests {
                 deadline: 0,
                 posted: false,
                 recipes: Default::default(),
+                tree: None,
                 slotless: false,
                 handed: Vec::new(),
                 sent: Default::default(),

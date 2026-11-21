@@ -18,7 +18,7 @@ mod state;
 #[cfg(test)]
 pub(crate) use proofs::selected;
 pub use proofs::{
-    Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Readiness,
+    Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Reached, Readiness,
 };
 mod review;
 pub(crate) mod reviews;

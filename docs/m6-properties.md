@@ -76,7 +76,7 @@ another issue are not scheduled again here.
 | `explicit-priority` | [FP4](#fp4-flow-order-admission-and-proof-slots-by-explicit-priority-then-age) | Not built: one binary `first_label` |
 | `one-question-per-decision` | [FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) | Not built |
 | `switches-show-their-effect` | [FP3](#fp3-flow-report-every-switch-in-effect-and-what-it-holds) | Not built |
-| `limits-are-design-bugs` | [FP6](#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP12](#fp12-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Not built: a timed-out job is retried without end |
+| `limits-are-design-bugs` | [FP6](#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP12](#fp12-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Half built: a check's second deadline on one tree is a stall, not a retry ([flow.md](flow.md#deadlines)); every proof's deadline is still the configured `proof_timeout` until FP12 |
 | `off-switch-independent` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline), then [#313](https://github.com/FieldmouseWorks/Conary/issues/313) for the landing owner | Not built: Conary has no pause |
 | `reusable-modules` | Finish-line item 7 in [DESIGN](DESIGN.md#12-roadmap) | Designed |
 | `pause-vacates` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline); the plugins answer its cancellation ([m6-plugins.md](m6-plugins.md#restart-and-cancellation)) | Not built: a held PR's proof keeps its slot |

@@ -233,6 +233,7 @@ fn posted_answer(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
         deadline: now + 10_000,
         posted: true,
         recipes: Default::default(),
+        tree: None,
         slotless: false,
         handed: vec![],
         sent: Default::default(),

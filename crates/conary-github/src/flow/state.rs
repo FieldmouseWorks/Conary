@@ -225,7 +225,13 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                             && w.failure == failure))
             })
             .map_or(now, |w| w.since);
-        let failing = m.strikes.values().any(|n| *n >= 3);
+        // A check stalled on its deadlines, when that's what was decided,
+        // is overdue at once, as three strikes are.
+        let stalled = super::proofs::stalled(f).is_some_and(|s| {
+            matches!(s, super::proofs::Stall::Twice { .. })
+                && description == s.to_string().chars().take(140).collect::<String>()
+        });
+        let failing = m.strikes.values().any(|n| *n >= 3) || stalled;
         let due = if failing {
             since
         } else {

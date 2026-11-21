@@ -16,6 +16,22 @@ pub struct ProofData {
     pub waiting: Vec<ProofWaiting>,
     /// This PR's preparations, in the order they started.
     pub prepared: Vec<Preparation>,
+    /// Every deadline this PR's proof-plugin work reached, per check.
+    pub deadlines: Vec<Reached>,
+    /// The head's tree: read only once a selected check has reached its
+    /// deadline twice on one tree ([`tree`]), and None when that read
+    /// failed.
+    pub tree: Option<String>,
+}
+/// A check whose preparation or proof reached its deadline
+/// ([`super::jobs::Work::reached_deadline`]): with which recipe, on which
+/// tree, and when that deadline was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reached {
+    pub check: String,
+    pub recipe: Recipe,
+    pub tree: String,
+    pub at: u64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRecord {
@@ -73,6 +89,109 @@ pub enum ProofPlan {
 
 /// A failed or unready preparation is asked again after this long.
 const PREPARE_AGAIN: u64 = 900;
+/// The deadlines a check reaches on one tree, as its recipe stands, before
+/// the flow stops starting it there: the first is retried, the second is a
+/// stall.
+const STALL_AT: usize = 2;
+
+/// Why no proof-plugin work starts for the selected checks: a deadline hit
+/// over and over is a stall to fix, not a retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Stall {
+    /// `check` reached its deadline twice on `tree`, the head's, at
+    /// `first` and then `second`. Overdue at once.
+    Twice {
+        check: String,
+        tree: String,
+        first: u64,
+        second: u64,
+    },
+    /// `check` reached its deadline twice on a tree, and the head's tree
+    /// couldn't be read, so whether it's that tree can't be told. The read
+    /// is named degraded; nothing starts until it answers.
+    Untold { check: String },
+}
+impl std::fmt::Display for Stall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Twice {
+                check,
+                tree,
+                first,
+                second,
+            } => write!(
+                f,
+                "Stalled: {check} reached its deadline twice on tree {}, at {first} and {second}; not started again",
+                tree.get(..12).unwrap_or(tree)
+            ),
+            Self::Untold { check } => write!(
+                f,
+                "Can't read the head's tree to tell if {check} reached its deadline twice on it; not started"
+            ),
+        }
+    }
+}
+/// The deadlines each selected check reached, as its recipe stands, by
+/// tree, in the order they fell.
+fn reached(f: &Facts) -> Vec<(String, BTreeMap<&str, Vec<u64>>)> {
+    selected(f)
+        .into_iter()
+        .map(|(check, recipe)| {
+            let mut trees: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+            for r in &f.proof_data.deadlines {
+                if r.check == check && r.recipe == recipe {
+                    trees.entry(r.tree.as_str()).or_default().push(r.at);
+                }
+            }
+            for ats in trees.values_mut() {
+                ats.sort_unstable();
+            }
+            (check, trees)
+        })
+        .collect()
+}
+/// Whether some selected check has reached its deadline twice on one tree,
+/// so the head's tree decides whether it's stalled.
+fn needs_tree(f: &Facts) -> bool {
+    reached(f)
+        .iter()
+        .any(|(_, trees)| trees.values().any(|ats| ats.len() >= STALL_AT))
+}
+/// Reads the head's tree when [`needs_tree`], through the degraded door: a
+/// read that fails is named, and leaves it None, which [`stalled`] can't
+/// tell from the stalled tree. Every decision of the PR's, its own pass's
+/// and another's proof queue, reads it the same way.
+pub(crate) fn tree<S: crate::branches::Branches + ?Sized>(source: &S, f: &mut Facts) {
+    if !needs_tree(f) {
+        return;
+    }
+    let repo = f.repo.to_string();
+    f.proof_data.tree = f
+        .reads
+        .take(Reading::Tree, source.tree(&repo, &f.revision.head));
+}
+/// The selected checks' stall, if one has reached its deadline twice on the
+/// head's tree. A new tree or a changed recipe starts the count again; a new
+/// head on the same tree doesn't.
+pub(super) fn stalled(f: &Facts) -> Option<Stall> {
+    for (check, trees) in reached(f) {
+        if !trees.values().any(|ats| ats.len() >= STALL_AT) {
+            continue;
+        }
+        let Some(tree) = &f.proof_data.tree else {
+            return Some(Stall::Untold { check });
+        };
+        if let Some(ats) = trees.get(tree.as_str()).filter(|a| a.len() >= STALL_AT) {
+            return Some(Stall::Twice {
+                check,
+                tree: tree.clone(),
+                first: ats[0],
+                second: ats[1],
+            });
+        }
+    }
+    None
+}
 
 fn current(f: &Facts, r: &ProofRecord) -> bool {
     r.job.revision.head == f.revision.head

@@ -310,6 +310,7 @@ impl Pass<'_> {
                     report.error = Some(format!("recording what degraded: {e}"));
                 }
                 hydrated?;
+                super::proofs::tree(github, &mut facts);
                 // Read afresh before each PR's decision: a pause written
                 // during the pass stops the PRs after it.
                 facts.paused = match super::pause::read(self.root, repo) {
@@ -632,6 +633,11 @@ impl Pass<'_> {
             facts.settings.job_timeout
         };
         let deadline = self.now.saturating_add(timeout);
+        let tree = match &task {
+            conary_core::plugin::Task::Prepare { tree, .. }
+            | conary_core::plugin::Task::Proof { tree, .. } => Some(tree.clone()),
+            _ => None,
+        };
         let choice = task
             .kind()
             .and_then(|kind| self.config.execution.get(&kind))
@@ -662,6 +668,7 @@ impl Pass<'_> {
             deadline,
             posted: false,
             recipes: super::proofs::selected(facts),
+            tree,
             handed,
             sent: Default::default(),
         });

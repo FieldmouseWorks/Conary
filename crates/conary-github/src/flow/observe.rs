@@ -74,6 +74,22 @@ fn hydrate_with(
             Some(Ok(_)) => JobState::Done,
             Some(Err(_)) => JobState::Broken,
         };
+        // Each check a proof or its preparation was asked to run reached
+        // its deadline on the tree it was asked for: the count
+        // `proofs::stalled` stops at. Stopped work never gets here.
+        if matches!(work.purpose, Purpose::Proof | Purpose::Prepare)
+            && let Some(tree) = &work.tree
+            && work.reached_deadline(&completion)
+        {
+            f.proof_data
+                .deadlines
+                .extend(work.recipes.iter().map(|(check, recipe)| Reached {
+                    check: check.clone(),
+                    recipe: recipe.clone(),
+                    tree: tree.clone(),
+                    at: work.deadline,
+                }));
+        }
         match &work.purpose {
             Purpose::Fix(kind) => {
                 let answer = match &completion.result {

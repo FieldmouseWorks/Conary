@@ -147,6 +147,8 @@ impl Occupancy {
                 let mut memory = record.memory.clone();
                 super::ledger::raised(&mut facts, &mut memory, ledger);
                 super::observe::hydrate(&mut facts, record, pass.now, true)?;
+                super::proofs::tree(github, &mut facts);
+                reads.extend(facts.reads.clone());
                 let paused = super::pause::read(pass.root, repo)
                     .inspect_err(|e| reads.met(Reading::Pause, degraded::why(&**e)))?;
                 reads.answered(Reading::Pause);
