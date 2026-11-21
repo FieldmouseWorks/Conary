@@ -165,6 +165,7 @@ fn gather(
         classified,
         authorship_known: false,
         needs_judge: false,
+        author: Err("Needs a judge; its commits were not read".into()),
         judge_asked: false,
         dependency,
         renovate,
@@ -197,6 +198,7 @@ fn gather(
             .as_deref()
             .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
         failed: None,
+        failed_why: None,
         succeeded: BTreeSet::new(),
     };
     // These PRs do not enter the pipeline. In particular, do not spend
@@ -301,6 +303,7 @@ fn gather(
     facts.authorship_known = provenance.known;
     facts.needs_judge = provenance.judge;
     facts.bot_edited = provenance.edited;
+    facts.author = super::history::author(provenance.engines, &pull.user.login);
     // A test merge of another tip or head is stale, which is GitHub's
     // answer; a read of it that fails is degraded, and the merge's effect
     // unknown.

@@ -631,6 +631,9 @@ pub struct Facts {
     pub classified: Classified,
     pub authorship_known: bool,
     pub needs_judge: bool,
+    /// Who wrote the head, for a judge to be independent of
+    /// ([`super::history::author`]), or why no one author is known.
+    pub author: std::result::Result<conary_core::plugin::Identity, String>,
     pub judge_asked: bool,
     pub dependency: Option<Dependency>,
     pub renovate: bool,
@@ -661,6 +664,8 @@ pub struct Facts {
     /// The failed effect from the preceding execution, if any. Decisions
     /// never optimistically record an effect as having succeeded.
     pub failed: Option<Failure>,
+    /// What that failed effect said.
+    pub failed_why: Option<String>,
     pub succeeded: BTreeSet<Failure>,
 }
 impl Facts {
@@ -729,6 +734,10 @@ pub struct Memory {
     #[serde(with = "super::persist::pairs")]
     pub strikes: BTreeMap<Failure, u32>,
     pub retry: Option<(Failure, u64)>,
+    /// What the failed effect `retry` waits to try again said, shown while
+    /// it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_why: Option<String>,
     /// The head the reviewer was last asked to look at, and when: asked
     /// again for the same head only an hour later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
