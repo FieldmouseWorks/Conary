@@ -429,7 +429,7 @@ fn github_generations_and_tombstones_survive_local_judge_answers() {
     }
 }
 #[test]
-fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
+fn r2_owner_approval_does_not_enable_a_direct_landing_for_a_person_or_a_bot() {
     for bot in [false, true] {
         let mut c = Case::new();
         c.clean_review();
@@ -453,7 +453,7 @@ fn r2_owner_approval_does_not_enable_direct_or_delegated_landings() {
             next(&facts, &c.record().memory, crate::flow::jobs::now())
                 .0
                 .step,
-            if bot { Step::Settle } else { Step::Merge }
+            Step::Merge
         );
         let report = c.pass(crate::flow::jobs::now(), false);
         assert_eq!(

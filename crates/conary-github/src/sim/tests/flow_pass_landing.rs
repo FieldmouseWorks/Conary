@@ -105,24 +105,20 @@ fn delayed_merge_visibility_is_waited_for_without_a_second_merge() {
     );
 }
 #[test]
-fn delegated_merges_are_reconciled_by_later_passes() {
-    let mut c = Case::new();
-    c.as_bot();
-    c.clean_review();
+fn a_settled_renovate_pr_without_a_train_is_merged_by_the_flow() {
+    // Renovate merges nothing in a repository conaryd lands (burrow#1318),
+    // so a settled minor update with no train lands through the flow's own
+    // expected-head merge, never waits on Renovate's automerge.
+    let c = Case::renovate();
+    assert!(!c.config.settings.train);
     assert_eq!(
         c.pass(jobs::now(), false)[0].next.as_ref().unwrap().step,
-        Step::Settle
+        Step::Merge
     );
-    assert!(c.record().landing.as_ref().unwrap().delegated);
-    crate::train::Forge::land(
-        &c.hub,
-        REPO,
-        3,
-        &head(3),
-        &crate::train::Message::new("t", 3, []),
-    )
-    .unwrap();
+    assert_eq!(c.hub.count(Call::Land), 1);
+    assert!(c.hub.pull(REPO, 3).unwrap().is_merged());
     c.pass(jobs::now() + 1, false);
+    assert!(c.record().landing.is_none());
     assert!(
         c.store
             .borrow()
@@ -159,7 +155,7 @@ fn memory_raises_are_appended_and_imported_by_a_fresh_flow_record() {
     let report = c.pass(jobs::now() + 1, false);
     assert!(!matches!(
         report[0].next.as_ref().unwrap().step,
-        Step::Merge | Step::Settle
+        Step::Merge
     ));
     assert_eq!(
         c.store
@@ -274,9 +270,10 @@ fn a_nondefault_branch_merge_does_not_manufacture_a_trunk_landing() {
 }
 
 #[test]
-fn a_later_read_failure_still_revokes_the_previous_delegated_permission() {
+fn a_later_read_failure_still_revokes_the_previous_seated_permission() {
+    // A seat in the train is the permission that outlasts its pass.
     let mut c = Case::new();
-    c.as_bot();
+    c.config.settings.train = true;
     c.clean_review();
     c.pass(jobs::now(), false);
     assert!(c.record().live.contains(&head(3)));
@@ -430,19 +427,17 @@ fn a_pr_that_lands_itself_needs_the_gate_attested_on_its_head() {
         dry_run: true,
         ledger: None,
     };
-    for grant in [Step::Merge, Step::Settle] {
-        let refused = crate::flow::evidence::authorize(
-            &pass,
-            &c.hub,
-            &facts,
-            &grant,
-            &mut Default::default(),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            refused.starts_with("fresh / check: no attested check run"),
-            "{refused}"
-        );
-    }
+    let refused = crate::flow::evidence::authorize(
+        &pass,
+        &c.hub,
+        &facts,
+        &Step::Merge,
+        &mut Default::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        refused.starts_with("fresh / check: no attested check run"),
+        "{refused}"
+    );
 }

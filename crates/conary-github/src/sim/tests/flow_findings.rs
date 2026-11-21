@@ -250,10 +250,7 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         c.hub.edit_flow_comment(REMI, 3, first + 1, &old);
         let n = c.pass(8100);
         assert_eq!(n.step, Step::ListOwner); // Keep the authenticated Owner/Held decision, not just its counter.
-        assert!(!matches!(
-            n.step,
-            Step::Merge | Step::JoinTrain | Step::Settle
-        ));
+        assert!(!matches!(n.step, Step::Merge | Step::JoinTrain));
         if sweep {
             c.sweep("ok");
         } else {
@@ -409,10 +406,7 @@ fn rejected_sweep_remains_blocking_after_minor_reclassification() {
         c.hub.flow_comment(REMI, 3, "owner", &marker);
         c.label(&["security"]);
         for time in [8100, 8200] {
-            assert!(!matches!(
-                c.pass(time).step,
-                Step::Merge | Step::JoinTrain | Step::Settle
-            ));
+            assert!(!matches!(c.pass(time).step, Step::Merge | Step::JoinTrain));
             c.hub.edit_flow_comment(REMI, 3, at, "");
         }
         c.sweep("ok");

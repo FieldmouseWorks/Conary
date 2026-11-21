@@ -176,7 +176,7 @@ fn renovate_email_is_machine_configuration_not_the_branchs_claim() {
         renovate_email: Some("renovate@example.org".into()),
         ..crate::sim::settings()
     };
-    assert_eq!(decision(&hub, &m, settings).step, Step::Settle);
+    assert_eq!(decision(&hub, &m, settings).step, Step::Merge);
 }
 
 #[test]

@@ -124,9 +124,9 @@ so a new group's shadow runs today. Two tasks:
     `cn flow settings` loads.
 
 **X2, nothing moves a trunk conaryd holds without its permission.** The
-flow already lands a Renovate PR it has settled through Renovate's own
-automerge, as a delegated settlement ([flow.md](flow.md#effects-and-retries)).
-In a train repository it goes through the train. Two gaps remain:
+flow lands a Renovate PR it has settled itself: through the train where
+there is one, by its own merge where there isn't
+([flow.md](flow.md#effects-and-retries)). Two gaps remain:
 
 - **The private TusanHomichi repositories have no ruleset.** GitHub needs
   Pro for one there. So nothing requires `review-settled` or

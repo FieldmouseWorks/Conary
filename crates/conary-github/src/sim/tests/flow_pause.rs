@@ -241,7 +241,7 @@ fn grant_races(mode: &str) {
         let mut c = Case::new();
         c.clean_review();
         match mode {
-            "delegated" => c.as_bot(),
+            "bot" => c.as_bot(),
             "join" | "seated" => c.config.settings.train = true,
             _ => {}
         }
@@ -282,7 +282,6 @@ fn grant_races(mode: &str) {
         }
         let reports = c.pass(now + 1, false);
         let expected = match mode {
-            "delegated" => Step::Settle,
             "join" => Step::JoinTrain,
             "seated" => Step::Wait { until: None },
             _ => Step::Merge,
@@ -334,8 +333,8 @@ fn pause_blocks_direct_permission_races() {
     grant_races("direct");
 }
 #[test]
-fn pause_blocks_delegated_permission_races() {
-    grant_races("delegated");
+fn pause_blocks_bot_permission_races() {
+    grant_races("bot");
 }
 #[test]
 fn pause_blocks_train_admission_permission_races() {
@@ -686,12 +685,12 @@ fn permission_still_rechecks_exiting_cancelled_workers() {
     use crate::api::Source;
     use crate::sim::{Call, On};
     use crate::train::Mark;
-    for mode in ["direct", "delegated", "join", "seated"] {
+    for mode in ["direct", "bot", "join", "seated"] {
         for call in [Call::FlowStatus, Call::FlowStage] {
             let now = crate::flow::jobs::now();
             let mut c = worker_case();
             match mode {
-                "delegated" => c.as_bot(),
+                "bot" => c.as_bot(),
                 "join" | "seated" => c.config.settings.train = true,
                 _ => {}
             }
@@ -721,8 +720,7 @@ fn permission_still_rechecks_exiting_cancelled_workers() {
             }
             let reports = c.pass(now + 2, false);
             let expected = match mode {
-                "direct" => Step::Merge,
-                "delegated" => Step::Settle,
+                "direct" | "bot" => Step::Merge,
                 "join" => Step::JoinTrain,
                 _ => Step::Wait { until: None },
             };

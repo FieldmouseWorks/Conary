@@ -455,13 +455,6 @@ fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "GitHub will not yet say it can be merged",
         );
     }
-    if f.renovate && f.bot_merges {
-        return at(
-            Stage::Merge,
-            Step::Settle,
-            "Dependency update, CI green; its bot merges it",
-        );
-    }
     at(
         Stage::Merge,
         Step::Merge,

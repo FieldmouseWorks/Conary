@@ -310,16 +310,14 @@ impl Pass<'_> {
                     .landing
                     .iter()
                     .chain(&record.pending)
-                    .any(|l| !l.delegated && !l.retry)
+                    .any(|l| !l.retry)
                 {
                     next.stage = Stage::Merge;
                     next.step = Step::Wait { until: None };
                     next.description =
                         "Waiting to reconcile the submitted merge with the ledger".into();
                 }
-                if matches!(next.step, Step::Merge | Step::Settle)
-                    && facts.classified.class == conary_core::Class::R2
-                {
+                if next.step == Step::Merge && facts.classified.class == conary_core::Class::R2 {
                     next.stage = Stage::Train;
                     next.step = Step::Wait { until: None };
                     next.description =
@@ -550,7 +548,7 @@ pub(super) fn plugin_kind(step: &Step) -> Option<&'static str> {
 }
 
 pub(crate) fn grants(next: &Next, f: &Facts) -> bool {
-    matches!(next.step, Step::Merge | Step::Settle | Step::JoinTrain)
+    matches!(next.step, Step::Merge | Step::JoinTrain)
         || next.stage == Stage::Train
             && matches!(next.step, Step::Wait { .. })
             && f.train.seat.is_some()

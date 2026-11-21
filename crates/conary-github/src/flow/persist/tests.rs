@@ -34,6 +34,15 @@ fn canonical_record() -> Value {
         value["memory"].as_object_mut().unwrap().remove(field);
     }
     value.as_object_mut().unwrap().remove("failed_review");
+    // A landing Renovate was to merge loads as one the flow merges: Renovate
+    // merges nothing in a repository conaryd lands.
+    value["landing"]
+        .as_object_mut()
+        .unwrap()
+        .remove("delegated");
+    for landing in value["pending"].as_array_mut().unwrap() {
+        landing.as_object_mut().unwrap().remove("delegated");
+    }
     value
 }
 

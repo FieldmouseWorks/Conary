@@ -167,33 +167,27 @@ fn excluded_prs_keep_read_classification_and_can_act_on_exclusion() {
 }
 #[test]
 fn a_targeted_kick_preserves_an_excluded_live_permission() {
-    for train in [false, true] {
-        let mut c = Case::new();
-        if train {
-            c.config.settings.train = true;
-        } else {
-            c.as_bot();
-        }
-        c.clean_review();
-        let first = run(&c, Some(3), false);
-        assert_eq!(first[0].error, None, "{:?}", first[0]);
-        assert_eq!(state(&c, 3), "success");
-        assert!(c.record().live.contains(&head(3)));
-        another(&c);
-        run(&c, Some(5), false);
-        assert_eq!(state(&c, 3), "success", "train={train}");
-        if train {
-            assert!(
-                !c.store
-                    .borrow()
-                    .ledger()
-                    .train(&REPO.parse().unwrap())
-                    .unwrap()
-                    .joined()
-                    .is_empty()
-            );
-        }
-    }
+    // A seat in the train is the permission that outlasts its pass: a
+    // direct merge, a bot's included, uses its permission in the same pass.
+    let mut c = Case::new();
+    c.config.settings.train = true;
+    c.clean_review();
+    let first = run(&c, Some(3), false);
+    assert_eq!(first[0].error, None, "{:?}", first[0]);
+    assert_eq!(state(&c, 3), "success");
+    assert!(c.record().live.contains(&head(3)));
+    another(&c);
+    run(&c, Some(5), false);
+    assert_eq!(state(&c, 3), "success");
+    assert!(
+        !c.store
+            .borrow()
+            .ledger()
+            .train(&REPO.parse().unwrap())
+            .unwrap()
+            .joined()
+            .is_empty()
+    );
 }
 #[test]
 fn a_targeted_kick_recovers_uncertain_permission_on_an_excluded_pr() {
@@ -227,7 +221,6 @@ fn unsent_and_failed_merge_intents_can_be_revalidated_and_retried() {
                     target: "main".into(),
                     revision: None,
                     base: TRUNK.into(),
-                    delegated: false,
                     accepted: false,
                     retry: false,
                 }),

@@ -123,8 +123,6 @@ pub fn read(
         gate_edited: false,
         major: None,
         release_at: None,
-        bot_merges: false,
-        bot_automerge_enabled: false,
         rebase_requested: pull.title.starts_with("rebase!")
             || pull.labels.iter().any(|l| l.name == "rebase"),
         rebase_removed: extra.rebase_removed.clone(),
@@ -283,14 +281,6 @@ pub fn read(
     } else {
         Proof::Passed
     };
-    let body = pull.body.as_deref().unwrap_or("");
-    facts.bot_automerge_enabled = super::gates::enabled(body);
-    facts.bot_merges = renovate
-        && dependency == Some(Dependency::Minor)
-        && provenance.edited == Some(false)
-        && !facts.gate_edited
-        && !(super::gates::spent(body)
-            || facts.bot_automerge_enabled && facts.labels.contains(&facts.settings.batch_label));
     let red: Vec<_> = ci
         .checks
         .iter()

@@ -415,6 +415,27 @@ impl Case {
             );
         }
     }
+    /// A minor Renovate update with Renovate's automerge on, its review
+    /// clean and CI green: settled, in a repository with no train.
+    pub(super) fn renovate() -> Self {
+        let mut c = Self::new();
+        c.config.settings.renovate_email = Some("bot@renovateapp.com".into());
+        c.config.settings.renovate_login = Some("renovate[bot]".into());
+        c.hub.edit_pull(REPO, 3, |p| {
+            p["head"]["ref"] = json!("renovate/foo");
+            p["title"] = json!("Update foo from 1.4 to 1.5");
+            p["body"] = json!("🚦 **Automerge**: Enabled.");
+        });
+        c.hub.refresh_flow(REPO, 3);
+        c.hub.commit_details(
+            &head(3),
+            Some("deps: bump"),
+            Some("bot@renovateapp.com"),
+            Some("bot@renovateapp.com"),
+        );
+        c.clean_review();
+        c
+    }
     pub(super) fn as_bot(&mut self) {
         self.hub
             .edit_pull(REPO, 3, |p| p["head"]["ref"] = json!("renovate/dep"));

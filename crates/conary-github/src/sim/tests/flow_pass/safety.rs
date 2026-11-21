@@ -197,10 +197,10 @@ fn pass_local_judgment_preserves_newer_and_conflicting_authenticated_issuances()
 }
 
 #[test]
-fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release() {
-    for delegated in [false, true] {
-        let mut c = if delegated {
-            delegated_case()
+fn pass_direct_r2_by_a_person_or_renovate_requires_the_candidate_train_after_owner_release() {
+    for renovate in [false, true] {
+        let mut c = if renovate {
+            Case::renovate()
         } else {
             Case::new()
         };
@@ -335,29 +335,9 @@ fn pass_negative_evidence_is_required_before_direct_or_train_permission() {
     }
 }
 
-fn delegated_case() -> Case {
-    let mut c = Case::new();
-    c.config.settings.renovate_email = Some("bot@renovateapp.com".into());
-    c.config.settings.renovate_login = Some("renovate[bot]".into());
-    c.hub.edit_pull(REPO, 3, |p| {
-        p["head"]["ref"] = json!("renovate/foo");
-        p["title"] = json!("Update foo from 1.4 to 1.5");
-        p["body"] = json!("🚦 **Automerge**: Enabled.");
-    });
-    c.hub.refresh_flow(REPO, 3);
-    c.hub.commit_details(
-        &head(3),
-        Some("deps: bump"),
-        Some("bot@renovateapp.com"),
-        Some("bot@renovateapp.com"),
-    );
-    c.clean_review();
-    c
-}
-
 #[test]
-fn pass_delegated_settlement_requires_negative_evidence() {
-    let c = delegated_case();
+fn pass_renovate_merge_requires_negative_evidence() {
+    let c = Case::renovate();
     strip_negative(&c);
     let reports = c.pass(flow::jobs::now(), false);
     assert!(matches!(
@@ -378,9 +358,9 @@ fn pass_delegated_settlement_requires_negative_evidence() {
 
 #[test]
 fn pass_revokes_permission_when_the_success_write_races_a_scope_change() {
-    for delegated in [false, true] {
-        let c = if delegated {
-            delegated_case()
+    for renovate in [false, true] {
+        let c = if renovate {
+            Case::renovate()
         } else {
             Case::new()
         };
