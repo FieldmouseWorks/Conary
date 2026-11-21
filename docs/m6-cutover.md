@@ -179,6 +179,12 @@ settled PR.
   review loop) is a prerequisite of S2f: burrow is where loops run longest.
   Elsewhere a loop past the round cap waits for the judge plugin or the
   handback, as on remi.
+- **The `job` plugin**
+  ([SJ](https://github.com/FieldmouseWorks/Conary/issues/424)) serves FP11's
+  handoff to the stuck role. It lands off by default. Once S2f opens, its
+  task turns it on (`burrow.autoland.plugins.job.enable` in remi) as a
+  switch of its own, settled before burrow's. Until then FP11's handoff
+  waits, named by `no_plugin`.
 - **FP5b to FP10** stay after S1, as the owner directed on 11-19. None is
   needed for a PR to land correctly.
 
