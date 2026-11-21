@@ -133,6 +133,7 @@ fn gather(
         by_app: pull.user.kind == "Bot",
         complete: extra.complete,
         labels,
+        labelled_by: None,
         merging: Merge::from_github(&extra.merge_state),
         checks: Vec::new(),
         stopped: BTreeMap::new(),

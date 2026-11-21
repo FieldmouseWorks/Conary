@@ -187,6 +187,7 @@ impl Case {
         let mut f=read(&self.hub,&REMI.parse().unwrap(),3,
             &conary_core::Policy::parse(br#"{"r2":["^secrets/","(^|/)CODEOWNERS$"],"docs":["^docs/","^README.md$"],"notDocs":["^docs/DESIGN.md$"]}"#).unwrap(),
             self.settings.clone(),&["owner".into()]).unwrap();
+        labeller(&self.hub, &mut f, &self.memory);
         f.judge_requests = self.judge_requests.clone();
         f.judge_reason = self.judge_reason.clone();
         f.jobs = self.jobs.clone();

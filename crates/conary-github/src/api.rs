@@ -212,6 +212,10 @@ struct PullNumber {
 pub struct Event {
     pub event: Option<String>,
     pub created_at: Option<String>,
+    /// Who did it: a `User` or a `Bot`, or `None` for a deleted account.
+    pub actor: Option<User>,
+    /// The label a `labeled` or `unlabeled` event is about.
+    pub label: Option<Label>,
 }
 
 #[derive(Debug, Deserialize)]

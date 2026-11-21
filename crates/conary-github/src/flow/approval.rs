@@ -160,14 +160,80 @@ pub(super) fn ask(f: &Facts, m: &mut Memory, step: &Step, now: u64) -> Option<Re
     Some(request.clone())
 }
 
-/// Whether the owner label is on as a person's door: on, and not the flow's
-/// own listing ([`Memory::labelled`]).
+/// Who put a label on, by the account GitHub says did: a person's
+/// (`User`) or an App's (`Bot`), the flow's or the steward's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Labeller {
+    Person,
+    App,
+}
+
+/// The owner label as a person's door ([`person_label`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PersonLabel {
+    /// A person put it on.
+    Person,
+    /// It's on and not the flow's own, and who put it on can't be told:
+    /// the read failed, or no `labeled` event names a person or an App.
+    Untold,
+}
+
+/// The owner label, when it's on.
+fn owner_label(f: &Facts) -> Option<&String> {
+    f.settings
+        .owner_label
+        .as_ref()
+        .filter(|l| f.labels.contains(*l))
+}
+
+/// The owner label as a person's door: on, not the flow's own listing
+/// ([`Memory::labelled`]), and put on by a person, or by someone the read
+/// couldn't tell. A label an App put on, the flow's before it kept its
+/// mark or the steward's, is no door.
+pub(crate) fn person_label(f: &Facts, m: &Memory) -> Option<PersonLabel> {
+    if m.labelled {
+        return None;
+    }
+    owner_label(f)?;
+    match f.labelled_by {
+        Some(Labeller::Person) => Some(PersonLabel::Person),
+        Some(Labeller::App) => None,
+        None => Some(PersonLabel::Untold),
+    }
+}
+
+/// Whether the owner label may be a person's door ([`person_label`]).
 pub(crate) fn person_labelled(f: &Facts, m: &Memory) -> bool {
-    !m.labelled
-        && f.settings
-            .owner_label
-            .as_ref()
-            .is_some_and(|l| f.labels.contains(l))
+    person_label(f, m).is_some()
+}
+
+/// Reads who put the owner label on into the facts, by the PR's timeline's
+/// newest `labeled` event for it, only while the label is on and not the
+/// flow's own: one read, named `owner_label` when it fails, which leaves
+/// it untold. A PR outside the pipeline isn't read for it.
+pub(crate) fn labeller<S: crate::api::Source + ?Sized>(source: &S, f: &mut Facts, m: &Memory) {
+    let Some(label) = owner_label(f).cloned() else {
+        return;
+    };
+    if m.labelled || super::read::excluded(f) {
+        return;
+    }
+    let repo = f.repo.to_string();
+    f.labelled_by = f
+        .reads
+        .take(Reading::OwnerLabel, source.timeline(&repo, f.number))
+        .and_then(|events| {
+            events.into_iter().rev().find(|e| {
+                e.event.as_deref() == Some("labeled")
+                    && e.label.as_ref().is_some_and(|l| l.name == label)
+            })
+        })
+        .and_then(|e| e.actor)
+        .and_then(|a| match a.kind.as_str() {
+            "User" => Some(Labeller::Person),
+            "Bot" => Some(Labeller::App),
+            _ => None,
+        });
 }
 
 /// Why the flow's own judge answered `owner` on this revision, from its

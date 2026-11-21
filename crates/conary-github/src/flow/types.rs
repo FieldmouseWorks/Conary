@@ -587,6 +587,10 @@ pub struct Facts {
     pub by_app: bool,
     pub complete: bool,
     pub labels: BTreeSet<String>,
+    /// Who put the owner label on, by its newest `labeled` event: read
+    /// only while it's on and not the flow's own ([`super::approval::labeller`]),
+    /// and `None` when it wasn't read or couldn't be told.
+    pub labelled_by: Option<super::Labeller>,
     pub merging: Merge,
     pub checks: Vec<Check>,
     /// Each cancelled check run nothing replaced that GitHub has a way to

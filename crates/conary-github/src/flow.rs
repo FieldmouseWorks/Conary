@@ -18,6 +18,8 @@ mod recover;
 pub use recover::{Answer, Recovered, Recovery};
 mod state;
 #[cfg(test)]
+pub(crate) use approval::labeller;
+#[cfg(test)]
 pub(crate) use proofs::selected;
 pub use proofs::{
     Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Reached, Readiness,
@@ -75,7 +77,7 @@ pub use switches::{DegradedPr, Held, Holding, InEffect, Status, Switch, status};
 mod ledger;
 
 mod approval;
-pub use approval::{Door, Request, Subject, owner_approval};
+pub use approval::{Door, Labeller, Request, Subject, owner_approval};
 
 mod handoff;
 

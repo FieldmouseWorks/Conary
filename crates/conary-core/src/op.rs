@@ -298,6 +298,8 @@ pub enum Reading {
     Pause,
     /// The head's tree, which a check's deadlines are counted on.
     Tree,
+    /// The PR's timeline, for who put the owner label on.
+    OwnerLabel,
 }
 
 impl std::fmt::Display for Reading {
@@ -321,6 +323,7 @@ impl std::fmt::Display for Reading {
             Self::Observations => "the head's checks before permission",
             Self::Pause => "the repository's pause",
             Self::Tree => "the head's tree",
+            Self::OwnerLabel => "who put the owner label on",
         })
     }
 }

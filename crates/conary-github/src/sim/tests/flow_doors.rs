@@ -154,6 +154,107 @@ fn the_flows_own_label_is_no_door() {
     assert_eq!(c.pass(4003).step, Step::ListOwner(Door::Label));
 }
 
+/// The owner label as the steward puts it on, by its App.
+fn steward_labels(c: &Case) {
+    c.hub
+        .label_as(REMI, 3, &["needs-peter"], (crate::sim::STEWARD, "Bot"));
+}
+
+#[test]
+fn a_label_an_app_put_on_lists_nothing_of_its_own() {
+    // The steward listed the PR, with no mark of the flow's: its label is
+    // no door, and the flow makes its own call.
+    let c = Case::new();
+    let own = c.view(4000);
+    steward_labels(&c);
+    let n = c.view(4000);
+    assert_eq!(n.step, own.step, "{n:?}");
+    assert_eq!(n.description, own.description);
+    // Taken off and put back by a person, it's their door.
+    c.label(&[]);
+    c.label(&["needs-peter"]);
+    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Label));
+}
+
+#[test]
+fn two_lost_jobs_the_steward_listed_stay_the_flows_own_stall() {
+    let mut c = Case::new();
+    steward_labels(&c);
+    c.secret();
+    c.jobs.insert(
+        Kind::Judge,
+        Job {
+            id: "j".into(),
+            revision: c.scope(),
+            state: JobState::Done,
+            started: 0,
+            repeated: true,
+        },
+    );
+    c.pass(4000);
+    let n = c.pass(4001);
+    assert!(n.description.starts_with("Two jobs ended"), "{n:?}");
+    assert_eq!(n.overdue_at, Some(4001));
+}
+
+#[test]
+fn who_labelled_it_is_read_only_while_on_and_not_the_flows_own() {
+    let mut c = Case::new();
+    c.view(4000);
+    assert_eq!(c.hub.count(crate::sim::Call::Timeline), 0);
+    c.label(&["needs-peter"]);
+    c.memory.labelled = true;
+    c.view(4001);
+    assert_eq!(c.hub.count(crate::sim::Call::Timeline), 0);
+    c.memory.labelled = false;
+    c.view(4002);
+    assert_eq!(c.hub.count(crate::sim::Call::Timeline), 1);
+}
+
+#[test]
+fn a_label_whose_timeline_names_no_one_waits_overdue() {
+    // GitHub answers, with no `labeled` event for it: who put it on can't
+    // be told, and the wait shows in the status like any other.
+    let c = Case::new();
+    c.hub
+        .edit_pull(REMI, 3, |p| p["labels"] = json!([{"name": "needs-peter"}]));
+    let n = c.view(4000);
+    assert!(
+        n.description.contains("who put it on can't be told"),
+        "{n:?}"
+    );
+    assert_eq!(n.stage, Stage::None);
+    assert_eq!(
+        n.overdue_at,
+        Some(4000 + c.settings.stall_after.at(Level::Medium))
+    );
+}
+
+#[test]
+fn a_label_no_one_can_be_told_put_on_waits_named() {
+    // The read fails: the label is neither listed as a person's door nor
+    // gone past, and the read is named.
+    let c = Case::new();
+    c.label(&["needs-peter"]);
+    c.hub.fail(crate::sim::Call::Timeline);
+    let n = c.view(4000);
+    assert!(
+        n.description.contains("who put it on can't be told"),
+        "{n:?}"
+    );
+    assert!(matches!(n.step, Step::Wait { .. }), "{n:?}");
+    let met = c.facts().reads.met;
+    assert!(
+        met.iter().any(|d| d.what
+            == Degraded::Read {
+                read: Reading::OwnerLabel
+            }),
+        "{met:?}"
+    );
+    c.hub.heal(crate::sim::Call::Timeline);
+    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Label));
+}
+
 mod pass {
     use super::super::flow_pass_case::{Case, REPO};
     use crate::api::Source;
@@ -178,6 +279,60 @@ mod pass {
             .labels
             .iter()
             .any(|l| Some(&*l.name) == wanted)
+    }
+
+    #[test]
+    fn a_steward_label_a_person_puts_back_before_the_merge_withdraws_it() {
+        // Decided to merge past the steward's label; before the merge's
+        // scope is checked, a person takes it off and puts it back. The
+        // labels read the same, but the door is now a person's.
+        let c = Case::new();
+        c.clean_review();
+        c.hub
+            .label_as(REPO, 3, &["needs-peter"], (crate::sim::STEWARD, "Bot"));
+        // The decision's read, then the class's: the scope's is third.
+        c.hub.race(Call::Timeline, |h| {
+            h.race(Call::Timeline, |h| {
+                h.race(Call::Timeline, |h| {
+                    h.label(REPO, 3, &[]);
+                    h.label(REPO, 3, &["needs-peter"]);
+                })
+            })
+        });
+        let now = jobs::now() + 10_000;
+        let report = c.pass(now, false).into_iter().find(|r| r.pr == 3).unwrap();
+        assert_eq!(report.next.as_ref().unwrap().step, Step::Merge);
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("scope changed")),
+            "{report:?}"
+        );
+        assert_eq!(c.hub.count(Call::Merge), 0);
+    }
+
+    #[test]
+    fn a_judges_door_under_the_stewards_label_is_listed_once() {
+        // The steward listed the PR before; the flow's judge sends it to
+        // the owner. The judge's door is the one listed, once, and the
+        // steward's label is no door of its own on either pass.
+        let c = Case::new();
+        c.clean_review();
+        c.judgment(1, Judgment::Owner, true);
+        c.hub
+            .label_as(REPO, 3, &["needs-peter"], (crate::sim::STEWARD, "Bot"));
+        let now = jobs::now();
+        for at in [now, now + 1] {
+            let report = c.pass(at, false).into_iter().find(|r| r.pr == 3).unwrap();
+            assert_eq!(report.error, None, "{report:?}");
+            assert_eq!(
+                report.next.unwrap().step,
+                Step::ListOwner(Door::Judge),
+                "{at}"
+            );
+        }
+        assert_eq!(c.hub.count(Call::FlowOwner), 1);
     }
 
     #[test]
