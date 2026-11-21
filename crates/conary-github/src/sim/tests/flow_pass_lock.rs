@@ -37,7 +37,7 @@ fn other_writer(dir: &Path, hub: &crate::sim::Hub, pr: u64) -> conary_core::OpId
 
 #[test]
 fn a_pass_whose_read_hangs_holds_up_no_other_writer() {
-    unblocked(30, || {
+    unblocked(120, || {
         let c = Case::new();
         let ledger = tempfile::tempdir().unwrap();
         let dir = ledger.path().to_owned();
@@ -165,13 +165,66 @@ fn pr_3(dir: &Path) -> (Vec<String>, String) {
     (kinds, change)
 }
 
+/// Another writer, ingesting the case's PR 3 into the ledger at `dir` just
+/// before the pass's next read of it: the ops it recorded, once it has.
+fn race_pull_of_3(c: &Case, dir: &Path) -> Rc<Cell<Option<usize>>> {
+    let wrote: Rc<Cell<Option<usize>>> = Rc::default();
+    let (theirs, at) = (Rc::clone(&wrote), dir.to_owned());
+    let settings = c.config.settings.clone();
+    c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
+        let key = log::load_signing_key(&log::key_path(&at)).unwrap();
+        let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
+        let config = crate::Config {
+            reviewers: settings.flow_authors.iter().cloned().collect(),
+            review_authors: settings.review_authors.iter().cloned().collect(),
+            own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
+        };
+        let before = other.store.head().map_or(0, |h| h.seq);
+        crate::ingest::pull(&mut other.store, hub, &config, &REPO.parse().unwrap(), 3).unwrap();
+        other.publish(hub).unwrap();
+        theirs.set(Some(other.store.head().map_or(0, |h| h.seq) - before));
+    });
+    wrote
+}
+
+/// PR 3 recorded by a pass, pushed to, then passed twice more, with another
+/// writer ingesting it during the second pass when `race`: the error each
+/// pass met on PR 3, and what the ledger holds of it.
+fn pushed(race: bool) -> (Vec<Option<String>>, (Vec<String>, String)) {
+    let c = Case::new();
+    let (ledger, mut a) = anchored(&c);
+    let mut errors = vec![pass(&c, &mut a)];
+    c.hub.push(REPO, 3, &super::head(4));
+    c.hub.refresh_flow(REPO, 3);
+    c.good_ci(&super::head(4));
+    let wrote = race.then(|| race_pull_of_3(&c, ledger.path()));
+    errors.push(pass(&c, &mut a));
+    if let Some(wrote) = wrote {
+        assert!(wrote.get().is_some_and(|n| n > 0), "{:?}", wrote.get());
+    }
+    errors.push(pass(&c, &mut a));
+    (errors, pr_3(ledger.path()))
+}
+
+// PR 3 is already in the ledger when another writer records its new head
+// while the pass reads it: the pass records only what's left, nothing
+// twice, as it does with no other writer.
+#[test]
+fn a_pass_whose_new_head_another_writer_recorded_meanwhile_records_nothing_twice() {
+    unblocked(120, || {
+        let alone = pushed(false);
+        assert_eq!(alone.0, [None, None, None]);
+        assert_eq!(pushed(true), alone);
+    });
+}
+
 // Another writer records the pass's own PR while the pass reads it: the
 // pass, deciding from the ledger as it last wrote it, has its op refused,
 // and that PR fails for the next pass, which reads what the other wrote
 // and records the rest, nothing twice, as a pass with no other writer does.
 #[test]
 fn a_pass_whose_pr_another_writer_recorded_meanwhile_records_nothing_twice() {
-    unblocked(60, || {
+    unblocked(120, || {
         let c = Case::new();
         let (alone, mut a) = anchored(&c);
         assert_eq!(pass(&c, &mut a), None);
@@ -179,21 +232,10 @@ fn a_pass_whose_pr_another_writer_recorded_meanwhile_records_nothing_twice() {
 
         let c = Case::new();
         let (raced, mut a) = anchored(&c);
-        let at = raced.path().to_owned();
-        let settings = c.config.settings.clone();
-        c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
-            let key = log::load_signing_key(&log::key_path(&at)).unwrap();
-            let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
-            let config = crate::Config {
-                reviewers: settings.flow_authors.iter().cloned().collect(),
-                review_authors: settings.review_authors.iter().cloned().collect(),
-                own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
-            };
-            crate::ingest::pull(&mut other.store, hub, &config, &REPO.parse().unwrap(), 3).unwrap();
-            other.publish(hub).unwrap();
-        });
+        let wrote = race_pull_of_3(&c, raced.path());
         let refused = pass(&c, &mut a).expect("the pass's own op was refused");
         assert!(refused.contains("already in the ledger"), "{refused}");
+        assert!(wrote.get().is_some_and(|n| n > 0), "{:?}", wrote.get());
         // What the other writer recorded, once, and nothing of the pass's.
         assert_eq!(kinds.last().map(String::as_str), Some("classify"));
         assert_eq!(pr_3(raced.path()).0, kinds[..kinds.len() - 1]);

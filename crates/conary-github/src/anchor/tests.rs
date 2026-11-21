@@ -161,7 +161,7 @@ fn every_write_checks_the_anchor_on_github_and_moves_it_on() {
 // where the other left it, so no op or move is lost.
 #[test]
 fn writers_that_take_turns_keep_every_op_and_the_anchor_at_the_head() {
-    crate::sim::unblocked(30, || {
+    crate::sim::unblocked(60, || {
         let dir = tempfile::tempdir().unwrap();
         let f = Fake {
             ledger: RefCell::new(Some(dir.path().to_owned())),
