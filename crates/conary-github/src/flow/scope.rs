@@ -31,6 +31,16 @@ fn validate<G: Write>(
     record: &Record,
     cleanup: bool,
 ) -> Result<()> {
+    // What degraded now that didn't when the decision read: what it
+    // answered and the scope's read can't use withdraws the permission.
+    let known = |d: &super::degraded::Degradation| {
+        f.unreadable
+            .iter()
+            .chain(&f.reads.met)
+            .any(|o| o.what == d.what)
+    };
+    // A read the decision can't go on without that fails now withdraws it
+    // whatever it met before: the decision went on past it.
     let mut fresh = read(
         github,
         &f.repo,
@@ -38,7 +48,12 @@ fn validate<G: Write>(
         pass.policy,
         pass.config.settings.clone(),
         &pass.config.trusted_authors,
-    )?;
+    )
+    .map_err(|e| -> super::persist::Error {
+        let mut new = vec![e.degradation.clone()];
+        new.extend(e.met().into_iter().skip(1).filter(|d| !known(d)));
+        Box::new(super::degraded::Withdrawn(new))
+    })?;
     if cleanup {
         super::observe::hydrate_cleanup(&mut fresh, record, pass.now, &f.working)?;
     } else {
@@ -50,14 +65,18 @@ fn validate<G: Write>(
     if fresh.changes_requested && !f.changes_requested {
         return Err("Review changes were requested before permission was used".into());
     }
-    // An answer the decision read that doesn't read now. Cleanup leaves
+    // An answer the decision read that doesn't read now, or a read of
+    // GitHub that answered it and fails or stops short now. Cleanup leaves
     // out stopped work it doesn't read, so only a new one counts.
-    if let Some(d) = fresh
+    let new: Vec<_> = fresh
         .unreadable
         .iter()
-        .find(|d| !f.unreadable.iter().any(|o| o.what == d.what))
-    {
-        return Err(format!("{d} before permission was used").into());
+        .chain(&fresh.reads.met)
+        .filter(|d| !known(d))
+        .cloned()
+        .collect();
+    if !new.is_empty() {
+        return Err(Box::new(super::degraded::Withdrawn(new)));
     }
     let labels = |f: &Facts| {
         f.labels

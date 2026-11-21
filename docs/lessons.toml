@@ -84,7 +84,7 @@ lesson = "A degraded outcome (a fallback taken, a lookup that half-worked) is re
 from = ["https://github.com/FieldmouseWorks/burrow/issues/641", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow", "op log", "M6 slice 5d", "M6 slice 5c", "M6 slice 6", "M6 slice 7", "M6 slice 8"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#46-op-log", "docs/flow.md#degraded-paths", "crates/conary-github/src/sim/tests/flow_degraded.rs", "https://github.com/FieldmouseWorks/Conary/issues/416", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/374", "https://github.com/FieldmouseWorks/Conary/issues/317", "https://github.com/FieldmouseWorks/Conary/issues/318", "https://github.com/FieldmouseWorks/Conary/issues/320"]
+where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#46-op-log", "docs/flow.md#degraded-paths", "crates/conary-github/src/sim/tests/flow_degraded.rs", "crates/conary-github/src/sim/tests/flow_degraded_reads.rs", "https://github.com/FieldmouseWorks/Conary/issues/416", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/374", "https://github.com/FieldmouseWorks/Conary/issues/317", "https://github.com/FieldmouseWorks/Conary/issues/318", "https://github.com/FieldmouseWorks/Conary/issues/320"]
 
 [[lessons]]
 id = "same-inputs-same-verdict"

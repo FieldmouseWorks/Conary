@@ -218,6 +218,78 @@ pub enum Degraded {
     /// A lookup of `check`'s attested result couldn't tell whether it holds:
     /// GitHub or the producer's attestation didn't answer.
     Lookup { check: String },
+    /// A read of GitHub (or of the repository's pause) the flow's decision
+    /// for the change needed failed or stopped short of all it holds. What
+    /// it was for counts as failed: a check that can't be read is pending,
+    /// provenance that can't be read is unknown, and a decision whose reads
+    /// failed outright waits.
+    Read { read: Reading },
+}
+
+/// Which read a [`Degraded::Read`] names: a closed set, one per read the
+/// flow's decision takes (`docs/flow.md`, "Degraded paths").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// The PR itself: its REST read, or its GraphQL snapshot.
+    Pull,
+    /// The PR's GraphQL snapshot, which stopped short of its reviews,
+    /// comments, labels or threads.
+    Snapshot,
+    /// The repository's open PRs.
+    Pulls,
+    /// The base branch's tip.
+    Base,
+    /// The files the PR changes.
+    Files,
+    /// The head's check runs, suites and statuses.
+    Checks,
+    /// The base tip and merge base a docs lane's word is checked against.
+    Fork,
+    /// What became of a cancelled run: its suite, or its annotations.
+    Cancelled,
+    /// The pushes to the PR's branch.
+    Pushes,
+    /// The PR's reviews and comments.
+    Reviews,
+    /// The PR's commits, compared with its base.
+    Commits,
+    /// A commit's trailers, as git parses them.
+    Trailers,
+    /// GitHub's test merge: its commit and its tree beside the base tip's.
+    MergeTree,
+    /// The PR's diff, for the gates it edits.
+    Diff,
+    /// The default branch's CI, as the snapshot observes it.
+    DefaultBranch,
+    /// The head's checks, read again before permission is granted.
+    Observations,
+    /// The repository's pause.
+    Pause,
+}
+
+impl std::fmt::Display for Reading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pull => "the PR",
+            Self::Snapshot => "the PR's snapshot",
+            Self::Pulls => "the open PRs",
+            Self::Base => "the base branch",
+            Self::Files => "the PR's files",
+            Self::Checks => "the head's checks",
+            Self::Fork => "the docs lane's fork point",
+            Self::Cancelled => "a cancelled run",
+            Self::Pushes => "the branch's pushes",
+            Self::Reviews => "the PR's reviews",
+            Self::Commits => "the PR's commits",
+            Self::Trailers => "a commit's trailers",
+            Self::MergeTree => "GitHub's test merge",
+            Self::Diff => "the PR's diff",
+            Self::DefaultBranch => "the default branch's CI",
+            Self::Observations => "the head's checks before permission",
+            Self::Pause => "the repository's pause",
+        })
+    }
 }
 
 impl std::fmt::Display for Degraded {
@@ -233,6 +305,7 @@ impl std::fmt::Display for Degraded {
                 )
             }
             Self::Lookup { check } => write!(f, "{check}'s evidence lookup couldn't tell"),
+            Self::Read { read } => write!(f, "the read of {read} failed or stopped short"),
         }
     }
 }

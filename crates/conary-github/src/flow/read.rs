@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use conary_core::Policy;
 use conary_core::op::Repo;
 
+use super::degraded::{ReadError, Reading, Reads};
 use super::*;
 use crate::api::{ApiError, Source};
 
@@ -45,9 +46,15 @@ pub trait Read: Source + crate::branches::Branches {
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
 
+/// Why a read GitHub answered with something that doesn't parse degraded.
+const UNPARSED: &str = "GitHub's answer didn't parse";
+
 /// Read once, then decide without I/O. Only the configured trusted authors
 /// may enter the pipeline. Classification comes from policy, including rename
-/// sources and raised labels; a PR cannot select its own class.
+/// sources and raised labels; a PR cannot select its own class. A read it
+/// can't go on without ends it, naming that read; one it goes on past, or
+/// that stopped short, is in the facts' `reads`, holding what it was for
+/// failed.
 pub fn read(
     source: &dyn Read,
     repo: &Repo,
@@ -55,13 +62,50 @@ pub fn read(
     policy: &Policy,
     settings: Settings,
     trusted_authors: &[String],
-) -> Result<Facts, ApiError> {
+) -> Result<Facts, ReadError> {
+    let reads = &mut Reads::default();
+    match gather(source, repo, pr, policy, settings, trusted_authors, reads) {
+        Ok(mut facts) => {
+            facts.reads = std::mem::take(reads);
+            Ok(facts)
+        }
+        // What the reads before it met and answered is kept with it.
+        Err(mut e) => {
+            e.reads = Box::new(std::mem::take(reads));
+            Err(e)
+        }
+    }
+}
+
+/// [`read`]'s reads, each one's outcome kept in `reads`.
+fn gather(
+    source: &dyn Read,
+    repo: &Repo,
+    pr: u64,
+    policy: &Policy,
+    settings: Settings,
+    trusted_authors: &[String],
+    reads: &mut Reads,
+) -> Result<Facts, ReadError> {
     let repository = repo.to_string();
-    let pull = source.pull(&repository, pr)?;
-    let extra = source.snapshot(&repository, pr)?;
+    let pull = reads.ask(Reading::Pull, source.pull(&repository, pr))?;
+    let extra = reads.ask(Reading::Pull, source.snapshot(&repository, pr))?;
     let revision = Revision::from(&pull);
     if extra.revision != revision {
-        return Err(ApiError::new("PR moved between flow reads"));
+        return Err(ReadError::with(
+            Reading::Pull,
+            "the PR moved between its reads".into(),
+            ApiError::new("PR moved between flow reads"),
+        ));
+    }
+    if extra.complete {
+        reads.answered(Reading::Snapshot);
+    } else {
+        reads.met(
+            Reading::Snapshot,
+            "GitHub's snapshot stopped short of the PR's reviews, comments, labels or threads"
+                .into(),
+        );
     }
     let labels = pull.labels.iter().map(|l| l.name.clone()).collect();
     let renovate = pull.head.name.starts_with("renovate/");
@@ -103,6 +147,7 @@ pub fn read(
         claims: Vec::new(),
         stopped_jobs: BTreeSet::new(),
         unreadable: Vec::new(),
+        reads: Reads::default(),
         working: BTreeSet::new(),
         paused: None,
         pushes: BTreeMap::new(),
@@ -140,7 +185,8 @@ pub fn read(
             .created_at
             .as_deref()
             .map(super::reviews::timestamp)
-            .transpose()?,
+            .transpose()
+            .map_err(|e| ReadError::with(Reading::Pull, UNPARSED.into(), e))?,
         last_reply_at: 0,
         session: pull
             .body
@@ -155,7 +201,10 @@ pub fn read(
     if excluded(&facts) {
         return Ok(facts);
     }
-    let open = source.pulls(&repository, crate::api::Pulls::Open)?;
+    let open = reads.ask(
+        Reading::Pulls,
+        source.pulls(&repository, crate::api::Pulls::Open),
+    )?;
     facts.open_prs = open.iter().map(|p| p.number).collect();
     facts.queue = open
         .iter()
@@ -182,9 +231,12 @@ pub fn read(
     if facts.stacked_on.is_some() {
         return Ok(facts);
     }
-    let tip = source.branch(&repository, &pull.base.name)?;
+    let tip = reads.ask(Reading::Base, source.branch(&repository, &pull.base.name))?;
     let base = tip.as_deref().unwrap_or(&pull.base.sha);
-    let paths = source.files(&repository, base, &pull.head.sha)?;
+    let paths = reads.ask(
+        Reading::Files,
+        source.files(&repository, base, &pull.head.sha),
+    )?;
     facts.classified = policy.classify(repo, &paths).raise(pull.raises());
     let machine = facts.settings.machine();
     let mut ci = super::ci::checks(
@@ -196,8 +248,13 @@ pub fn read(
         facts.classified.docs,
         &extra.suites,
         &facts.settings,
+        reads,
     )?;
     if !extra.checks_complete {
+        reads.met(
+            Reading::Checks,
+            "GitHub listed more check suites than one read holds".into(),
+        );
         ci.checks = vec![Check {
             name: "over 100 checks, too many to read".into(),
             state: Ci::Pending,
@@ -205,10 +262,10 @@ pub fn read(
         ci.docs = false;
     }
     if facts.settings.job_login.is_some() {
-        facts.pushes = source.pushes(&repository, &pull.head.name)?;
+        facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
     }
-    let records = source.reviews(&repository, pr)?;
-    let comments = source.comments(&repository, pr)?;
+    let records = reads.ask(Reading::Reviews, source.reviews(&repository, pr))?;
+    let comments = reads.ask(Reading::Reviews, source.comments(&repository, pr))?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
     facts.review_bodies = super::judging::review_bodies(&records);
@@ -220,23 +277,27 @@ pub fn read(
         &comments,
         extra.since,
         &facts.settings,
-    )?;
+    )
+    .map_err(|e| ReadError::with(Reading::Reviews, UNPARSED.into(), e))?;
     facts.judgment = markers.judgment;
     facts.judgment_generation = markers.judgment_generation;
     facts.major_generation = markers.major_generation;
     facts.judge_asked = markers.judge_asked;
     facts.major = markers.major;
-    let history = source
-        .compare_commits(&repository, base, &pull.head.sha)
-        .ok();
-    let provenance = super::history::provenance(history.as_ref(), &facts.settings, renovate);
+    let history = reads.take(
+        Reading::Commits,
+        source.compare_commits(&repository, base, &pull.head.sha),
+    );
+    let provenance = super::history::provenance(history.as_ref(), &facts.settings, renovate, reads);
     facts.authorship_known = provenance.known;
     facts.needs_judge = provenance.judge;
     facts.bot_edited = provenance.edited;
+    // A test merge of another tip or head is stale, which is GitHub's
+    // answer; a read of it that fails is degraded, and the merge's effect
+    // unknown.
     facts.empty = if let (Some(tip), Some(merge)) = (&tip, &pull.merge_commit_sha) {
-        source
-            .commit(&repository, merge)
-            .ok()
+        reads
+            .take(Reading::MergeTree, source.commit(&repository, merge))
             .filter(|c| {
                 c.parents
                     .iter()
@@ -244,17 +305,23 @@ pub fn read(
                     .eq([tip.as_str(), pull.head.sha.as_str()])
             })
             .and_then(|_| {
-                source
-                    .tree(&repository, merge)
-                    .ok()
-                    .zip(source.tree(&repository, tip).ok())
-                    .map(|(a, b)| a == b)
+                let merged = reads.take(Reading::MergeTree, source.tree(&repository, merge))?;
+                let base = reads.take(Reading::MergeTree, source.tree(&repository, tip))?;
+                Some(merged == base)
             })
     } else {
         None
     };
     facts.base_tip = tip.clone();
     if facts.red_fix && !facts.draft {
+        // No observation of the default branch can't tell whether it's red.
+        match &extra.default_branch {
+            None => reads.met(
+                Reading::DefaultBranch,
+                "GitHub's snapshot held no observation of the default branch".into(),
+            ),
+            Some(_) => reads.answered(Reading::DefaultBranch),
+        }
         facts.base_held = extra
             .default_branch
             .as_ref()
@@ -262,7 +329,10 @@ pub fn read(
     }
 
     facts.gate_edited = super::gates::edited(&paths, || {
-        source.diff(&repository, base, &pull.head.sha).ok()
+        reads.take(
+            Reading::Diff,
+            source.diff(&repository, base, &pull.head.sha),
+        )
     });
     facts.proof = if machine.is_empty() || ci.docs {
         Proof::NotNeeded

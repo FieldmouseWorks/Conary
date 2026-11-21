@@ -9,7 +9,7 @@ use conary_core::Store;
 use conary_core::op::{Body, DEGRADED_WHY, Repo};
 use serde::{Deserialize, Serialize};
 
-pub use conary_core::op::Degraded;
+pub use conary_core::op::{Degraded, Reading};
 
 /// One degraded path, as a decision names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +57,140 @@ pub(crate) fn why(error: &(dyn std::error::Error + 'static)) -> String {
     }
     why[..end].to_owned()
 }
+
+/// What a decision's reads met: each read that failed or stopped short,
+/// and each one that was taken and answered, which clears a degradation the
+/// ledger holds for it ([`record`]'s `ran`). A read that was never taken
+/// clears nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reads {
+    pub met: Vec<Degradation>,
+    pub answered: std::collections::BTreeSet<Degraded>,
+}
+impl Reads {
+    /// `read` failed or stopped short, for the reason `why`.
+    pub(crate) fn met(&mut self, read: Reading, why: String) {
+        let what = Degraded::Read { read };
+        if !self.met.iter().any(|d| d.what == what) {
+            self.met.push(Degradation { what, why });
+        }
+    }
+    /// `read` was taken and answered in full.
+    pub(crate) fn answered(&mut self, read: Reading) {
+        self.answered.insert(Degraded::Read { read });
+    }
+    /// `read`'s answer, if it gave one: a read whose failure the decision
+    /// goes on past, holding what it was for failed.
+    pub(crate) fn take<T, E: std::error::Error + 'static>(
+        &mut self,
+        read: Reading,
+        answer: std::result::Result<T, E>,
+    ) -> Option<T> {
+        match answer {
+            Ok(answer) => {
+                self.answered(read);
+                Some(answer)
+            }
+            Err(e) => {
+                self.met(read, why(&e));
+                None
+            }
+        }
+    }
+    /// `read`'s answer, or the decision's end: a read the decision can't go
+    /// on without.
+    pub(crate) fn ask<T>(
+        &mut self,
+        read: Reading,
+        answer: std::result::Result<T, crate::ApiError>,
+    ) -> std::result::Result<T, ReadError> {
+        match answer {
+            Ok(answer) => {
+                self.answered(read);
+                Ok(answer)
+            }
+            Err(error) => Err(ReadError::new(read, error)),
+        }
+    }
+    /// Everything `other` met and answered, too.
+    pub(crate) fn extend(&mut self, other: Self) {
+        for d in other.met {
+            if !self.met.iter().any(|m| m.what == d.what) {
+                self.met.push(d);
+            }
+        }
+        self.answered.extend(other.answered);
+    }
+}
+
+/// A read the decision can't go on without that failed: what degraded,
+/// GitHub's error, which it shows as, and what the reads before it met and
+/// answered, which are recorded and cleared with it.
+#[derive(Debug)]
+pub struct ReadError {
+    pub degradation: Degradation,
+    pub error: crate::ApiError,
+    pub reads: Box<Reads>,
+}
+impl ReadError {
+    pub(crate) fn new(read: Reading, error: crate::ApiError) -> Self {
+        let why = why(&error);
+        Self::with(read, why, error)
+    }
+    /// A read GitHub answered whose answer can't be used, for the fixed
+    /// reason `why`.
+    pub(crate) fn with(read: Reading, why: String, error: crate::ApiError) -> Self {
+        Self {
+            degradation: Degradation {
+                what: Degraded::Read { read },
+                why,
+            },
+            error,
+            reads: Box::default(),
+        }
+    }
+    /// Everything this read met: it, then the reads before it that
+    /// degraded.
+    pub(crate) fn met(&self) -> Vec<Degradation> {
+        let mut met = vec![self.degradation.clone()];
+        met.extend(
+            self.reads
+                .met
+                .iter()
+                .filter(|d| d.what != self.degradation.what)
+                .cloned(),
+        );
+        met
+    }
+}
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+/// Reads and answers that answered the decision and failed or stopped
+/// short when its permission was about to be used: the permission is
+/// withdrawn, and the pass records and names them.
+#[derive(Debug)]
+pub(crate) struct Withdrawn(pub Vec<Degradation>);
+impl std::fmt::Display for Withdrawn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut each = self.0.iter();
+        if let Some(first) = each.next() {
+            write!(f, "{first}")?;
+        }
+        for d in each {
+            write!(f, ", {d}")?;
+        }
+        f.write_str(" before permission was used")
+    }
+}
+impl std::error::Error for Withdrawn {}
 
 /// Bring the ledger in line with what this pass met of one PR's degraded
 /// paths: each path `seen` that the ledger doesn't hold degraded for the
