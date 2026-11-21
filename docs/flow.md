@@ -473,7 +473,8 @@ paths it records:
     again, and records what that read meets.
   - A read that fails or stops short after the decision and before its
     permission is used withdraws the permission, as any other changed
-    input does.
+    input does, and is recorded: the decision saved waits on it at no
+    stage, naming it.
 
 A pass records each path once while it lasts, against the PR's revision as
 the ledger has it, and appends `restored` when the same path works again: a
