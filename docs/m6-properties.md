@@ -553,38 +553,41 @@ the pipeline audit, older than this plan and not filed again. Its PR says
 
 **Work.** Two things, kept apart: the carry rule, and what still runs fresh.
 - **The carry rule, once.** It's burrow#451's replay: an earlier head `H` of
-  the PR carries to the head now when git's merge of `H`'s change onto the
-  head's merge base (`git merge-tree --write-tree --merge-base=` `H`'s merge
-  base, the head's merge base, `H`) succeeds and writes exactly the head's
-  tree. Git places each edit where it was, so a relocated edit doesn't
-  match, which a line fingerprint got wrong (burrow#451's review). It's
-  never tree equality ([DESIGN 4.3](DESIGN.md#43-evidence), rule 3's last
-  sentence). One function in the flow decides it, through a reader the
+  the PR carries to the head now when git's three-way merge of `H`'s change
+  (from `H`'s merge base to `H`) onto the head's merge base succeeds and
+  gives exactly the head's tree. Git places each edit where it was, so a
+  relocated edit doesn't match, which a line fingerprint got wrong
+  (burrow#451's review). It's never tree equality
+  ([DESIGN 4.3](DESIGN.md#43-evidence), rule 3's last sentence). One
+  function in the flow decides it, through a reader the task picks and the
   simulated GitHub serves; a read that fails or stops short is FP5's
   degraded read and carries nothing. It's generic: configuration from the
   flow's file, no remi wiring, and tests on the simulated GitHub with a
   generic configuration (the owner's 2026-11-11 requirement on the issue).
 - **What carries.** The PR's revision may take its judgment from an earlier
   revision of the same PR only when all of these hold. The earlier head
-  carries to this one by the rule above. The description fingerprint is
-  the same (the revision's `description`), so a changed title or body
-  never carries. It's that revision's highest authenticated generation, an
-  `autoland-judgment:v3` issuance with its basis. And C4's basis still
-  holds on this head: its `why` covers every reason `flow::decide` requires
-  now and its `context` equals `flow::judging_context` now. A carried fail
-  or misdescribed verdict is acted on as it stands, as on the head it was
-  given for.
+  carries to this one by the rule above. The revision's `base` (the base
+  branch) and `description` (the title and body's fingerprint) are the
+  same, so a retarget or an edited description never carries. It's that
+  revision's highest authenticated generation, an `autoland-judgment:v3`
+  issuance with its basis, and its verdict is `pass` or `owner`; after a
+  fail or misdescribed verdict a new head is judged afresh, as today. And
+  C4's basis still holds on this head: its `why` covers every reason
+  `flow::decide` requires now and its `context` equals
+  `flow::judging_context` now.
 - **A read, never a copy.** The issuance stays on its revision and nothing
   is issued for the new one ([DESIGN 4.3](DESIGN.md#43-evidence)). Next
   names the revision the verdict came from.
-- **The review bodies.** `judging_context` reads every review body, so a
-  reviewer's look at the new head that posts one changes the context, and
-  C4 then refuses the carry. The task's first test shows what the flow's
-  reviewer posts on a head that replays one it already looked at. If that
-  adds a body, the same function lets the reviewer's word on the earlier
-  head stand for this one, in the same PR, so no review is asked for it:
-  that's the issue's "the same carry rule reviews use, one
-  implementation". C4 isn't loosened either way.
+- **The review still runs.** The flow reaches a judgment only once the
+  reviewer's look at the exact head is done ([flow.md](flow.md#review)),
+  and the connector reviews each push itself, costing no model turn here.
+  Its clean look updates its summary comment, which isn't a review body,
+  so `judging_context` doesn't move and the carry holds. A look that finds
+  something posts a review and threads, the context moves, and C4 refuses
+  the carry, as it should. So #293 carries no review, and C4 isn't
+  loosened. The issue's "the same carry rule reviews use, one
+  implementation" is the replay rule itself: burrow's `carry.rs` stays the
+  steward's and goes with it, and the flow has this one function.
 - **What stays fresh.** When any condition fails, the flow asks for a judge
   exactly as today, through task J's plugin, a fresh session
   (`fresh-judge`). A carry never starts, resumes or feeds a judge, and
@@ -602,25 +605,29 @@ the pipeline audit, older than this plan and not filed again. Its PR says
 **Regression scenario.** Against the simulated GitHub, a PR judged `pass`
 on head H1 with a v3 issuance and its basis, then a new head H2:
 1. **Base-only carry.** H2 is a merge of the moved main that edits nothing
-   of the PR's own. Main asks for a fresh judge; the fixed flow counts H1's
-   pass for H2, asks none, and lands once CI is green on H2.
+   of the PR's own, and the connector's look at H2 is clean. Main asks for
+   a fresh judge; the fixed flow counts H1's pass for H2, asks none, and
+   lands once CI is green on H2.
 2. **Changed own lines.** H2 also edits one of the PR's own lines; in a
    second case it moves one of H1's edits elsewhere, unchanged. A fresh
    judge is asked.
 3. **Changed description.** Case 1's H2 with the PR's body edited. A fresh
-   judge is asked.
+   judge is asked. So it is when the PR is retargeted to another base
+   branch instead.
 4. **Stale evidence refused.** Case 1's H2 with H1's CI green and H2's still
    pending: it doesn't land until H2's own CI is green, and red on H2 goes
    to a fix whatever H1 had. In a second case H1's pass was superseded by a
    later generation's fail on H1, and in a third its basis no longer holds
-   on H2 (a finding answered without a push after it was given): nothing
-   carries. In a fourth the replay read is degraded: nothing carries.
+   on H2 (a thread got an answer after it was given): nothing carries. In a fourth the replay read is degraded: nothing carries.
 
 Case 1 fails on main. Cases 2 to 4 hold on main too, since main carries
 nothing, so the PR shows each one failing with its guard taken out.
 
 **Waits on:** C4 and #303, both landed. Its turn in the Conary flow lane
-comes after FP12 ([order](#order)). **Leaves alone:** carrying across PRs or
+comes after FP12 ([order](#order)); #293 isn't one of #256's listed
+children, so it keeps `later` until FP12 has landed, as a fenced child
+does ([m6-order.md](m6-order.md#what-the-pipeline-taught-since), its last
+row). **Leaves alone:** carrying across PRs or
 by equal trees; gate reuse (#291); the judge plugin and its freshness (J).
 No stopgap in the steward's `tasks.py`: the issue allowed one only while
 cutover was days out, and the steward's code is
@@ -663,20 +670,22 @@ change, as the [ground rules](#ground-rules-for-every-task) say; SJ's adds
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [#421](https://github.com/FieldmouseWorks/Conary/issues/421) | FP9 | Conary, Conary flow | #313 landed (2026-11-20) | [Two repositories, the first one's API hanging](#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | `Closes #421` | Its deploy on remi | [S2f](m6-cutover.md#s2f-burrow) (#500) and the first `allow` of a paused repository conaryd holds, both #315's |
 | [#424](https://github.com/FieldmouseWorks/Conary/issues/424) | SJ | burrow, burrow M6 | J, F, B1 and burrow#969 landed (all by 2026-11-16) | [A request for each of the four reasons, a second concurrent one, a cancelled one](#sj-burrow-serve-the-stuck-role-through-the-job-kind) | `Closes FieldmouseWorks/Conary#424` | remi's burrow pin deployed with it, the unit still off | FP11 |
-| [#422](https://github.com/FieldmouseWorks/Conary/issues/422) | FP11 | Conary, Conary flow | FP9 landed, and SJ deployed | [Each trigger's boundary](#fp11-flow-break-a-review-loop-that-wont-settle) | `Closes #422` | Its deploy on remi, and the `job` plugin turned on | [S2f](m6-cutover.md#s2f-burrow) (#500), #315's |
+| [#422](https://github.com/FieldmouseWorks/Conary/issues/422) | FP11 | Conary, Conary flow | FP9 landed, and SJ deployed | [Each trigger's boundary](#fp11-flow-break-a-review-loop-that-wont-settle) | `Closes #422` | Its deploy on remi | [S2f](m6-cutover.md#s2f-burrow) (#500), #315's, whose task turns the `job` plugin on before burrow's own switch |
 | [#423](https://github.com/FieldmouseWorks/Conary/issues/423) | FP12 | Conary, Conary flow | FP11 landed | [A hung run cut at its history's deadline](#fp12-flow-size-a-proofs-deadline-from-its-own-history) | `Closes #423` | Its deploy on remi | #321's exit check |
-| [#293](https://github.com/FieldmouseWorks/Conary/issues/293) | | Conary, Conary flow | FP12 landed | [Base-only carry, changed own lines, changed description, stale evidence](#293-flow-carry-a-judges-verdict-to-a-head-whose-own-change-didnt-move) | `Closes #293` | Its deploy, with each repository's cutover | No switch |
+| [#293](https://github.com/FieldmouseWorks/Conary/issues/293) | Judge carry | Conary, Conary flow | FP12 landed | [Base-only carry, changed own lines, changed description, stale evidence](#293-flow-carry-a-judges-verdict-to-a-head-whose-own-change-didnt-move) | `Closes #293` | Its deploy, with each repository's cutover | No switch |
 
-Turning the `job` plugin on is a switch on remi of its own, made by S2f's
-task ([m6-cutover.md](m6-cutover.md#plugins-and-the-flow-properties-that-wait)).
+Turning the `job` plugin on is a switch on remi of its own, made inside
+S2f's task before burrow's switch
+([m6-cutover.md](m6-cutover.md#plugins-and-the-flow-properties-that-wait)).
 Until it's on, FP11's handoff waits, named by `no_plugin`, as any step does
 without its plugin.
 
 ## Filing
 
 Each task was filed as an issue in Conary, as a child of #256's list so the
-lane admits one at a time: FP1 to FP12 are #412 to #423, SJ is #424. #293
-was already filed, and isn't filed again. Each issue:
+lane admits one at a time: FP1 to FP8 are #412 to #419, FP10 is #420, FP9
+#421, FP11 #422, FP12 #423 and SJ #424. #293 was already filed, and isn't
+filed again. Each issue:
 
 - has a title starting with the task's ID;
 - links its section here, names the lesson IDs it moves, and says

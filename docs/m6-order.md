@@ -185,8 +185,9 @@ body of the later task when it's filed.
 
 ### Builds, by lane
 
-Each lane runs top to bottom. The edges between lanes are the fences above
-and the dependencies in [m6-plugins.md](m6-plugins.md#order), and for #312's tasks and #293 in
+Each lane runs top to bottom. The edges between lanes are the fences above,
+the dependencies in [m6-plugins.md](m6-plugins.md#order), and for #312's
+tasks and #293 those in
 [m6-properties.md](m6-properties.md#the-last-five-checked).
 
 | Conary flow | Conary side | burrow M6 | burrow proj | burrow gate |
