@@ -48,7 +48,7 @@ fn on(c: &Case, why: &[Trigger]) -> Basis {
 fn a_judgment_on_the_reasons_and_the_discussion_now_still_counts() {
     for (verdict, expected) in [
         (Judgment::Pass, Step::Merge),
-        (Judgment::Owner, Step::ListOwner),
+        (Judgment::Owner, Step::ListOwner(Door::Judge)),
     ] {
         let mut c = capped();
         let basis = on(&c, &[Trigger::RoundLimit]);
@@ -62,7 +62,7 @@ fn a_judgment_on_the_reasons_and_the_discussion_now_still_counts() {
 fn a_finding_answered_without_a_push_asks_for_a_new_judgment() {
     for (verdict, counts) in [
         (Judgment::Pass, Step::Merge),
-        (Judgment::Owner, Step::ListOwner),
+        (Judgment::Owner, Step::ListOwner(Door::Judge)),
     ] {
         let mut c = capped();
         let basis = on(&c, &[Trigger::RoundLimit]);

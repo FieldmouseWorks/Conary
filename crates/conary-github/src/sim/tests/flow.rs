@@ -69,15 +69,19 @@ fn draft_precedes_outside_and_incomplete() {
 }
 
 #[test]
-fn outside_and_unreadable_are_the_owners() {
-    // handle.py: a cut history and an outside author are listed for owner.
+fn outside_is_the_owners_and_unreadable_is_the_flows() {
+    // handle.py listed both for the owner; only an outside author is a
+    // one-way door. A cut history is the flow's own wait, overdue in its
+    // status.
     let c = Case::new();
     c.hub.edit_flow(REMI, 3, |s| s.complete = false);
-    assert_eq!(c.view(4000).step, Step::ListOwner);
+    let n = c.view(4000);
+    assert_eq!((n.stage, n.step), (Stage::None, Step::Wait { until: None }));
+    assert!(n.overdue_at.is_some());
     c.hub.edit_flow(REMI, 3, |s| s.complete = true);
     c.hub
         .edit_pull(REMI, 3, |p| p["user"]["login"] = json!("outside"));
-    assert_eq!(c.view(4000).step, Step::ListOwner);
+    assert_eq!(c.view(4000).step, Step::ListOwner(Door::Outside));
 }
 
 #[test]
@@ -165,7 +169,7 @@ fn r2_requires_person_even_after_judge_land() {
     let mut c = Case::new();
     c.secret();
     c.judge("pass");
-    assert_eq!(c.view(4000).step, Step::ListOwner);
+    assert_eq!(c.view(4000).step, Step::ListOwner(Door::R2));
 }
 
 #[test]
@@ -175,15 +179,15 @@ fn owner_approval_is_required_after_label_removal_and_is_revision_scoped() {
     c.secret();
     c.judge("owner");
     c.label(&["needs-peter"]);
-    assert_eq!(c.pass(4000).step, Step::ListOwner);
+    assert_eq!(c.pass(4000).step, Step::ListOwner(Door::Label));
     c.label(&[]);
-    assert_eq!(c.view(4001).step, Step::ListOwner);
+    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Judge));
     c.approve();
     assert_eq!(c.view(4001).step, Step::Merge);
     c.description("different reasons", 4002);
     c.review("reviewer", Verdict::Clean, 4003);
     c.judge("owner");
-    assert_eq!(c.view(5000).step, Step::ListOwner);
+    assert_eq!(c.view(5000).step, Step::ListOwner(Door::Judge));
 }
 
 #[test]
@@ -445,8 +449,9 @@ fn broken_job_is_seen_twice_then_backed_off_once() {
 }
 
 #[test]
-fn two_completed_jobs_without_verdict_go_to_owner() {
-    // lost.py: two completed unanswered turns, not broken jobs, reach owner.
+fn two_completed_jobs_without_verdict_stall_without_the_owner() {
+    // lost.py: two completed unanswered turns, not broken jobs, reached the
+    // owner. They're no door: no third job starts, and the wait is overdue.
     let mut c = Case::new();
     c.secret();
     c.jobs.insert(
@@ -460,7 +465,9 @@ fn two_completed_jobs_without_verdict_go_to_owner() {
         },
     );
     c.pass(4000);
-    assert_eq!(c.view(4001).step, Step::ListOwner);
+    let n = c.view(4001);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert_eq!(n.overdue_at, Some(4001));
 }
 
 #[test]
@@ -484,7 +491,8 @@ fn dependency_held_and_release_age() {
         .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("renovate/pkg"));
     c.label(&["major"]);
     c.sweep("held");
-    assert_eq!(c.view(4000).step, Step::ListOwner);
+    // The sweep names no door, so its hold is no listing.
+    assert_eq!(c.view(4000).step, Step::Wait { until: None });
     c.settings.major_key = None;
     c.settings.renovate_login = Some("renovate[bot]".into());
     c.hub.put_checks(&head(3), json!([]));
@@ -722,13 +730,13 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
         let mut c = Case::new();
         c.secret();
         c.judge("pass");
-        assert_eq!(c.pass(4000).step, Step::ListOwner);
+        assert_eq!(c.pass(4000).step, Step::ListOwner(Door::R2));
         assert!(!c.facts().owner_approved);
-        assert_eq!(c.pass(4001).step, Step::ListOwner);
+        assert_eq!(c.pass(4001).step, Step::ListOwner(Door::R2));
         c.label(&["needs-peter"]);
         c.pass(4002);
         c.label(&[]);
-        assert_eq!(c.view(4003).step, Step::ListOwner);
+        assert_eq!(c.view(4003).step, Step::ListOwner(Door::R2));
         c.approve();
         assert_eq!(c.view(4003).step, Step::Merge);
         match change {
@@ -743,7 +751,7 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
         c.secret();
         c.review("reviewer", Verdict::Clean, 4005);
         c.judge("pass");
-        assert_eq!(c.view(5000).step, Step::ListOwner);
+        assert_eq!(c.view(5000).step, Step::ListOwner(Door::R2));
     }
 }
 

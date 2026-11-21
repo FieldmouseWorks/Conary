@@ -59,7 +59,7 @@ fn owner_label_holds_before_red_pending_ci_or_threads() {
             ),
             _ => c.threads(1),
         }
-        assert_eq!(c.view(7200).step, Step::ListOwner);
+        assert_eq!(c.view(7200).step, Step::ListOwner(Door::Label));
     }
 }
 #[test]
@@ -137,28 +137,28 @@ fn confirmed_label_application_cannot_replace_person_approval() {
     // Even a persisted legacy label observation cannot authorize the revision.
     let mut c = Case::new();
     c.judge("owner");
-    assert_eq!(c.pass(700).step, Step::ListOwner);
+    assert_eq!(c.pass(700).step, Step::ListOwner(Door::Judge));
     let mut legacy = serde_json::to_value(&c.memory).unwrap();
     legacy["owner_saw"] = serde_json::json!(c.scope());
     c.memory = serde_json::from_value(legacy).unwrap();
-    assert_eq!(c.pass(709).step, Step::ListOwner);
+    assert_eq!(c.pass(709).step, Step::ListOwner(Door::Judge));
     c.approve();
     assert_eq!(c.pass(710).step, Step::Merge);
     c.push("new-head-after-persons-answer");
     c.review("reviewer", Verdict::Clean, 720);
     c.judge("owner");
-    assert_eq!(c.view(900).step, Step::ListOwner);
+    assert_eq!(c.view(900).step, Step::ListOwner(Door::Judge));
 }
 #[test]
 fn the_newest_sealed_judge_verdict_for_the_revision_wins() {
     // handle.py:486: land after owner on this head supersedes it, but owner after land holds again.
     let mut c = Case::new();
     c.judge("owner");
-    assert_eq!(c.pass(700).step, Step::ListOwner);
+    assert_eq!(c.pass(700).step, Step::ListOwner(Door::Judge));
     c.judge("pass");
     assert_eq!(c.pass(800).step, Step::Merge);
     c.judge("owner");
-    assert_eq!(c.pass(900).step, Step::ListOwner);
+    assert_eq!(c.pass(900).step, Step::ListOwner(Door::Judge));
 }
 #[test]
 fn missing_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency() {

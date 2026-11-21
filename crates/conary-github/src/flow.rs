@@ -75,7 +75,7 @@ pub use switches::{DegradedPr, Held, Holding, InEffect, Status, Switch, status};
 mod ledger;
 
 mod approval;
-pub use approval::owner_approval;
+pub use approval::{Door, Request, Subject, owner_approval};
 
 mod handoff;
 

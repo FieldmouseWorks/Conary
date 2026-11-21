@@ -366,13 +366,29 @@ pub(crate) fn act<G: Write>(
             }
             Step::DisableAutoMerge => github.disable_auto_merge(&repo, f.number)?,
             Step::CloseAlreadyLanded => github.close(&repo, f.number)?,
-            Step::ListOwner => {
+            // A request is listed once: a later wait that joins it adds
+            // no listing, even where the label has since come off.
+            Step::ListOwner(door) => {
                 let label = f
                     .settings
                     .owner_label
                     .as_deref()
                     .ok_or("no owner label is set")?;
-                github.owner(&repo, f.number, label)?
+                let open = record.memory.owner.iter_mut().find(|r| {
+                    r.key.door == *door
+                        && r.key.pr == f.number
+                        && r.key.scope == f.revision.description
+                });
+                // The decision opened it, so its absence is a bug to
+                // surface, never a listing to skip or repeat.
+                let request = open.ok_or("no owner request is open for this listing")?;
+                if !request.listed {
+                    github.owner(&repo, f.number, label)?;
+                    request.listed = true;
+                    if !f.labels.iter().any(|l| l == label) {
+                        record.memory.labelled = true;
+                    }
+                }
             }
         }
         Ok(vec![kind, Failure::Status])

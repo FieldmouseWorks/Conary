@@ -246,10 +246,20 @@ fn observed_generations_survive_deleted_or_rewritten_decision_history() {
         } else {
             c.judge("owner");
         }
-        assert_eq!(c.pass(8000).step, Step::ListOwner);
+        // A held major names no door: it's the sweep's wait, not a listing.
+        let held = |n: &Next| {
+            if sweep {
+                n.step == Step::Wait { until: None }
+                    && n.description.starts_with("Major update held")
+            } else {
+                n.step == Step::ListOwner(Door::Judge)
+            }
+        };
+        let n = c.pass(8000);
+        assert!(held(&n), "{n:?}");
         c.hub.edit_flow_comment(REMI, 3, first + 1, &old);
         let n = c.pass(8100);
-        assert_eq!(n.step, Step::ListOwner); // Keep the authenticated Owner/Held decision, not just its counter.
+        assert!(held(&n), "{n:?}"); // Keep the authenticated Owner/Held decision, not just its counter.
         assert!(!matches!(n.step, Step::Merge | Step::JoinTrain));
         if sweep {
             c.sweep("ok");

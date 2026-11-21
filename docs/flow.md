@@ -153,6 +153,50 @@ label remains. Permission verification rereads the person's approval before
 admission, after publication and before use, including continued train grants.
 An empty `settings.people` list leaves owner-required decisions waiting.
 
+## Asking the owner
+
+The flow asks the owner only for a one-way door it names
+(`owner-only-for-doors`), and once for each decision
+(`one-question-per-decision`). A `ListOwner` step carries its door, from a
+closed set ([`flow::Door`](../crates/conary-github/src/flow/approval.rs)):
+`r2`, an R2 change; `outside`, an outside contribution; `judge`, a judge's
+`owner` verdict; `label`, the owner label set by a person. A decision with
+no door doesn't list the owner: the flow makes the call itself and its
+status shows it, overdue like any other wait.
+
+- A read too large to finish waits at no stage, named as the degraded
+  `snapshot` read ([Degraded paths](#degraded-paths)), until GitHub gives
+  it in full.
+- Two jobs on one revision that end without their answer start no third:
+  the wait is overdue at once, gets its [recovery](#deadlines) where one
+  applies (a timed-out run at the fix stage is run again), and then stays
+  overdue in the status, with no digest notice however long the PR has
+  been open.
+- A major update the dependency sweep held waits for the sweep, listed only
+  with a door the sweep names; today's sweep names none.
+- A hold past `hold_stall_after` is a stall in the status, never a listing.
+
+Each request has a subject key: its door, repository, PR and the intent
+fingerprint it binds, the same across heads that keep that intent. The flow
+keeps one open request per key in the PR's memory, and a later wait with
+the same key joins it: no new listing or notice, though the label has come
+off since. Next's `owner` is the request the decision lists or joins: its
+`key`, `since` (when it was first asked), `prs` (every PR waiting on it,
+the one its key names), its approval `marker` for the head now when the
+door takes one, a judge's `reason` from the flow's own judge's answer
+(model text, kept to the data directory and the status, never the ledger),
+and whether it's `listed`. A new intent is a new decision: a request for
+another one is closed. Joining never widens an approval: R2 still needs
+the marked review on the exact head ([Person approval](#person-approval)).
+
+The flow's own listing is no door. Memory's `labelled` says the flow put
+the owner label on, until a pass reads it off; only a label it didn't put
+on is a person's. A label put on before the flow kept that mark, by the
+steward or an earlier flow, still reads as a person's
+([#537](https://github.com/FieldmouseWorks/Conary/issues/537)). A decision,
+or a switch's step, saved before a listing named its door loads as a wait,
+and the next pass decides it again.
+
 ## State and workers
 
 `--data` (`CONARY_DATA`, by default the ledger directory's `data`
@@ -162,7 +206,8 @@ from the append-only operation log. Keep it private to the controller.
 Each PR has a JSON record containing its complete Memory, latest Next
 (including owner digest notices), effect receipts, job ownership and a
 monotonic invocation sequence. Only a ListOwner step adds the blocking owner
-label; a digest notice keeps the PR moving. Composite map keys are
+label, once for each request ([Asking the owner](#asking-the-owner)); a
+digest notice keeps the PR moving. Composite map keys are
 stored as ordered pairs. Atomic rename, file and directory sync protect each
 record. A repository file lock serializes mutating passes and kicks.
 
@@ -268,7 +313,7 @@ restart never makes it owed again, and an answer that comes late takes it out
 of the unanswered count. An answer that no
 longer counts was superseded, never lost: the flow asks again at once, and it
 doesn't count toward the two jobs that end without their answer before the
-owner is told. A judge job that ended without its answer is waited for and
+flow stops starting them. A judge job that ended without its answer is waited for and
 counted as before. A v2
 issuance says neither, so its pass or owner verdict never counts. The worker also
 retains the complete response with its verdict in the durable completion.
@@ -360,7 +405,7 @@ names all three. A configuration switch names a PR only at the step it
 keeps off: an omitted plugin when the step is that plugin's work; the train
 off when an R2 change would merge (an R2 change lands only through the
 train); no person list when a landing step needs a person's approval, or
-the PR waits on the owner for one (the owner label, an R2 change or a
+the PR waits on the owner for one (a person's owner label, an R2 change or a
 judge's owner verdict); no evidence verifier at any
 landing step. The PR's `description` stays the one its decision gives.
 
@@ -478,7 +523,8 @@ paths it records:
     unknown, so nothing starts for it); `default_branch`, no
     observation of the default branch's CI for a fix of it (the base is
     held); `snapshot`, a snapshot that stops short of the PR's reviews,
-    comments, labels or threads (the owner merges it). A stale test merge,
+    comments, labels or threads (the PR waits at no stage, overdue in the
+    status, until one reads in full). A stale test merge,
     or a base branch that's gone, is GitHub's answer, not a degradation.
   - Evidence's reads every check shares (`observations`: the head's checks,
     read again, failing or stopping short; `reviews`): the landing isn't
@@ -766,7 +812,7 @@ unavailable, or its answer lost) says so the same way, and isn't asked again
 either. The wait itself, its `overdue_at` and its stall clock, stays what
 was decided: after its recovery a stall is overdue in the flow's status. A
 PR the owner hears of already (open over a day) has no deadline here, and
-so no recovery.
+so no recovery, but for two lost jobs ([Asking the owner](#asking-the-owner)).
 
 ## Comparing decisions
 
@@ -784,7 +830,8 @@ Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice`, `priority` and, when
 any stop it, `switches` ([Switches](#switches)), when any path half-worked,
-`degraded` ([Degraded paths](#degraded-paths)), and
+`degraded` ([Degraded paths](#degraded-paths)), when it lists the owner,
+`owner` ([Asking the owner](#asking-the-owner)), and
 `revision` (`head`, `base`, `description`), the revision it was decided on;
 `error` reports a per-PR failure. Null deadlines remain explicit. These
 lines are suitable for comparing with the existing steward beside it,
@@ -832,6 +879,12 @@ list or the train off stops waits short of landing, while a steward without
 that switch carries on. Its line's `flow.switches` names the switch, so the
 stage it gives isn't read as the two seeing the PR differently. An omitted
 plugin leaves the stage as decided, so it explains no stage disagreement.
+
+**The steward asks the owner where the flow doesn't.** The steward lists
+the owner for a read too large to finish, two jobs lost and a held
+major; the flow lists only a [door](#asking-the-owner) and
+says the rest itself. Where the steward says `owner` and the flow waits on
+one of those, overdue, the two agree on the PR and differ on who's told.
 
 **The steward is a pass behind.** Not a difference: the steward's next pass
 says what the flow said. Right after the steward posts a review with

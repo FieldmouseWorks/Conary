@@ -601,6 +601,9 @@ pub struct Facts {
     pub owner_approved: bool,
     pub reviewers: BTreeMap<String, Reviewer>,
     pub judgment: Option<Judged>,
+    /// Why the flow's own judge answered `owner` on this revision, from its
+    /// worker's answer. None for a verdict only a mark on the PR carries.
+    pub judge_reason: Option<String>,
     pub judgment_generation: Option<u64>,
     pub major_generation: Option<u64>,
     pub jobs: BTreeMap<Kind, Job>,
@@ -764,6 +767,14 @@ pub struct Memory {
     /// ([`super::recover`]): each asked for once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovered: Vec<super::Recovered>,
+    /// The owner requests open for this PR, one for each key
+    /// ([`super::approval::ask`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner: Vec<super::Request>,
+    /// The flow put the owner label on, and no pass has read it off since:
+    /// its own listing, never a person's door.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub labelled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -790,7 +801,9 @@ pub enum Step {
     LeaveTrain,
     DisableAutoMerge,
     CloseAlreadyLanded,
-    ListOwner,
+    /// List the PR for its owner, for this one-way door and no other
+    /// reason ([`super::approval::ask`]).
+    ListOwner(super::Door),
     Retry {
         kind: Failure,
         at: u64,
@@ -858,4 +871,8 @@ pub struct Next {
     /// answer in full ([`super::recover`]). Left out when there's none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<super::Recovered>,
+    /// The owner request this decision lists or joins, and the door it's
+    /// for. Left out when it lists no one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<super::Request>,
 }

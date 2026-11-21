@@ -101,11 +101,13 @@ fn majors_threads_and_security_use_their_own_gates() {
     c.threads(1);
     assert!(matches!(c.view(8000).step, Step::Wait { .. }));
     c.sweep("held");
-    assert_eq!(c.view(8000).step, Step::ListOwner);
+    let n = c.view(8000);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert!(n.description.starts_with("Major update held"), "{n:?}");
     c.sweep("ok");
     assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));
     c.label(&["needs-peter"]);
-    assert_eq!(c.view(8000).step, Step::ListOwner);
+    assert_eq!(c.view(8000).step, Step::ListOwner(Door::Label));
     c.label(&["security"]);
     c.threads(0);
     assert_eq!(c.facts().dependency, Some(Dependency::Minor));

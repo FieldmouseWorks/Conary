@@ -301,7 +301,10 @@ fn landing_switches_hold_the_step_they_keep_off() {
     let mut r0 = super::flow_case::Case::new().facts();
     assert_ne!(r0.classified.class, conary_core::Class::R2);
     r0.labels.clear();
-    assert_eq!(pass(&config, &r0, Stage::Owner, Step::ListOwner), [0; 0]);
+    assert_eq!(
+        pass(&config, &r0, Stage::Owner, Step::ListOwner(Door::R2)),
+        [0; 0]
+    );
 
     // The owner label, with no one whose approval counts.
     let mut f = f;
@@ -309,7 +312,7 @@ fn landing_switches_hold_the_step_they_keep_off() {
     f.labels.insert("needs-peter".into());
     config.settings.people.clear();
     assert_eq!(
-        pass(&config, &f, Stage::Owner, Step::ListOwner),
+        pass(&config, &f, Stage::Owner, Step::ListOwner(Door::R2)),
         ["no_people"]
     );
 }

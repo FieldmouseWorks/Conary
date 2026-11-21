@@ -37,6 +37,7 @@ fn report(at: u64) -> Report {
             overdue_at: Some(at + 50),
             queued: None,
             recovery: None,
+            owner: None,
             proof: None,
             wait_on: None,
             on_usage: false,

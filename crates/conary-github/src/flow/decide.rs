@@ -9,18 +9,29 @@ pub(super) fn wait(stage: Stage, until: Option<u64>, why: &str) -> Decision {
     at(stage, Step::Wait { until }, why)
 }
 
-/// Hand the PR to its owner, or wait unlisted when no owner label is set.
-pub(super) fn owner(f: &Facts, why: &str) -> Decision {
+/// Hand the PR to its owner for a one-way door, or wait unlisted when no
+/// owner label is set. Only a door lists the owner: every other call is
+/// the flow's own, and its status shows it.
+pub(super) fn owner(f: &Facts, door: Door) -> Decision {
     if f.settings.owner_label.is_some() {
-        at(Stage::Owner, Step::ListOwner, why)
+        at(Stage::Owner, Step::ListOwner(door), &door.to_string())
     } else {
         wait(
             Stage::Owner,
             None,
-            &format!("{why}; no owner label is set to list it"),
+            &format!("{door}; no owner label is set to list it"),
         )
     }
 }
+
+/// Two jobs on one revision ended without their answer: no third is
+/// started, and the wait is overdue at once, for its recovery and then the
+/// flow's status ([`super::state`]), never the owner.
+pub(super) const LOST: &str = "Two jobs ended without their answer: stalled, no third is started";
+
+/// A held major waits for the sweep's word. The sweep names no door, so
+/// it's never the owner's to hear of.
+const HELD: &str = "Major update held by the dependency sweep, which names no door";
 
 pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
     if let Some(decision) = vacate(f, m) {
@@ -85,10 +96,16 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         );
     }
     if !f.trusted {
-        return owner(f, "Outside contribution: the owner reviews and merges it");
+        return owner(f, Door::Outside);
     }
+    // The snapshot's degraded read is recorded and named; its wait is the
+    // flow's, overdue in its status like any other.
     if !f.complete {
-        return owner(f, "Too much to read: the owner merges it");
+        return wait(
+            Stage::None,
+            None,
+            "Too much to read: waiting for a snapshot GitHub gives in full",
+        );
     }
     if f.labels.contains(&f.settings.hold_label) {
         return wait(Stage::None, None, "On hold (the hold label)");
@@ -103,13 +120,8 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    if f.settings
-        .owner_label
-        .as_ref()
-        .is_some_and(|l| f.labels.contains(l))
-        && !f.owner_approved
-    {
-        return owner(f, "The owner decides (the owner label)");
+    if super::approval::person_labelled(f, m) && !f.owner_approved {
+        return owner(f, Door::Label);
     }
     if let Some((kind, job)) = f
         .jobs
@@ -138,7 +150,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return owner(f, "Major update held for the owner");
+            return wait(Stage::Review, None, HELD);
         }
         if f.renovate
             && f.dependency.is_some()
@@ -181,7 +193,7 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             );
         }
         if f.major == Some(Major::Held) {
-            return owner(f, "Major update held for the owner");
+            return wait(Stage::Review, None, HELD);
         }
         if f.renovate && f.dependency == Some(Dependency::Major) && f.major.is_none() {
             return wait(
@@ -287,7 +299,7 @@ fn after_review(
         return hand(f, m, now, Kind::JudgeFailure, false);
     }
     if verdict == Some(Judgment::Owner) && !f.owner_approved {
-        return owner(f, "The judge sent it to the owner");
+        return owner(f, Door::Judge);
     }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
@@ -377,7 +389,7 @@ fn after_review(
         }
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
-            return owner(f, "R2: a person must decide before it lands");
+            return owner(f, Door::R2);
         }
     }
     if !f.authorship_known {
@@ -581,7 +593,7 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
                     false
                 };
                 if second {
-                    return owner(f, "Two jobs ended without their answer");
+                    return wait(stage, None, LOST);
                 }
                 if j.state == JobState::Broken {
                     let due = if let Some(due) = m.broken_jobs.get(&j.id) {

@@ -139,8 +139,8 @@ id = "one-question-per-decision"
 lesson = "A person is asked once per decision; a later wait on the same decision joins the open question."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/649"]
 applies = ["flow", "person approval", "M6 slice 5d"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/flow.md#person-approval", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/314"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/flow.md#asking-the-owner", "crates/conary-github/src/sim/tests/flow_doors.rs", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/314"]
 
 [[lessons]]
 id = "switches-show-their-effect"
@@ -206,8 +206,8 @@ id = "owner-only-for-doors"
 lesson = "The flow asks the owner only for a one-way door it names; every other call it makes, records and shows."
 from = ["https://github.com/FieldmouseWorks/remi/issues/1241", "https://github.com/FieldmouseWorks/burrow/issues/1108"]
 applies = ["flow", "person approval", "M6 slice 5d", "M6 slice 7"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision", "https://github.com/FieldmouseWorks/Conary/issues/314", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/flow.md#asking-the-owner", "crates/conary-github/src/sim/tests/flow_doors.rs", "docs/m6-properties.md#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision", "https://github.com/FieldmouseWorks/Conary/issues/314", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "waiting-costs-nothing"

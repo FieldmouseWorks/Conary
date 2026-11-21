@@ -27,7 +27,8 @@ fn claim() -> Case {
 }
 #[test]
 fn an_unpushed_fix_posts_nothing_and_retries_as_a_job_without_its_answer() {
-    // unpushed.py:115-142: claiming a refused push is no answer; a second unanswered job goes to the owner.
+    // unpushed.py:115-142: claiming a refused push is no answer; a second
+    // unanswered job went to the owner, and is now a stall in the status.
     let mut c = claim();
     assert_eq!(c.pass(2400).step, Step::Wait { until: Some(2460) });
     assert_eq!(c.memory.unposted[&Kind::Findings].1, Unposted::Unpushed);
@@ -36,7 +37,9 @@ fn an_unpushed_fix_posts_nothing_and_retries_as_a_job_without_its_answer() {
     c.claims[0].job.id = "fix-2".into();
     c.claims[0].job.repeated = true;
     assert!(matches!(c.pass(3000).step, Step::Wait { .. }));
-    assert_eq!(c.pass(3060).step, Step::ListOwner);
+    let n = c.pass(3060);
+    assert!(n.description.starts_with("Two jobs ended"), "{n:?}");
+    assert_eq!(n.overdue_at, Some(3060));
 }
 #[test]
 fn only_the_actual_pushed_head_allows_fix_answers_to_post() {

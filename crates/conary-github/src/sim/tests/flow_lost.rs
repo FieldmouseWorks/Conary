@@ -37,10 +37,12 @@ fn unanswered_jobs_are_counted_from_observations_not_a_callers_retry_flag() {
         c.jobs.insert(kind, job(&c, "first", JobState::Done));
         assert!(matches!(c.pass(8000).step, Step::Wait { .. }));
         let n = c.pass(8060);
-        assert_ne!(n.step, Step::ListOwner);
+        assert!(!n.description.starts_with("Two jobs ended"), "{n:?}");
         c.jobs.insert(kind, job(&c, "second", JobState::Done));
         assert!(matches!(c.pass(8200).step, Step::Wait { .. }));
-        assert_eq!(c.pass(8260).step, Step::ListOwner);
+        let n = c.pass(8260);
+        assert!(n.description.starts_with("Two jobs ended"), "{n:?}");
+        assert_eq!(n.overdue_at, Some(8260));
     }
 }
 #[test]
