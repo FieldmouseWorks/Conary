@@ -37,6 +37,44 @@ fn green_lands_in_order_with_the_trains_status_then_finishes_on_trunks_tree() {
     assert_eq!(hub.held(REMI, &train_branch(next)), [3, 4, 6].map(head));
 }
 
+// A store takes the ledger's lock only for each write, but a step holds it
+// from its first read of GitHub to its last merge: two steps never build or
+// land at once, and nothing that follows the rules moves trunk between a
+// step's read of it and its merge.
+#[test]
+fn a_step_holds_the_ledgers_lock_throughout() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = store(&dir);
+    let hub = github(&[3, 4]);
+    join_all(&mut store, &hub, &[3, 4]);
+    let (id, _) = gating(&step_once(&mut store, &hub));
+    hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
+    let lock = dir.path().join("lock");
+    let held = || std::fs::File::open(&lock).unwrap().try_lock().is_err();
+    assert!(!held());
+    let seen: Vec<std::rc::Rc<std::cell::Cell<Option<bool>>>> =
+        (0..3).map(|_| Default::default()).collect();
+    for (on, seen) in [
+        On::from(Call::DefaultBranch),
+        landing(),
+        On::from(Call::Land).pr(4),
+    ]
+    .into_iter()
+    .zip(&seen)
+    {
+        let (seen, lock) = (std::rc::Rc::clone(seen), lock.clone());
+        hub.race(on, move |_| {
+            let held = std::fs::File::open(&lock).unwrap().try_lock().is_err();
+            seen.set(Some(held));
+        });
+    }
+    assert_eq!(step_once(&mut store, &hub).landed, [3, 4]);
+    for seen in &seen {
+        assert_eq!(seen.get(), Some(true));
+    }
+    assert!(!held());
+}
+
 #[test]
 fn trunk_that_moved_meanwhile_isnt_the_candidates_tree() {
     let dir = tempfile::tempdir().unwrap();

@@ -53,6 +53,9 @@ pub(crate) enum Call {
     MakeCommit,
     OpenPull,
     PullsFrom,
+    Ref,
+    RefCommit,
+    SetRef,
 }
 
 /// Which calls a fault is for: a kind, and if a test narrows it, only in

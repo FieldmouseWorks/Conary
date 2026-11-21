@@ -17,7 +17,7 @@ use crate::undo::Reverts;
 use super::faults::{Asked, Call};
 use super::{FRESH, Hub, STEWARD, World, fixtures, parse};
 
-fn not_found(what: impl std::fmt::Display) -> ApiError {
+pub(super) fn not_found(what: impl std::fmt::Display) -> ApiError {
     ApiError::new(format!("{what}: Not Found"))
 }
 

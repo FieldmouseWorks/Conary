@@ -8,7 +8,7 @@ use ed25519_dalek::SigningKey;
 
 use crate::id::OpId;
 use crate::ledger::{Invalid, Ledger};
-use crate::log::{Anchor, Lock, LogError, OpLog};
+use crate::log::{self, Anchor, Lock, LogError, OpLog};
 use crate::op::Body;
 
 #[derive(Debug)]
@@ -38,21 +38,35 @@ impl From<LogError> for StoreError {
     }
 }
 
+/// The ledger open for writing. It holds the writer lock only while it
+/// writes: each op, or each batch under one [`Store::writer`], takes it, and
+/// first reads what other writers appended since, so every op is admitted
+/// against the ledger as the log holds it then.
 pub struct Store {
     log: OpLog,
     ledger: Ledger,
+    /// An op another writer appended that doesn't apply: the log and the
+    /// ledger no longer agree, so nothing more is written.
+    broken: Option<(OpId, Invalid)>,
 }
 
 impl Store {
     /// Opens the ledger in `lock`'s directory for writing, refusing a log
     /// that doesn't hold `anchor`, the newest one its caller holds (and read
-    /// under that lock, so no other writer moved it since).
+    /// under that lock, so no other writer moved it since). The lock is let
+    /// go once it's open.
     pub fn open(lock: Lock, key: SigningKey, anchor: Option<Anchor>) -> Result<Self, StoreError> {
         let (log, ops) = OpLog::open(lock, key, anchor)?;
         let ledger = Ledger::replay(&ops).map_err(|(id, e)| StoreError::Replay(id, e))?;
-        Ok(Self { log, ledger })
+        Ok(Self {
+            log,
+            ledger,
+            broken: None,
+        })
     }
 
+    /// The ledger as of this store's last write, or its opening: another
+    /// writer's ops are read at the next write.
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
     }
@@ -62,9 +76,108 @@ impl Store {
         self.log.head()
     }
 
-    /// The writer lock this store holds.
+    /// The ledger's directory.
+    pub fn dir(&self) -> &std::path::Path {
+        self.log.dir()
+    }
+
+    /// Takes the writer lock, waiting for any other writer, and applies what
+    /// other writers appended since: a batch of writes, until it's dropped.
+    pub fn writer(&mut self) -> Result<Writer<'_>, StoreError> {
+        self.whole()?;
+        let (log, ops) = self.log.writer()?;
+        Self::catch_up(&mut self.ledger, &mut self.broken, &ops)?;
+        Ok(Writer {
+            log,
+            ledger: &mut self.ledger,
+        })
+    }
+
+    /// Takes the writer lock, applies what other writers appended, and
+    /// holds it, every write after included, until the store is dropped:
+    /// for a writer whose reads, of the ledger and GitHub, must still hold
+    /// when it writes, such as a `cn` command.
+    pub fn hold(&mut self) -> Result<(), StoreError> {
+        self.whole()?;
+        let ops = self.log.hold()?;
+        let caught = Self::catch_up(&mut self.ledger, &mut self.broken, &ops);
+        if caught.is_err() {
+            self.log.release();
+        }
+        caught
+    }
+
+    /// [`Store::hold`] through `then` only, such as a train step. Within
+    /// another's hold, `then` just runs.
+    pub fn holding<T>(&mut self, then: impl FnOnce(&mut Self) -> T) -> Result<T, StoreError> {
+        let outer = self.log.holds();
+        self.hold()?;
+        let done = then(self);
+        if !outer {
+            self.log.release();
+        }
+        Ok(done)
+    }
+
+    /// Refuses to write once the log and the ledger disagree.
+    fn whole(&self) -> Result<(), StoreError> {
+        match &self.broken {
+            Some((id, e)) => Err(StoreError::Replay(*id, e.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies `ops`, other writers' since the last write.
+    fn catch_up(
+        ledger: &mut Ledger,
+        broken: &mut Option<(OpId, Invalid)>,
+        ops: &[crate::op::Op],
+    ) -> Result<(), StoreError> {
+        for op in ops {
+            if let Err(e) = ledger.check(&op.op.body) {
+                *broken = Some((op.id, e.clone()));
+                return Err(StoreError::Replay(op.id, e));
+            }
+            ledger.apply(op);
+        }
+        Ok(())
+    }
+
+    /// Records one op, now.
+    pub fn record(&mut self, body: Body) -> Result<OpId, StoreError> {
+        self.record_at(body, now())
+    }
+
+    pub fn record_at(&mut self, body: Body, at: i64) -> Result<OpId, StoreError> {
+        self.writer()?.record_at(body, at)
+    }
+}
+
+/// The ledger under its writer lock: what [`Store::writer`] returns. The
+/// lock goes when it's dropped.
+pub struct Writer<'a> {
+    log: log::Writer<'a>,
+    ledger: &'a mut Ledger,
+}
+
+impl Writer<'_> {
+    pub fn ledger(&self) -> &Ledger {
+        self.ledger
+    }
+
+    /// The last op recorded, to anchor the log at.
+    pub fn head(&self) -> Option<Anchor> {
+        self.log.head()
+    }
+
+    /// The writer lock this batch holds.
     pub fn lock(&self) -> &Lock {
         self.log.lock()
+    }
+
+    /// Whether the log holds `anchor`.
+    pub fn check(&self, anchor: Anchor) -> Result<(), LogError> {
+        self.log.check(anchor)
     }
 
     /// Records one op, now.
@@ -538,7 +651,7 @@ mod tests {
         let body: Body = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&body).unwrap(), json);
         let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), anchor).unwrap();
-        log.append(body, now()).unwrap();
+        log.writer().unwrap().0.append(body, now()).unwrap();
         let anchor = log.head();
         drop(log);
         let path = dir.path().join("ops.jsonl");

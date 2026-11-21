@@ -156,6 +156,57 @@ fn every_write_checks_the_anchor_on_github_and_moves_it_on() {
     assert_eq!(verify(dir.path(), &made.key, &f, REPO).unwrap(), Some(head));
 }
 
+// Two writers open at once take the lock only for each write and each
+// move: each reads what the other appended, and moves the anchor on from
+// where the other left it, so no op or move is lost.
+#[test]
+fn writers_that_take_turns_keep_every_op_and_the_anchor_at_the_head() {
+    crate::sim::unblocked(30, || {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fake {
+            ledger: RefCell::new(Some(dir.path().to_owned())),
+            ..Fake::default()
+        };
+        let made = init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        let writer = || {
+            let key = log::load_signing_key(&key_path(dir.path())).unwrap();
+            open(dir.path(), key, &f, REPO).unwrap()
+        };
+        let (mut a, mut b) = (writer(), writer());
+        observe(&mut a.store, 1);
+        observe(&mut b.store, 2);
+        a.publish(&f).unwrap();
+        observe(&mut b.store, 3);
+        b.publish(&f).unwrap();
+        observe(&mut a.store, 4);
+        a.publish(&f).unwrap();
+        // Nothing new: the ref already names the head.
+        b.publish(&f).unwrap();
+
+        let ops = log::read(dir.path(), &made.key, None).unwrap();
+        let prs: Vec<u64> = ops
+            .iter()
+            .map(|o| match &o.op.body {
+                Body::Observe { pr, .. } => *pr,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(prs, [1, 2, 3, 4]);
+        let head = Anchor {
+            seq: 4,
+            op: ops[3].id,
+        };
+        assert_eq!(remote(&f).anchor, Some(head));
+        assert_eq!(*f.moves.borrow(), 4);
+        assert_eq!(log::load_anchor(dir.path()).unwrap(), Some(head));
+        for w in [&a, &b] {
+            assert_eq!(w.store.head(), Some(head));
+        }
+        f.ledger.take();
+        assert_eq!(verify(dir.path(), &made.key, &f, REPO).unwrap(), Some(head));
+    });
+}
+
 #[test]
 fn a_log_that_lost_ops_or_its_anchor_is_refused() {
     let f = Fake::default();

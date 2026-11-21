@@ -394,6 +394,8 @@ mod flow_switches;
 
 mod flow_pass_landing;
 
+mod flow_pass_lock;
+
 mod flow_pass_train;
 
 mod flow_pass_r3;

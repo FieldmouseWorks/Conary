@@ -2,9 +2,11 @@
 //! ref on GitHub naming the ledger's key and the newest op its writer
 //! published. A hash chain can't show whole ops cut from its end, or a log
 //! removed and started over, so the writer checks the log against this ref
-//! before it writes anything and moves the ref on after, all under the
-//! ledger's lock. Each move is a commit on the one before it, so the ref's
-//! history is the anchor's.
+//! before it writes anything, and checks it again as the ref stands when it
+//! moves the ref on after, each under the ledger's lock. Between those it
+//! holds the lock only while it writes, so a writer's reads of GitHub never
+//! hold up another writer. Each move is a commit on the one before it, so
+//! the ref's history is the anchor's.
 //!
 //! The ref is the ledger's identity: one ledger per repository, set up once
 //! by [`init`]. A writer never makes a key, so losing the ledger's directory
@@ -295,12 +297,15 @@ pub fn init(
 /// The ledger, open for writing, once the anchor on GitHub is found to be
 /// its own, every move on it since the copy beside the log goes forward, and
 /// the log holds each of them. The anchor is read under the ledger's lock and
-/// the log isn't touched until it's checked against it.
+/// the log isn't touched until it's checked against it. Then the lock is let
+/// go: the store takes it for each write, and [`Anchored::publish`] for the
+/// move.
 pub struct Anchored {
     pub store: Store,
     repo: String,
+    key: VerifyingKey,
+    /// The move on the ref this writer last checked the log against.
     kept: Kept,
-    remote: Remote,
 }
 
 pub fn open(
@@ -322,23 +327,50 @@ pub fn open(
     Ok(Anchored {
         store,
         repo: repo.to_owned(),
+        key: remote.key,
         kept,
-        remote,
     })
 }
 
 impl Anchored {
     /// Moves the anchor on GitHub to the log's head, and keeps a copy beside
-    /// the log for readers. Nothing to move when nothing was written.
-    pub fn publish(&self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
-        let head = self.store.head();
-        let at = if head == self.remote.anchor {
-            self.kept.commit.clone()
+    /// the log for readers, all under the ledger's lock. Other writers may
+    /// have written and moved the ref since this one last checked it, so the
+    /// ref is read again as it stands: its tip and every move since that
+    /// check must name this ledger, go forward and be held by the log, and
+    /// the move is made on that tip, only if it's still there. Nothing to
+    /// move when the ref already names the log's head.
+    pub fn publish(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
+        let Self {
+            store,
+            repo,
+            key,
+            kept,
+        } = self;
+        let writer = store.writer()?;
+        let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
+        same_ledger(repo, &remote, key)?;
+        for a in checkpoints(anchors, repo, &tip, &remote, Some(&kept.commit))?
+            .into_iter()
+            .chain(remote.anchor)
+        {
+            writer.check(a)?;
+        }
+        let head = writer.head();
+        let moved = if head == remote.anchor {
+            tip
         } else {
-            let msg = message(&self.remote.key, head);
-            anchors.set(&self.repo, REF, Some(&self.kept.commit), &msg)?
+            let message = message(key, head);
+            let commit = anchors.set(repo, REF, Some(&tip.commit), &message)?;
+            Kept {
+                commit,
+                message,
+                parents: vec![tip.commit],
+            }
         };
-        log::save_anchor(self.store.lock(), head, &at)?;
+        log::save_anchor(writer.lock(), head, &moved.commit)?;
+        drop(writer);
+        *kept = moved;
         Ok(())
     }
 }

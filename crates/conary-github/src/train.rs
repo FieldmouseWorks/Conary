@@ -637,6 +637,18 @@ pub fn step(
     if settings.require.is_empty() {
         return Err(TrainError::NothingRequired);
     }
+    store.holding(|store| held_step(store, forge, source, config, repo, settings))?
+}
+
+/// [`step`], under the ledger's lock.
+fn held_step(
+    store: &mut Store,
+    forge: &dyn Forge,
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    settings: &Settings,
+) -> Result<Stepped, TrainError> {
     let mut stepped = Stepped {
         conflicts: Vec::new(),
         empty: Vec::new(),
