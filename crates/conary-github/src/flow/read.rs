@@ -71,7 +71,7 @@ pub fn read(
         }
         // What the reads before it met and answered is kept with it.
         Err(mut e) => {
-            e.reads = std::mem::take(reads);
+            e.reads = Box::new(std::mem::take(reads));
             Err(e)
         }
     }

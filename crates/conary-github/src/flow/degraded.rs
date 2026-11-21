@@ -130,7 +130,7 @@ impl Reads {
 pub struct ReadError {
     pub degradation: Degradation,
     pub error: crate::ApiError,
-    pub reads: Reads,
+    pub reads: Box<Reads>,
 }
 impl ReadError {
     pub(crate) fn new(read: Reading, error: crate::ApiError) -> Self {
@@ -146,7 +146,7 @@ impl ReadError {
                 why,
             },
             error,
-            reads: Reads::default(),
+            reads: Box::default(),
         }
     }
     /// Everything this read met: it, then the reads before it that
