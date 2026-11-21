@@ -85,10 +85,13 @@ pub(super) fn reviewer(
 ) -> Result<Vec<Body>, IngestError> {
     use crate::flow::{Verdict, reviews};
     let since = since.map(reviews::timestamp).transpose()?;
-    let (words, _) = reviews::words(&pr.head.sha, reviews, comments, |login| {
+    // A summary whose mark didn't parse said nothing to record: the flow's
+    // decision is what counts it failed.
+    let said = reviews::words(&pr.head.sha, reviews, comments, |login| {
         config.review_authors.iter().any(|a| a == login)
     })?;
-    let mut words: Vec<_> = words
+    let mut words: Vec<_> = said
+        .words
         .into_iter()
         .filter(|w| since.is_none_or(|s| w.at >= s))
         .collect();

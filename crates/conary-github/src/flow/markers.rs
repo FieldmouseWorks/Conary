@@ -184,6 +184,10 @@ pub(super) struct Markers {
     pub major_generation: Option<u64>,
     pub judge_asked: bool,
     pub major: Option<Major>,
+    /// Why a verdict mark the settings give a key for, by an account they
+    /// trust for verdicts, didn't parse: it can't be authenticated, so it
+    /// may be a newer generation than any that did ([`super::degraded`]).
+    pub unparsed: Option<&'static str>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -249,10 +253,11 @@ pub(super) fn read(
         major_generation: None,
         judge_asked: false,
         major: None,
+        unparsed: None,
     };
     let current = Revision::from(pull);
     let pat =
-        regex::Regex::new(r"(?m)^<!-- (autoland-judgment|major-verdict):(v2|v3) (\{[^\n]*\}) -->$")
+        regex::Regex::new(r"(?m)^<!-- (autoland-judgment|major-verdict):(v2|v3) ([^\n]*) -->$")
             .expect("constant regex");
     let legacy =
         regex::Regex::new(r"<!-- autoland-judgment: ([a-z]+) ([0-9a-f]{40}) ([0-9a-f]{32}) -->")
@@ -307,6 +312,7 @@ pub(super) fn read(
                 continue;
             };
             let Ok(signed) = serde_json::from_str::<Signed>(&m[3]) else {
+                result.unparsed = Some("it isn't a signed issuance");
                 continue;
             };
             let issued = &signed.issued;

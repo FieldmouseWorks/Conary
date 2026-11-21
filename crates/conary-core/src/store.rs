@@ -165,6 +165,12 @@ mod tests {
                 },
                 r#"{"path":"read","read":"merge_tree"}"#,
             ),
+            (
+                Degraded::Mark {
+                    mark: crate::op::Mark::ReleaseAge,
+                },
+                r#"{"path":"mark","mark":"release_age"}"#,
+            ),
         ];
         for (what, spelled) in &paths {
             assert_eq!(serde_json::to_string(what).unwrap(), *spelled);

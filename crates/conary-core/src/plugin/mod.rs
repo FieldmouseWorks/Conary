@@ -463,6 +463,21 @@ pub enum Verdict {
     Fail,
 }
 
+impl Answer {
+    /// The kind of work this answers; a description answers none.
+    pub fn kind(&self) -> Option<Kind> {
+        match self {
+            Self::Describe { .. } => None,
+            Self::Review { .. } => Some(Kind::Review),
+            Self::Fix { .. } => Some(Kind::Fix),
+            Self::Judge { .. } => Some(Kind::Judge),
+            Self::Proof { .. } => Some(Kind::Proof),
+            Self::Job { .. } => Some(Kind::Job),
+            Self::Prepare { .. } => Some(Kind::Prepare),
+        }
+    }
+}
+
 impl Task {
     pub fn kind(&self) -> Option<Kind> {
         match self {

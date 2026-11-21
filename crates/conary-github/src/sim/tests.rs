@@ -381,6 +381,7 @@ mod flow_pass_service;
 mod flow_pass_slots;
 
 mod flow_degraded;
+mod flow_degraded_marks;
 mod flow_degraded_reads;
 mod flow_priority;
 

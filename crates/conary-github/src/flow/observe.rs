@@ -27,40 +27,42 @@ fn hydrate_with(
     working: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<()> {
     for work in &record.jobs {
-        let completion: Completion = if working.is_some_and(|ids| ids.contains(&work.job.id))
-            && jobs::stopped(work).is_some()
-        {
-            Completion::default()
-        } else {
-            // An answer that doesn't read is taken as still running, as
-            // occupancy takes it, and kept in the facts: the PR's decision
-            // waits on it, nothing is granted while it lasts, and one that
-            // stops reading before permission is used withdraws it
-            // ([`super::degraded`]). Any other failure is the pass's.
-            let read = if dry_run {
-                jobs::inspect(work, now)
-            } else {
-                jobs::completion(work, now)
-            };
-            match read {
-                Err(e) if e.is::<jobs::Unreadable>() => {
-                    f.unreadable.push(super::Degradation {
-                        what: super::Degraded::Answer {
-                            job: work.job.id.clone(),
-                            kind: work.purpose.kind(),
-                        },
-                        why: super::degraded::why(&*e),
-                    });
-                    Completion::default()
-                }
-                read => read?,
+        // An answer or stop marker that doesn't read is taken as still
+        // running, as occupancy takes it, and kept in the facts: the PR's
+        // decision waits on it, nothing is granted while it lasts, and one
+        // that stops reading before permission is used withdraws it
+        // ([`super::degraded`]). Any other failure is the pass's.
+        let read: Result<_> = jobs::stopped(work)
+            .map_err(super::persist::Error::from)
+            .and_then(|stop| {
+                Ok(
+                    if working.is_some_and(|ids| ids.contains(&work.job.id)) && stop.is_some() {
+                        (stop, Completion::default())
+                    } else if dry_run {
+                        (stop, jobs::inspect(work, now)?)
+                    } else {
+                        (stop, jobs::completion(work, now)?)
+                    },
+                )
+            });
+        let (stop, completion) = match read {
+            Err(e) if e.is::<jobs::Unreadable>() => {
+                f.unreadable.push(super::Degradation {
+                    what: super::Degraded::Answer {
+                        job: work.job.id.clone(),
+                        kind: work.purpose.kind(),
+                    },
+                    why: super::degraded::why(&*e),
+                });
+                (None, Completion::default())
             }
+            read => read?,
         };
         let mut job = work.job.clone();
         // Stopped work, obsolete, paused or held, is neither an answer nor
         // a failure: it's retired, and its request starts again if it's
         // still wanted.
-        if jobs::stopped(work).is_some() && completion.result.is_some() {
+        if stop.is_some() && completion.result.is_some() {
             f.stopped_jobs.insert(job.id.clone());
             continue;
         }
@@ -136,7 +138,8 @@ fn hydrate_with(
                 }
             }
             // Readiness only: nothing a preparation answers is a verdict,
-            // and any other answer is a preparation that failed.
+            // and a failure is a preparation that failed. An answer to
+            // another kind of work never gets here: it doesn't read.
             Purpose::Prepare => f.proof_data.prepared.push(Preparation {
                 answer: match &completion.result {
                     Some(Ok(plugin::Response {

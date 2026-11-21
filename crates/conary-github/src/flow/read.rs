@@ -267,6 +267,7 @@ fn gather(
     let records = reads.ask(Reading::Reviews, source.reviews(&repository, pr))?;
     let comments = reads.ask(Reading::Reviews, source.comments(&repository, pr))?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
+    reads.mark(super::Mark::Verdict, markers.unparsed);
     facts.changes_requested = super::reviews::changes_requested(&records);
     facts.review_bodies = super::judging::review_bodies(&records);
     facts.owner_approved =
@@ -277,6 +278,7 @@ fn gather(
         &comments,
         extra.since,
         &facts.settings,
+        reads,
     )
     .map_err(|e| ReadError::with(Reading::Reviews, UNPARSED.into(), e))?;
     facts.judgment = markers.judgment;
@@ -358,7 +360,16 @@ fn gather(
         .map(|c| c.name.as_str())
         .collect();
     if renovate && red == ["renovate/artifacts"] {
-        facts.release_at = super::gates::release(&comments, &facts.settings);
+        facts.release_at = match super::gates::release(&comments, &facts.settings) {
+            Ok(at) => {
+                reads.mark(super::Mark::ReleaseAge, None);
+                at
+            }
+            Err(e) => {
+                reads.mark(super::Mark::ReleaseAge, Some(e.0));
+                None
+            }
+        };
     }
     facts.has_ci = ci.has_ci;
     facts.checks = ci

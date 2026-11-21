@@ -378,9 +378,20 @@ impl Pass<'_> {
                     next.description =
                         "R2 landing requires the merge train and exact candidate evidence".into();
                 }
-                // A degraded record or answer counts as failed: the PR waits
-                // on it, granted nothing.
-                super::degraded::wait(&mut next, &read);
+                // A degraded record, answer or mark counts as failed: the PR
+                // waits on it, granted nothing.
+                let failed: Vec<_> = read
+                    .iter()
+                    .chain(
+                        facts
+                            .reads
+                            .met
+                            .iter()
+                            .filter(|d| super::degraded::waits(&d.what)),
+                    )
+                    .cloned()
+                    .collect();
+                super::degraded::wait(&mut next, &failed);
                 let mut looked = std::collections::BTreeSet::new();
                 // The reads it went on past, or that stopped short, have
                 // each held what they were for failed already.
@@ -420,9 +431,9 @@ impl Pass<'_> {
                     repo,
                     pr,
                 );
-                // A record or answer that didn't read books the pass again,
-                // to read it again.
-                if !read.is_empty() && report.error.is_none() {
+                // A record, answer or mark that didn't read books the pass
+                // again, to read it again.
+                if !failed.is_empty() && report.error.is_none() {
                     report.error = Some(next.description.clone());
                 }
                 if let Step::HandFix(kind) = next.step

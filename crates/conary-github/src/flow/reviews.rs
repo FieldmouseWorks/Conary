@@ -101,9 +101,20 @@ pub(crate) struct Word<'a> {
     pub url: Option<&'a str>,
 }
 
-/// Everything the accounts `authors` admits said of `head`, its summary
-/// comments first and then its reviews, each as GitHub lists them, and the
-/// rounds it took: its reviews with findings, at any head. The flow
+/// Everything the reviewer said, as [`words`] reads it.
+pub(crate) struct Said<'a> {
+    /// What it said of the head, its summary comments first and then its
+    /// reviews, each as GitHub lists them.
+    pub words: Vec<Word<'a>>,
+    /// The rounds it took: its reviews with findings, at any head.
+    pub rounds: u32,
+    /// Why one of its summaries' marks didn't parse, if one didn't: it
+    /// says nothing, and the flow's decision waits on it
+    /// ([`super::degraded`]).
+    pub unparsed: Option<&'static str>,
+}
+
+/// Everything the accounts `authors` admits said of `head`. The flow
 /// ([`read`]) and the ledger (`ingest`) both read the reviewer through
 /// this. Fails on a time GitHub gave that isn't one.
 pub(crate) fn words<'a>(
@@ -111,13 +122,14 @@ pub(crate) fn words<'a>(
     records: &'a [GithubReview],
     comments: &'a [Comment],
     authors: impl Fn(&str) -> bool,
-) -> Result<(Vec<Word<'a>>, u32), ApiError> {
+) -> Result<Said<'a>, ApiError> {
     let theirs = |login: Option<&str>| login.is_some_and(&authors);
     let when = |t: Option<&str>| match t {
         None | Some("") => Ok(0),
         Some(t) => timestamp(t),
     };
     let mut said = Vec::new();
+    let mut unparsed = None;
     for c in comments {
         if !theirs(c.user.as_ref().map(|u| u.login.as_str())) {
             continue;
@@ -129,9 +141,16 @@ pub(crate) fn words<'a>(
             continue;
         };
         let Ok(mut all) = serde_json::from_str::<serde_json::Value>(&m[1]) else {
+            unparsed = Some("its summary's mark isn't JSON");
             continue;
         };
-        let Ok(code) = serde_json::from_value::<State>(all["code_review"].take()) else {
+        // A summary with no code review in it says nothing of one.
+        let code = all["code_review"].take();
+        if code.is_null() {
+            continue;
+        }
+        let Ok(code) = serde_json::from_value::<State>(code) else {
+            unparsed = Some("its summary's code review isn't a review's state");
             continue;
         };
         if code.commit_sha.as_deref() != Some(head) {
@@ -178,7 +197,11 @@ pub(crate) fn words<'a>(
             });
         }
     }
-    Ok((said, rounds))
+    Ok(Said {
+        words: said,
+        rounds,
+        unparsed,
+    })
 }
 
 /// What the reviewer last said of `head`, for each of the settings'
@@ -190,10 +213,16 @@ pub(super) fn read(
     comments: &[Comment],
     since: Since,
     settings: &Settings,
+    reads: &mut super::Reads,
 ) -> Result<BTreeMap<String, Reviewer>, ApiError> {
-    let (words, rounds) = words(head, records, comments, |l| {
+    let Said {
+        words,
+        rounds,
+        unparsed,
+    } = words(head, records, comments, |l| {
         settings.review_authors.contains(l)
     })?;
+    reads.mark(super::Mark::Review, unparsed);
     let mut said = Reviewer {
         changed: since.changed(),
         rounds,
@@ -282,7 +311,15 @@ mod tests {
         }
     }
     fn said(reviews: &[GithubReview], comments: &[Comment]) -> (Option<Verdict>, u32) {
-        let r = &read(HEAD, reviews, comments, Since::default(), &settings()).unwrap()["reviewer"];
+        let r = &read(
+            HEAD,
+            reviews,
+            comments,
+            Since::default(),
+            &settings(),
+            &mut Default::default(),
+        )
+        .unwrap()["reviewer"];
         (r.verdict, r.rounds)
     }
 
@@ -360,6 +397,7 @@ mod tests {
             &comments,
             Since::default(),
             &settings(),
+            &mut Default::default(),
         )
         .unwrap()["reviewer"];
         // Its clean receipt is a PR comment, not a review: no round.
@@ -373,6 +411,7 @@ mod tests {
             &[],
             Since::default(),
             &settings(),
+            &mut Default::default(),
         )
         .unwrap()["reviewer"];
         assert_eq!(
@@ -386,6 +425,7 @@ mod tests {
             &[],
             Since::default(),
             &settings(),
+            &mut Default::default(),
         )
         .unwrap()["reviewer"];
         assert_eq!((later.verdict, later.rounds), (None, 1));

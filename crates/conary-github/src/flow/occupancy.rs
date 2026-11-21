@@ -93,7 +93,7 @@ impl Occupancy {
         match what {
             Degraded::Record => true,
             Degraded::Answer { .. } => self.readable(pr),
-            Degraded::Lookup { .. } | Degraded::Read { .. } => false,
+            Degraded::Lookup { .. } | Degraded::Read { .. } | Degraded::Mark { .. } => false,
         }
     }
     /// Record what this pass met of `pr`'s record and answers, and what

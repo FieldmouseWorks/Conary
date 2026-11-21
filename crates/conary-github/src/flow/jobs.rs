@@ -225,7 +225,8 @@ pub fn completion(work: &Work, now: u64) -> Result<Completion> {
 pub fn inspect(work: &Work, now: u64) -> Result<Completion> {
     collect(work, now, false)
 }
-/// A worker's answer that's there and doesn't read: a degraded path
+/// A worker's answer that's there and doesn't read, or answers another
+/// kind of work, or a stop marker that doesn't say why: a degraded path
 /// ([`super::degraded`]), told apart from a failure to act on one.
 #[derive(Debug)]
 pub struct Unreadable(pub persist::Error);
@@ -239,16 +240,27 @@ impl std::error::Error for Unreadable {
         Some(&*self.0)
     }
 }
+/// The worker's answer, read only with its stop marker: what became of it
+/// is both.
 fn collect(work: &Work, now: u64, mutate: bool) -> Result<Completion> {
+    stopped(work)?;
     let answer: Completion =
         persist::load(&work.path.with_extension("answer")).map_err(Unreadable)?;
+    // The runner refuses an answer to another kind of work, so one here is
+    // an answer file that says something it never wrote.
+    if let Some(Ok(response)) = &answer.result
+        && response.answer.kind() != Some(work.purpose.kind())
+    {
+        let unparsed = super::degraded::Unparsed("it answers another kind of work");
+        return Err(Unreadable(Box::new(unparsed)).into());
+    }
     if (answer.result.is_none() && now >= work.deadline) || answer.at > work.deadline {
         let timed_out = Completion {
             at: work.deadline,
             result: Some(Err("plugin exceeded deadline or worker was lost".into())),
         };
         if mutate {
-            mark(work, b"deadline\n")?;
+            mark(work, DEADLINE)?;
             persist::save_once(&work.path.with_extension("answer"), &timed_out)?;
         }
         return Ok(timed_out);
@@ -259,24 +271,36 @@ fn collect(work: &Work, now: u64, mutate: bool) -> Result<Completion> {
 pub fn cancel(work: &Work, why: super::pause::Stop) -> Result<()> {
     mark(work, why.marker())
 }
+/// The marker a worker stopped at its deadline has.
+const DEADLINE: &[u8] = b"deadline\n";
 /// Why a worker was asked to stop, if it was asked as a stop rather than at
-/// its deadline.
-pub(crate) fn stopped(work: &Work) -> Option<super::pause::Stop> {
-    std::fs::read(work.path.with_extension("cancel"))
-        .ok()
-        .and_then(|marker| super::pause::Stop::from_marker(&marker))
+/// its deadline. A marker that can't be read, or that says neither, is
+/// [`Unreadable`].
+pub(crate) fn stopped(work: &Work) -> std::result::Result<Option<super::pause::Stop>, Unreadable> {
+    let marker = match std::fs::read(work.path.with_extension("cancel")) {
+        Ok(marker) => marker,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Unreadable(e.into())),
+    };
+    match super::pause::Stop::from_marker(&marker) {
+        Some(stop) => Ok(Some(stop)),
+        None if marker == DEADLINE => Ok(None),
+        None => Err(Unreadable(Box::new(super::degraded::Unparsed(
+            "its stop marker says neither a stop nor its deadline",
+        )))),
+    }
 }
-/// Write the worker's cancellation marker, unless one is already there: the
-/// runner reads only that it exists, the flow what it says.
+/// Write the worker's cancellation marker whole, unless one is already
+/// there: the runner reads only that it exists, the flow what it says.
 fn mark(work: &Work, marker: &[u8]) -> Result<()> {
     use std::io::Write;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(work.path.with_extension("cancel"))
-    {
-        Ok(mut file) => Ok(file.write_all(marker)?),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+    let path = work.path.with_extension("cancel");
+    let mut temp = tempfile::NamedTempFile::new_in(path.parent().ok_or("job path has no parent")?)?;
+    temp.write_all(marker)?;
+    temp.as_file().sync_all()?;
+    match temp.persist_noclobber(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
