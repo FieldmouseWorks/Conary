@@ -399,10 +399,6 @@ pub struct Settings {
     /// Renovate's login, whose comments say when a refresh may land.
     #[schemars(extend("x-spender" = false))]
     pub renovate_login: Option<String>,
-    /// Unread: the label on an automerged upstream batch, from when Renovate
-    /// merged its own PRs. Kept until burrow stops rendering it.
-    #[schemars(extend("x-spender" = false))]
-    pub batch_label: String,
     /// The label that holds a PR.
     #[schemars(extend("x-spender" = false))]
     pub hold_label: String,
@@ -450,10 +446,6 @@ pub struct Settings {
     /// Seconds a PR may wait in the train before it's overdue.
     #[schemars(extend("x-spender" = false))]
     pub train_stall_after: u64,
-    /// Unread: seconds a Renovate PR could wait on its own automerge, from
-    /// when Renovate merged its own PRs. Kept until burrow stops rendering it.
-    #[schemars(extend("x-spender" = false))]
-    pub renovate_merge_after: u64,
     /// Seconds Renovate is given to act after it's asked to rebase.
     #[schemars(extend("x-spender" = false))]
     pub renovate_run: u64,
@@ -520,7 +512,6 @@ impl Default for Settings {
             bot_emails: BTreeSet::new(),
             renovate_email: None,
             renovate_login: None,
-            batch_label: "upstream batch".into(),
             hold_label: "hold".into(),
             priority_labels: BTreeMap::from([
                 ("priority: high".into(), Level::High),
@@ -539,7 +530,6 @@ impl Default for Settings {
             stall_after: StallAfter::default(),
             hold_stall_after: 28800,
             train_stall_after: 7200,
-            renovate_merge_after: 7200,
             renovate_run: 7200,
             renovate_sweep: false,
         }
