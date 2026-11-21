@@ -179,6 +179,12 @@ settled PR.
   review loop) is a prerequisite of S2f: burrow is where loops run longest.
   Elsewhere a loop past the round cap waits for the judge plugin or the
   handback, as on remi.
+- **The `job` plugin**
+  ([SJ](https://github.com/FieldmouseWorks/Conary/issues/424)) serves FP11's
+  handoff to the stuck role. It lands off by default, and S2f's task turns
+  it on (`burrow.autoland.plugins.job.enable` in remi), as a switch of its
+  own, before burrow's. Until then FP11's handoff waits, named by
+  `no_plugin`.
 - **FP5b to FP10** stay after S1, as the owner directed on 11-19. None is
   needed for a PR to land correctly.
 
@@ -397,7 +403,8 @@ burrow goes last, as fence 10 says.
   - S2e has settled, and S2f-train has settled;
   - #314's second PR is live with all of fix, judge and proof. burrow had
     the most open PRs (30 on 11-20), and most need a fix round;
-  - FP9 and FP11 are live.
+  - FP9 and FP11 are live, and so is the `job` plugin that serves FP11's
+    stuck role.
 - **Configuration:**
   - `proofs.agents` as a `Build` recipe of `checks.x86_64-linux.agents`,
     one slot.

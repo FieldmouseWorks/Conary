@@ -186,7 +186,8 @@ body of the later task when it's filed.
 ### Builds, by lane
 
 Each lane runs top to bottom. The edges between lanes are the fences above
-and the dependencies in [m6-plugins.md](m6-plugins.md#order).
+and the dependencies in [m6-plugins.md](m6-plugins.md#order), and for #312's tasks and #293 in
+[m6-properties.md](m6-properties.md#the-last-five-checked).
 
 | Conary flow | Conary side | burrow M6 | burrow proj | burrow gate |
 | --- | --- | --- | --- | --- |
@@ -194,10 +195,13 @@ and the dependencies in [m6-plugins.md](m6-plugins.md#order).
 | C4 | burrow#993 | burrow#958, then B1 | burrow#969 | burrow#986 (after burrow#993) |
 | C2 | #306 | B3, then burrow#724 | burrow#975 | burrow#988 |
 | C3 | #307 | R | burrow#972 | burrow#994 (remi's values, shadow on) |
-| #312's tasks | #312 (the plan) | P | burrow#971 | |
+| #312's FP1 to FP8, FP10 | #312 (the plan) | P | burrow#971 | |
 | #313 | | F (after burrow#969) | | |
-| #319 | | J (after [#406](https://github.com/FieldmouseWorks/Conary/issues/406)) | | |
-| | | SJ, #312's ([m6-properties.md](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind)) | | |
+| FP9 ([#421](https://github.com/FieldmouseWorks/Conary/issues/421)) | | J (after [#406](https://github.com/FieldmouseWorks/Conary/issues/406)) | | |
+| FP11 ([#422](https://github.com/FieldmouseWorks/Conary/issues/422), after SJ is deployed) | | SJ ([#424](https://github.com/FieldmouseWorks/Conary/issues/424), #312's: [m6-properties.md](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind)) | | |
+| FP12 ([#423](https://github.com/FieldmouseWorks/Conary/issues/423)) | | | | |
+| [#293](https://github.com/FieldmouseWorks/Conary/issues/293) | | | | |
+| #319 | | | | |
 
 Everything in this table is a build. Every lane then stops at a switch.
 
