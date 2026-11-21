@@ -422,7 +422,11 @@ paths it records:
   work it is. Its own decision waits, naming it, and nothing acts for it or
   writes over the record.
 - **A worker's answer that doesn't read** (`answer`, with its `job` and the
-  `kind` of work). The worker is taken as still running, and holding its
+  `kind` of work): its answer file doesn't parse, or answers another kind
+  of work than the worker was started for (the runner refuses that, so the
+  file says something it never wrote), or the worker's stop marker says
+  neither a stop nor its deadline. The flow writes a stop marker whole, so
+  one half-written is never read. The worker is taken as still running, and holding its
   slot if it's a proof. The PR's decision waits on it at no stage, so even
   a seat in the train is granted nothing, unless it's stopping work. An
   answer that stops reading after the decision and before its permission is
@@ -433,6 +437,20 @@ paths it records:
   and verification, or a review's PR and carry. The landing isn't granted,
   and the PR waits at the proof stage. A lookup that told no is no
   degradation: it's the check's own answer.
+- **A mark on the PR that doesn't parse** (`mark`, with which `mark`): one
+  the accounts the flow trusts for it left, which it can't read, so what
+  it would have said counts for nothing. `verdict`, a judge's or the
+  dependency sweep's sealed verdict whose issuance isn't one (it can't be
+  authenticated, so it may be newer than any that can); `review`, the
+  reviewer's summary whose state isn't JSON or whose code review isn't a
+  review's state; `release_age`, Renovate's artifact comment with a block
+  that ends in its release-age wait with no time after it (a block that
+  ends in anything else is a real failure, as before). The PR waits on it
+  at no stage, naming it, nothing acts for it, and the pass is booked
+  again. A mark is read again, and cleared, each time the decision reads
+  the comments it's in: Renovate's only while its artifacts are the only
+  red check. A mark's text doesn't say which revision it's for, so one
+  that stays broken holds every revision until it's edited or deleted.
 - **A read of GitHub that fails or stops short** (`read`, with which `read`
   from a closed set). Each one counts as the failure of what it was for:
   - Reads the decision can't go on without (`pull`: the PR or its
@@ -477,7 +495,7 @@ paths it records:
 
 A pass records each path once while it lasts, against the PR's revision as
 the ledger has it, and appends `restored` when the same path works again: a
-record or answer the next pass reads, a lookup that tells, a read that's
+record, answer or mark the next pass reads, a lookup that tells, a read that's
 taken and answers in full (one that isn't taken clears nothing). A PR the
 ledger hasn't seen has nothing to record against, and its decision still
 names what degraded. A dry run, or a pass with no ledger store, records

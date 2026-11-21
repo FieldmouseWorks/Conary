@@ -252,8 +252,9 @@ fn a_prepare_answer_cannot_post_or_count_a_verdict() {
     assert_eq!(step(&report, 0).1, Step::Prove);
     assert_eq!(checks(&c), before);
     assert_eq!(c.hub.count(crate::sim::Call::Land), 0);
-    // Even an answer shaped like a passing proof is no verdict: it's a
-    // preparation that failed, asked again after fifteen minutes.
+    // Even an answer shaped like a passing proof is no verdict: it answers
+    // another kind of work, so it doesn't read, and the PR waits on it,
+    // naming it, for as long as it lasts.
     let c = two(1);
     c.pass(now, false);
     let prepare = work(&c, 3, |p| matches!(p, Purpose::Prepare)).remove(0);
@@ -281,20 +282,20 @@ fn a_prepare_answer_cannot_post_or_count_a_verdict() {
         serde_json::to_vec(&completion).unwrap(),
     )
     .unwrap();
-    let next = c.pass(now + 1, false)[0].next.clone().unwrap();
-    assert_eq!(
-        next.step,
-        Step::Wait {
-            until: Some(now + 900)
-        }
-    );
-    assert!(next.description.contains("preparation failed"));
-    assert_eq!(checks(&c), before);
-    assert!(work(&c, 3, |p| matches!(p, Purpose::Proof)).is_empty());
-    assert_eq!(
-        step(&c.pass(now + 900, false), 0),
-        (Stage::Proof, Step::Prepare)
-    );
+    for at in [now + 1, now + 900] {
+        let next = c.pass(at, false)[0].next.clone().unwrap();
+        assert_eq!(next.step, Step::Wait { until: None });
+        assert_eq!(next.stage, Stage::None);
+        assert_eq!(
+            next.degraded.iter().map(|d| &d.what).collect::<Vec<_>>(),
+            [&crate::flow::Degraded::Answer {
+                job: prepare.job.id.clone(),
+                kind: conary_core::plugin::Kind::Prepare,
+            }]
+        );
+        assert_eq!(checks(&c), before);
+        assert!(work(&c, 3, |p| matches!(p, Purpose::Proof)).is_empty());
+    }
 }
 
 #[test]

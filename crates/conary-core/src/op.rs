@@ -209,8 +209,10 @@ pub enum Degraded {
     /// taken as holding every proof slot, and none of its answers count.
     Record,
     /// The answer of the flow's worker `job`, doing `kind` of work, didn't
-    /// read: it was taken as still running, holding its proof slot if it's
-    /// a proof, and counts as no answer.
+    /// read, or isn't an answer to its kind of work, or the worker's stop
+    /// marker doesn't say why it was stopped: it was taken as still
+    /// running, holding its proof slot if it's a proof, and counts as no
+    /// answer.
     Answer {
         job: String,
         kind: crate::plugin::Kind,
@@ -224,6 +226,34 @@ pub enum Degraded {
     /// provenance that can't be read is unknown, and a decision whose reads
     /// failed outright waits.
     Read { read: Reading },
+    /// A mark one of the accounts the flow trusts for it left on the PR
+    /// doesn't parse: the PR waits on it, and what it would have said
+    /// counts for nothing.
+    Mark { mark: Mark },
+}
+
+/// Which mark a [`Degraded::Mark`] names: a closed set, one per mark the
+/// flow's decision reads from the PR's comments (`docs/flow.md`, "Degraded
+/// paths").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mark {
+    /// A judge's or the dependency sweep's sealed verdict.
+    Verdict,
+    /// The reviewer's summary of its review of the head.
+    Review,
+    /// Renovate's word that nothing in a lock refresh is old enough yet.
+    ReleaseAge,
+}
+
+impl std::fmt::Display for Mark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Verdict => "a sealed verdict",
+            Self::Review => "the reviewer's summary",
+            Self::ReleaseAge => "Renovate's release-age wait",
+        })
+    }
 }
 
 /// Which read a [`Degraded::Read`] names: a closed set, one per read the
@@ -306,6 +336,7 @@ impl std::fmt::Display for Degraded {
             }
             Self::Lookup { check } => write!(f, "{check}'s evidence lookup couldn't tell"),
             Self::Read { read } => write!(f, "the read of {read} failed or stopped short"),
+            Self::Mark { mark } => write!(f, "{mark}'s mark didn't parse"),
         }
     }
 }

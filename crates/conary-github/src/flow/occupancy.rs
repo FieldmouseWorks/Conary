@@ -93,7 +93,7 @@ impl Occupancy {
         match what {
             Degraded::Record => true,
             Degraded::Answer { .. } => self.readable(pr),
-            Degraded::Lookup { .. } | Degraded::Read { .. } => false,
+            Degraded::Lookup { .. } | Degraded::Read { .. } | Degraded::Mark { .. } => false,
         }
     }
     /// Record what this pass met of `pr`'s record and answers, and what
@@ -155,7 +155,13 @@ impl Occupancy {
                 if let Some(ledger) = ledger {
                     super::observe::train(&mut facts, ledger);
                 }
-                let decision = next(&facts, &memory, pass.now).0;
+                let mut decision = next(&facts, &memory, pass.now).0;
+                // Kept from work as its own decision will keep it, by a
+                // degraded record, answer or mark: no place in the queue.
+                degraded::wait(
+                    &mut decision,
+                    &degraded::failing(&self.met(*number, &facts.unreadable), &facts.reads),
+                );
                 Ok(super::proofs::slotted(&decision) || decision.stage == Stage::ProofSlot)
             })();
             match result {

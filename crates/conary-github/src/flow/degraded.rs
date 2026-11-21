@@ -9,7 +9,7 @@ use conary_core::Store;
 use conary_core::op::{Body, DEGRADED_WHY, Repo};
 use serde::{Deserialize, Serialize};
 
-pub use conary_core::op::{Degraded, Reading};
+pub use conary_core::op::{Degraded, Mark, Reading};
 
 /// One degraded path, as a decision names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +26,17 @@ impl std::fmt::Display for Degradation {
     }
 }
 
+/// Something that read but doesn't say what it should hold, for a fixed
+/// reason: what it said is never kept.
+#[derive(Debug)]
+pub(crate) struct Unparsed(pub &'static str);
+impl std::fmt::Display for Unparsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for Unparsed {}
+
 /// What failed, from the error's kind alone: never the text a file, a
 /// plugin or GitHub put in it, since the ledger keeps it for good.
 pub(crate) fn why(error: &(dyn std::error::Error + 'static)) -> String {
@@ -33,7 +44,9 @@ pub(crate) fn why(error: &(dyn std::error::Error + 'static)) -> String {
         Some(e) => &*e.0,
         None => error,
     };
-    let why = if let Some(e) = error.downcast_ref::<serde_json::Error>() {
+    let why = if let Some(e) = error.downcast_ref::<Unparsed>() {
+        e.0.to_owned()
+    } else if let Some(e) = error.downcast_ref::<serde_json::Error>() {
         format!(
             "it isn't what it should hold: {:?} error at line {}, column {}",
             e.classify(),
@@ -70,7 +83,9 @@ pub struct Reads {
 impl Reads {
     /// `read` failed or stopped short, for the reason `why`.
     pub(crate) fn met(&mut self, read: Reading, why: String) {
-        let what = Degraded::Read { read };
+        self.meet(Degraded::Read { read }, why);
+    }
+    fn meet(&mut self, what: Degraded, why: String) {
         if !self.met.iter().any(|d| d.what == what) {
             self.met.push(Degradation { what, why });
         }
@@ -78,6 +93,16 @@ impl Reads {
     /// `read` was taken and answered in full.
     pub(crate) fn answered(&mut self, read: Reading) {
         self.answered.insert(Degraded::Read { read });
+    }
+    /// `mark` was read from the PR's comments: every one of them parsed,
+    /// or one didn't, for the fixed reason `unparsed`.
+    pub(crate) fn mark(&mut self, mark: Mark, unparsed: Option<&'static str>) {
+        match unparsed {
+            Some(why) => self.meet(Degraded::Mark { mark }, why.into()),
+            None => {
+                self.answered.insert(Degraded::Mark { mark });
+            }
+        }
     }
     /// `read`'s answer, if it gave one: a read whose failure the decision
     /// goes on past, holding what it was for failed.
@@ -282,9 +307,31 @@ pub(crate) fn waiting(
     next
 }
 
-/// A degraded record or answer (`read`) counts as its check's failure: the
-/// PR waits on it, at no stage, so nothing is granted (a wait at the train
-/// stage with a seat would be), whatever else it would do but stop work.
+/// Whether `what` makes the PR [`wait`] on it at no stage: a record, an
+/// answer or a mark that didn't read, which leaves nothing to go on with.
+/// A lookup or a read holds what it was for failed itself.
+pub(crate) fn waits(what: &Degraded) -> bool {
+    match what {
+        Degraded::Record | Degraded::Answer { .. } | Degraded::Mark { .. } => true,
+        Degraded::Lookup { .. } | Degraded::Read { .. } => false,
+    }
+}
+
+/// What counts the PR's checks failed ([`wait`]): its degraded record and
+/// answers (`read`), and each mark its `reads` met. The one list both its
+/// decision and the proof queue's discovery of it wait on, so a PR kept
+/// from work holds no place ahead of another's proof.
+pub(crate) fn failing(read: &[Degradation], reads: &Reads) -> Vec<Degradation> {
+    read.iter()
+        .chain(reads.met.iter().filter(|d| waits(&d.what)))
+        .cloned()
+        .collect()
+}
+
+/// A degraded record, answer or mark (`read`) counts as its check's
+/// failure: the PR waits on it, at no stage, so nothing is granted (a wait
+/// at the train stage with a seat would be), whatever else it would do but
+/// stop work.
 pub(crate) fn wait(next: &mut super::Next, read: &[Degradation]) {
     let Some(first) = read.first() else {
         return;
