@@ -716,6 +716,22 @@ degraded `tree` read: whether the head is on the stalled tree can't be told,
 so nothing starts until it reads. Work saved before trees were kept counts
 toward no tree.
 
+A wait on CI costs nothing (`waiting-costs-nothing`): it starts no plugin
+and books no wake for the checks' result, which comes as their own events (a
+run finishing, a commit status) and ends the wait only with a verdict. Only
+a PR no check has reported for books a wake, five minutes on, to tell when
+none ever will. What's booked is the stall deadline, and a check's stall
+clock starts when its run starts. While every check the wait names is a run
+GitHub says is queued for a runner, `overdue_at` is none, nothing is booked,
+and Next's `queued` says since when, as capacity. Once one starts, the wait
+is overdue `stall_after` from the earliest start GitHub gives, however long
+it queued; a workflow job leaving the queue kicks the repository, since no
+check run event says so. A check pending only behind the others (a job that
+finished in a workflow run still going, or a machine proof waiting for CI)
+has no clock of its own. Any other pending check that isn't a run known to
+be queued or started (a commit status, a run GitHub gives no start for, a
+cancelled run to be run again) keeps the wait's own clock, as before.
+
 ## Comparing decisions
 
 ```console

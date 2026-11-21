@@ -25,6 +25,9 @@ enum Target {
     Issue,
     Check(&'static str),
     Repository,
+    /// A job leaving the queue for a runner: the one event GitHub sends as
+    /// a check's run starts, which starts its stall clock.
+    Started,
     DefaultPush,
 }
 // The sole event-to-kick table. PR label actions arrive as pull_request events;
@@ -41,6 +44,7 @@ const EVENTS: &[(&str, Target)] = &[
     // the repo: its pass steps the train.
     ("workflow_run", Target::Check("workflow_run")),
     ("status", Target::Repository),
+    ("workflow_job", Target::Started),
     ("push", Target::DefaultPush),
 ];
 
@@ -78,6 +82,9 @@ pub fn kicks(event: &str, body: &Value, repos: &BTreeSet<String>) -> Vec<Kick> {
             if prs.is_empty() { vec![None] } else { prs }
         }
         Target::Repository => vec![None],
+        // Its queuing and its finish come as check runs already.
+        Target::Started if body["action"].as_str() == Some("in_progress") => vec![None],
+        Target::Started => vec![],
         Target::DefaultPush => {
             let default = body["repository"]["default_branch"].as_str();
             if default

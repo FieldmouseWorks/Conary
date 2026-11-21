@@ -199,6 +199,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             || !f.open
             || (f.stacked_on.is_some() && stage == Stage::Base)
             || matches!(step, Step::ListOwner));
+    let mut queued = None;
     let overdue_at = if watched {
         let duration = if f.labels.contains(&f.settings.hold_label) {
             f.settings.hold_stall_after
@@ -232,8 +233,24 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 && description == s.to_string().chars().take(140).collect::<String>()
         });
         let failing = m.strikes.values().any(|n| *n >= 3) || stalled;
-        let due = if failing {
-            since
+        // A wait on CI counts from its runs' start, never their queue.
+        let clock = if stage == Stage::Ci && !failing {
+            super::ci::clock(&f.checks)
+        } else {
+            super::ci::Clock::Wait
+        };
+        queued = match clock {
+            super::ci::Clock::Queued(at) => Some(at.unwrap_or(since)),
+            _ => None,
+        };
+        let since = match clock {
+            super::ci::Clock::Started(at) => since.max(at),
+            _ => since,
+        };
+        let due = if queued.is_some() {
+            None
+        } else if failing {
+            Some(since)
         } else {
             let refreshing = f.renovate
                 && f.settings.renovate_sweep
@@ -260,10 +277,12 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             } else {
                 0
             };
-            since
-                .max(until)
-                .saturating_add(grace)
-                .saturating_add(duration)
+            Some(
+                since
+                    .max(until)
+                    .saturating_add(grace)
+                    .saturating_add(duration),
+            )
         };
         m.wait = Some(Wait {
             head: f.revision.head.clone(),
@@ -272,9 +291,9 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             description: description.clone(),
             failure,
             since,
-            due,
+            due: due.unwrap_or(u64::MAX),
         });
-        Some(due)
+        due
     } else {
         m.wait = None;
         None
@@ -294,6 +313,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 _ => None,
             },
             overdue_at,
+            queued,
             owner_notice,
             wait_on: watched.then(|| {
                 if f.labels.contains(&f.settings.hold_label) {

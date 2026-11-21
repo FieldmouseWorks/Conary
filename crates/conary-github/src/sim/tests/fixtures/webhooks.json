@@ -197,6 +197,50 @@
     ]
   },
   {
+    "event": "workflow_job",
+    "payload": {
+      "repository": {
+        "full_name": "o/r"
+      },
+      "action": "in_progress",
+      "workflow_job": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "in_progress"
+      }
+    },
+    "prs": [
+      null
+    ]
+  },
+  {
+    "event": "workflow_job",
+    "payload": {
+      "repository": {
+        "full_name": "o/r"
+      },
+      "action": "queued",
+      "workflow_job": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "queued"
+      }
+    },
+    "prs": []
+  },
+  {
+    "event": "workflow_job",
+    "payload": {
+      "repository": {
+        "full_name": "o/r"
+      },
+      "action": "completed",
+      "workflow_job": {
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "completed"
+      }
+    },
+    "prs": []
+  },
+  {
     "event": "push",
     "payload": {
       "repository": {

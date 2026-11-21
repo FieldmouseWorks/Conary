@@ -567,7 +567,8 @@ fn reader_uses_latest_run_and_ignores_own_status() {
         f.checks,
         [Check {
             name: "check".into(),
-            state: Ci::Green
+            state: Ci::Green,
+            run: Place::Unplaced
         }]
     );
 }

@@ -214,8 +214,8 @@ id = "waiting-costs-nothing"
 lesson = "Waiting on CI starts no model and ends only on the verdict; time queued for a runner is capacity, never a stall."
 from = ["https://github.com/FieldmouseWorks/remi/issues/1238", "https://github.com/FieldmouseWorks/burrow/issues/1043"]
 applies = ["flow", "waits and deadlines", "M6 slice 5d", "M6 slice 6"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall", "https://github.com/FieldmouseWorks/Conary/issues/317"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/flow.md#deadlines", "crates/conary-github/src/sim/tests/flow_queue.rs", "docs/m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall", "https://github.com/FieldmouseWorks/Conary/issues/317"]
 
 [[lessons]]
 id = "publish-only-news"

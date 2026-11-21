@@ -35,6 +35,7 @@ fn report(at: u64) -> Report {
             description: "waiting".into(),
             wait_until: Some(at),
             overdue_at: Some(at + 50),
+            queued: None,
             proof: None,
             wait_on: None,
             on_usage: false,

@@ -59,6 +59,27 @@ pub enum Ci {
 pub struct Check {
     pub name: String,
     pub state: Ci,
+    /// Where its GitHub run stands, for the stall clock of a wait on CI.
+    pub run: Place,
+}
+
+/// Where a pending check's GitHub run stands. Only a run GitHub says is
+/// queued for a runner keeps the stall clock of a wait on CI from starting:
+/// that time is capacity, never a stall ([`super::ci::clock`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Place {
+    /// Not a run known to be queued or started: a commit status, a finished
+    /// run, a pending the flow names itself, or a run GitHub gave no start
+    /// for. The wait's own clock runs.
+    #[default]
+    Unplaced,
+    /// Queued for a runner, since the time GitHub gave it, when it did.
+    Queued(Option<u64>),
+    /// Started on a runner then.
+    Started(u64),
+    /// Pending only until the PR's other checks finish: a job that finished
+    /// in a workflow run still going, or a machine proof waiting for CI.
+    Behind,
 }
 
 /// Scope of a verdict. Description and base are as much its input as head.
@@ -683,6 +704,8 @@ pub struct Wait {
     pub description: String,
     pub failure: Option<Failure>,
     pub since: u64,
+    /// When it's overdue: `u64::MAX` while every check it waits on is
+    /// queued for a runner, whose clock hasn't started.
     pub due: u64,
 }
 
@@ -790,6 +813,11 @@ pub struct Next {
     #[serde(default)]
     pub wait_until: Option<u64>,
     pub overdue_at: Option<u64>,
+    /// Since when every check a wait on CI names has been queued for a
+    /// runner, none started: capacity, not a stall, so `overdue_at` is
+    /// none meanwhile. Left out otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued: Option<u64>,
     #[serde(default, deserialize_with = "super::persist::proof_plan::deserialize")]
     pub proof: Option<ProofPlan>,
     pub wait_on: Option<WaitOn>,

@@ -258,6 +258,7 @@ fn gather(
         ci.checks = vec![Check {
             name: "over 100 checks, too many to read".into(),
             state: Ci::Pending,
+            run: Place::Unplaced,
         }];
         ci.docs = false;
     }

@@ -335,9 +335,13 @@ fn after_review(
         _ => {}
     }
     if ci == Ci::Pending {
+        // A wait on a check books no wake: its events end it. Only a PR no
+        // check has reported for wakes, to tell when none ever will.
         return wait(
             Stage::Ci,
-            m.no_checks_since.map(|t| t.saturating_add(300)),
+            m.no_checks_since
+                .filter(|_| f.checks.is_empty())
+                .map(|t| t.saturating_add(300)),
             &format!(
                 "Settled; waiting for CI: {}",
                 pending

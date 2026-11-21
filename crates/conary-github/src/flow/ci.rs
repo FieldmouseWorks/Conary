@@ -8,7 +8,7 @@ use crate::api::CheckRun;
 use conary_core::policy::Paths;
 
 use super::degraded::{ReadError, Reading, Reads};
-use super::{Check, Ci, Read, Settings};
+use super::{Check, Ci, Place, Read, Settings};
 
 /// Workflow metadata from GitHub's suite/workflow-run reads. Missing metadata
 /// is not evidence that a cancelled run was replaced.
@@ -174,6 +174,71 @@ fn replacement(
     }
 }
 
+/// Where a run that hasn't finished stands: queued for a runner, or started
+/// at the time GitHub gives. A start GitHub didn't give, or gave in a form
+/// that doesn't read, leaves it unplaced, so the wait's own clock runs.
+fn placed(run: &CheckRun) -> Place {
+    let at = || {
+        run.started_at
+            .as_deref()
+            .and_then(|t| super::reviews::timestamp(t).ok())
+    };
+    match run.status.as_str() {
+        "queued" => Place::Queued(at()),
+        "in_progress" => at().map_or(Place::Unplaced, Place::Started),
+        _ => Place::Unplaced,
+    }
+}
+
+/// When the stall clock of a wait on CI starts, from the checks it waits
+/// on (`waiting-costs-nothing`). A check that's pending only behind the
+/// others has no clock of its own, unless nothing else is pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Clock {
+    /// The wait's own clock: some pending check isn't a run known to be
+    /// queued or started.
+    Wait,
+    /// Every pending check is queued for a runner: no clock runs, and the
+    /// queue time since the earliest time GitHub gave, when it gave one, is
+    /// capacity.
+    Queued(Option<u64>),
+    /// Every pending check is queued or started, and the earliest started
+    /// then: no earlier than that, however long it queued.
+    Started(u64),
+}
+
+pub(super) fn clock(checks: &[Check]) -> Clock {
+    let pending: Vec<_> = checks
+        .iter()
+        .filter(|c| c.state == Ci::Pending && c.run != Place::Behind)
+        .map(|c| c.run)
+        .collect();
+    if pending.is_empty() || pending.contains(&Place::Unplaced) {
+        return Clock::Wait;
+    }
+    let started = pending
+        .iter()
+        .filter_map(|r| match r {
+            Place::Started(at) => Some(*at),
+            _ => None,
+        })
+        .min();
+    started.map_or_else(
+        || {
+            Clock::Queued(
+                pending
+                    .iter()
+                    .filter_map(|r| match r {
+                        Place::Queued(at) => *at,
+                        _ => None,
+                    })
+                    .min(),
+            )
+        },
+        Clock::Started,
+    )
+}
+
 /// Evaluate one consistent set of check and suite reads. Annotation reads are
 /// lazy: a replacement run clears an old cancellation without asking why the
 /// old run stopped. API failure propagates, never guesses a timeout verdict.
@@ -278,6 +343,7 @@ pub(super) fn checks(
         .map(|w| Check {
             name: format!("{w} for {base}"),
             state: Ci::Pending,
+            run: Place::Unplaced,
         })
         .collect();
     for s in suites
@@ -292,6 +358,7 @@ pub(super) fn checks(
                     .map_or("a workflow", |w| w.name.as_str())
             ),
             state: Ci::Red,
+            run: Place::Unplaced,
         });
     }
     let mut effective = BTreeMap::<(Option<String>, String), CheckRun>::new();
@@ -326,7 +393,11 @@ pub(super) fn checks(
             effective.insert(key, run.clone());
         }
         let mut name = run.name.clone();
+        let mut place = Place::Unplaced;
         let state = if run.status != "completed" || after == Replacement::Going {
+            if after == Replacement::None {
+                place = placed(run);
+            }
             Ci::Pending
         } else if cancelled(run) {
             if reads
@@ -357,11 +428,16 @@ pub(super) fn checks(
                     .and_then(|s| s.workflow.as_ref())
                     .map_or("CI", |w| w.name.as_str())
             );
+            place = Place::Behind;
             Ci::Pending
         } else {
             Ci::Green
         };
-        checks.push(Check { name, state });
+        checks.push(Check {
+            name,
+            state,
+            run: place,
+        });
     }
     let spelling: BTreeMap<_, _> = if docs {
         BTreeMap::new()
@@ -396,9 +472,16 @@ pub(super) fn checks(
             "pending" | "expected" => Ci::Pending,
             _ => Ci::Red,
         };
+        // A machine proof the flow says is pending waits for CI to finish.
+        let place = if proofs.contains(&name) {
+            Place::Behind
+        } else {
+            Place::Unplaced
+        };
         checks.push(Check {
             name: spelling.get(&name).map_or(status.context, |p| (*p).clone()),
             state,
+            run: place,
         });
     }
     for (lower, name) in spelling {
@@ -406,6 +489,7 @@ pub(super) fn checks(
             checks.push(Check {
                 name: name.clone(),
                 state: Ci::Pending,
+                run: Place::Behind,
             });
         }
     }
