@@ -299,6 +299,30 @@ fn saved_judge_decisions_load_from_before_and_after_they_carried_reasons() {
 }
 
 #[test]
+fn saved_decisions_load_from_when_renovate_merged_its_own_prs() {
+    // Before the flow merged Renovate's PRs itself, a decision could leave
+    // the merge to Renovate, and wait on it. They load as the flow's merge
+    // and a wait on the steward.
+    let (root, repo, data) = fixture();
+    let mut value: Value = serde_json::from_str(BASE_RECORD).unwrap();
+    value["decision"]["step"] = json!("Settle");
+    value["decision"]["wait_on"] = json!("Renovate");
+    std::fs::write(data.path(3), value.to_string()).unwrap();
+    let mut expected = canonical_record();
+    expected["decision"]["step"] = json!("Merge");
+    expected["decision"]["wait_on"] = json!("Steward");
+    for record in [
+        data.load(3).unwrap(),
+        Data::read(root.path(), &repo, 3).unwrap(),
+    ] {
+        let decision = record.decision.as_ref().unwrap();
+        assert_eq!(decision.step, Step::Merge);
+        assert_eq!(decision.wait_on, Some(WaitOn::Steward));
+        assert_eq!(serde_json::to_value(&record).unwrap(), expected);
+    }
+}
+
+#[test]
 fn saved_proof_plans_load_from_before_proofs_were_prepared() {
     let (root, repo, data) = fixture();
     let recipes = json!({"build": {"Build": ".#check"}, "test": {"Run": ["cargo", "test"]}});

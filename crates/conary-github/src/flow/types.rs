@@ -760,6 +760,9 @@ pub enum Step {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WaitOn {
+    /// Also what a decision saved waiting on Renovate's own merge loads as:
+    /// Renovate merges nothing in a repository conaryd lands.
+    #[serde(alias = "Renovate")]
     Steward,
     Hold,
     Sweep,
