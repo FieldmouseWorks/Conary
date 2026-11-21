@@ -74,7 +74,7 @@ pub struct Revision {
 /// What a reviewer last said of a PR's head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
-    /// A review of the head is under way, or in a state this doesn't know.
+    /// A review of the head is under way.
     Running,
     Clean,
     Findings,

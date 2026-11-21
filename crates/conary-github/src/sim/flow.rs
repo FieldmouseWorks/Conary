@@ -136,6 +136,24 @@ impl Hub {
                 "state":"COMMENTED","commit_id":head,"submitted_at":when,
                 "body":format!("<!-- codex-review-receipt:v1 -->\n\n### Codex Review\n\n**Reviewed commit:** `{}`\n", &head[..10.min(head.len())])}));
         }
+        self.flow_summary(repo, pr, status, findings, at);
+    }
+
+    /// The connector's summary comment on the PR's head at `at`, its code
+    /// review in `status` with `findings` as it says them.
+    pub(crate) fn flow_summary(
+        &self,
+        repo: &str,
+        pr: u64,
+        status: &str,
+        findings: Option<bool>,
+        at: u64,
+    ) {
+        let head = self.pull_json(repo, pr)["head"]["sha"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let when = jiff::Timestamp::from_second(at as i64).unwrap().to_string();
         let state = json!({"code_review":{"commit_sha":head,"has_any_findings":findings,"status":status},
             "security_review":{"commit_sha":null,"has_any_findings":null,"status":null}});
         let c = json!({"user":fixtures::user(super::CONNECTOR,"Bot"),

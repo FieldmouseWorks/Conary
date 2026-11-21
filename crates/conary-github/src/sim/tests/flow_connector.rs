@@ -123,6 +123,24 @@ fn a_review_under_way_is_waited_for() {
     assert!(next.description.contains("is reviewing this commit"));
 }
 
+/// The connector's summary on Conary#511: completed, with no word on
+/// findings and no review under way (#513).
+#[test]
+fn a_review_ended_with_no_word_on_findings_is_asked_for_again() {
+    let mut c = unreviewed();
+    c.hub.flow_summary(REMI, 3, "completed", None, 100);
+    assert_eq!(c.pass(600).step, Step::Wait { until: Some(1800) });
+    let asked = c.pass(1800);
+    assert_eq!(asked.stage, Stage::Review);
+    assert!(matches!(&asked.step, Step::AskReview(_)));
+    assert!(!asked.description.contains("is reviewing this commit"));
+    assert_eq!(c.pass(7200).owner_notice, Some(OwnerNotice::NoReviewer));
+    // An App's head is asked for on the first pass, as with no summary.
+    let mut c = an_apps();
+    c.hub.flow_summary(REMI, 3, "completed", None, 30);
+    assert!(matches!(c.pass(60).step, Step::AskReview(_)));
+}
+
 #[test]
 fn a_clean_review_of_the_head_settles_it() {
     let c = unreviewed();
