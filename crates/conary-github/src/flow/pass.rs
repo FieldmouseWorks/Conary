@@ -466,9 +466,34 @@ impl Pass<'_> {
                         Err((_, error)) if error.is::<super::pause::Paused>() => {
                             report.error = Some(error.to_string());
                         }
+                        // What stopped reading before the permission was
+                        // used is degraded: recorded, and the decision
+                        // saved waits on it, naming it.
                         Err((kind, error)) => {
                             record.failed = Some(kind);
                             report.error = Some(error.to_string());
+                            if let Some(withdrawn) =
+                                error.downcast_ref::<super::degraded::Withdrawn>()
+                            {
+                                if let Some(store) = store.as_deref_mut()
+                                    && let Err(e) = super::degraded::record(
+                                        store,
+                                        repo,
+                                        pr,
+                                        &withdrawn.0,
+                                        |_| false,
+                                    )
+                                {
+                                    report.error =
+                                        Some(format!("{error}; recording it failed: {e}"));
+                                }
+                                super::degraded::wait(&mut next, &withdrawn.0);
+                                for d in &withdrawn.0 {
+                                    if !next.degraded.iter().any(|n| n.what == d.what) {
+                                        next.degraded.push(d.clone());
+                                    }
+                                }
+                            }
                         }
                     }
                     data.save(pr, &record)?;

@@ -53,13 +53,20 @@ fn validate<G: Write>(
     // An answer the decision read that doesn't read now, or a read of
     // GitHub that answered it and fails or stops short now. Cleanup leaves
     // out stopped work it doesn't read, so only a new one counts.
-    if let Some(d) = fresh.unreadable.iter().chain(&fresh.reads.met).find(|d| {
-        !f.unreadable
-            .iter()
-            .chain(&f.reads.met)
-            .any(|o| o.what == d.what)
-    }) {
-        return Err(format!("{d} before permission was used").into());
+    let new: Vec<_> = fresh
+        .unreadable
+        .iter()
+        .chain(&fresh.reads.met)
+        .filter(|d| {
+            !f.unreadable
+                .iter()
+                .chain(&f.reads.met)
+                .any(|o| o.what == d.what)
+        })
+        .cloned()
+        .collect();
+    if !new.is_empty() {
+        return Err(Box::new(super::degraded::Withdrawn(new)));
     }
     let labels = |f: &Facts| {
         f.labels

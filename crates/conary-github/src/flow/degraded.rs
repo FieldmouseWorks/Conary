@@ -173,6 +173,25 @@ impl std::error::Error for ReadError {
         Some(&self.error)
     }
 }
+/// Reads and answers that answered the decision and failed or stopped
+/// short when its permission was about to be used: the permission is
+/// withdrawn, and the pass records and names them.
+#[derive(Debug)]
+pub(crate) struct Withdrawn(pub Vec<Degradation>);
+impl std::fmt::Display for Withdrawn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut each = self.0.iter();
+        if let Some(first) = each.next() {
+            write!(f, "{first}")?;
+        }
+        for d in each {
+            write!(f, ", {d}")?;
+        }
+        f.write_str(" before permission was used")
+    }
+}
+impl std::error::Error for Withdrawn {}
+
 /// Bring the ledger in line with what this pass met of one PR's degraded
 /// paths: each path `seen` that the ledger doesn't hold degraded for the
 /// change's current revision is recorded, and each one it holds that `ran`

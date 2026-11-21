@@ -313,6 +313,28 @@ fn a_read_that_fails_before_permission_is_used_withdraws_it() {
             .is_some_and(|e| e.contains("GitHub's test merge")),
         "{three:?}"
     );
+    // Recorded once, and the decision saved waits naming it, as `cn flow
+    // status` shows. At 6c2c006 neither: the saved decision said Merge.
+    assert_eq!(naming(&c, "degraded", "merge_tree"), 1);
+    let saved = serde_json::to_value(c.record().decision.unwrap()).unwrap();
+    assert!(names(&saved, "merge_tree"), "{saved}");
+    assert!(saved["stage"].is_null(), "{saved}");
+    let shown = serde_json::to_value(
+        status(c.dir.path(), &REPO.parse().unwrap(), &c.config, now + 1).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        shown["degraded"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|d| d["read"] == "merge_tree")),
+        "{shown}"
+    );
+    // It reads again: cleared, and once the failed step's retry is due,
+    // the PR lands.
+    c.pass(now + 1, false);
+    assert_eq!(naming(&c, "restored", "merge_tree"), 1);
+    c.pass(now + 86_400, false);
+    assert!(c.hub.pull(REPO, 3).unwrap().is_merged());
 }
 
 /// A read the decision can't go on without that fails after others met or
