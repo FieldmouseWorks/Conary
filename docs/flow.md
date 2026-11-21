@@ -291,8 +291,8 @@ separate from the pass runner.
 Every permission path also verifies the revision's independently attested
 negative result through the existing train verifier. It must say the new
 tests fail on old code, or attest that no negative is needed. Train admission
-records that evidence through the same verifier. Direct and delegated bot
-merges apply it too.
+records that evidence through the same verifier. Direct merges apply it too,
+a bot's included.
 
 The example's canned responses cannot authorize a real landing. The simulation
 tests supply independent signed producer records separately. No plugin
@@ -316,8 +316,8 @@ effect a pause keeps off is no failure and no strike. Only what takes work
 off goes ahead while paused: stopping a worker, leaving the train and
 taking GitHub's queued merge off. A pause that can't be read stops every
 decision with its error; it never reads as no pause. Permission is checked
-immediately before publication and validated afterward, including delegated
-merges and renewals for PRs already seated in the train.
+immediately before publication and validated afterward, including renewals
+for PRs already seated in the train.
 
 A paused PR, and a PR with the hold label, vacates. Each of its workers
 that hasn't answered (review, fix, judge, preparation or proof) is asked to
@@ -404,8 +404,7 @@ by level, then age (the oldest opened first), then PR number. A pass takes
 its PRs in that order, so a dry run's virtual slots and the train's joins
 follow it too. Each level has its own `stall_after`, the seconds a PR may
 wait at one stage before it's overdue: `high` 1800, `medium` and `low`
-7200 by default. A hold's, the train's and a Renovate automerge's own
-deadlines stay as they are. The level is in each PR's Next, as `priority`.
+7200 by default. A hold's and the train's own deadlines stay as they are. The level is in each PR's Next, as `priority`.
 
 ## Degraded paths
 
@@ -498,14 +497,19 @@ The executor revokes previous permission before cosmetic stage-label writes.
 It validates the current head, target branch and tip, description, draft state,
 review threads, blocking labels and policy raises before granting permission.
 It repeats scope and producer-evidence checks immediately before an expected-head
-merge or a delegated settlement. Same-head edits invalidate permission too.
+merge. Same-head edits invalidate permission too.
 Branch updates pin their expected head; conflict requests carry the resolved
 base commit, never a branch name.
 
 Train admission and departure use the existing train module and its ledger
-checks, with `--anchor-repo` required for train-enabled passes. Direct and
-delegated R2 landings are refused even after owner approval: R2 must use the
-train's exact candidate-tree evidence and trunk binding.
+checks, with `--anchor-repo` required for train-enabled passes. Direct R2
+landings are refused even after owner approval: R2 must use the train's exact
+candidate-tree evidence and trunk binding.
+
+A dependency bot never merges its own PR: Renovate merges nothing in a
+repository conaryd lands (burrow#1318). So a settled Renovate PR lands like
+any other, through the train where there is one and the flow's own
+expected-head merge where there isn't, whatever its automerge setting says.
 
 Proof slots count active proof workers across all open PRs, including workers outside
 a targeted kick and admissions earlier in this pass. A preparation, and a
@@ -616,7 +620,7 @@ Before submitting a direct merge, flow persists its intent and the authenticated
 permission it observed. The existing
 GitHub ingestion path then records the actual revision and trunk before/after
 commits as a Land operation. Later passes revisit pending records even when the
-PR has left the open list, including delegated bot merges, lost responses and
+PR has left the open list, including lost responses and
 lagging merge metadata. The saved permission is reauthenticated against GitHub status history when
 cleanup and merging share a timestamp. It applies only to the submitted head,
 target, intent and original trunk tip; ordinary withdrawals still block it.

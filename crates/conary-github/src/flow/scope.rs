@@ -113,7 +113,6 @@ fn validate<G: Write>(
         || fresh.gate_edited != f.gate_edited
         || fresh.release_at != f.release_at
         || fresh.dependency != f.dependency
-        || fresh.bot_merges != f.bot_merges
         || fresh.merging != f.merging
     {
         return Err("PR decision scope changed before permission or execution".into());

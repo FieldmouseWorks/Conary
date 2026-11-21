@@ -5,7 +5,7 @@ use crate::flow::*;
 use crate::sim::REMI;
 use serde_json::json;
 fn landing(step: &Step) -> bool {
-    matches!(step, Step::Merge | Step::JoinTrain | Step::Settle)
+    matches!(step, Step::Merge | Step::JoinTrain)
 }
 
 #[test]

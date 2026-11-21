@@ -128,21 +128,6 @@ pub(super) fn edited(paths: &Paths, diff: impl FnOnce() -> Option<String>) -> bo
     !diff().is_some_and(|d| pins(&d))
 }
 
-pub(super) fn enabled(body: &str) -> bool {
-    regex::Regex::new(r"\*\*Automerge\*\*: Enabled\b")
-        .expect("constant regex")
-        .is_match(body)
-}
-pub(super) fn spent(body: &str) -> bool {
-    let states: Vec<_> = body
-        .lines()
-        .filter_map(|l| l.strip_prefix("🚦 **Automerge**: "))
-        .collect();
-    !states.is_empty()
-        && states
-            .iter()
-            .all(|s| s.starts_with("Disabled because a matching PR was automerged previously"))
-}
 pub(super) fn release(comments: &[crate::api::Comment], settings: &super::Settings) -> Option<u64> {
     let login = settings.renovate_login.as_deref()?;
     let body = comments

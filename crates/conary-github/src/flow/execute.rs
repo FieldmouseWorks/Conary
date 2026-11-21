@@ -77,18 +77,13 @@ pub(crate) fn act<G: Write>(
         github.stage(&repo, f.number, next.stage)?;
         scope()?;
         if settled {
-            if matches!(next.step, Step::Merge | Step::Settle)
-                && f.classified.class == conary_core::Class::R2
-            {
+            if next.step == Step::Merge && f.classified.class == conary_core::Class::R2 {
                 return Err("R2 requires exact candidate evidence through the train".into());
             }
             // Every grant, including a seated train's Wait, revalidates
             // after preparatory calls and immediately before publication.
             permission(pass, github, f, &next.step, record)?;
             record.cleanup.insert(f.revision.head.clone());
-            if next.step == Step::Settle {
-                record.landing = Some(super::ledger::intent(f, true)?);
-            }
             data.save(f.number, record)?;
             github.status(&repo, &f.revision.head, true, &next.description)?;
             permission(pass, github, f, &next.step, record)?;
@@ -103,7 +98,6 @@ pub(crate) fn act<G: Write>(
         let repo = f.repo.to_string();
         match &next.step {
             Step::Wait { .. } | Step::Retry { .. } => {}
-            Step::Settle => permission(pass, github, f, &next.step, record)?,
 
             Step::AskReview(_) => {
                 match pass

@@ -95,7 +95,6 @@ pub struct Landing {
     #[serde(default)]
     pub revision: Option<Revision>,
     pub base: String,
-    pub delegated: bool,
     #[serde(default)]
     pub accepted: bool,
     #[serde(default)]

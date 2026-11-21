@@ -31,7 +31,7 @@ pub(super) fn apply(f: &Facts, decision: Decision) -> Decision {
     let by_train = f.settings.train && f.revision.base == f.default_branch;
     let ready = matches!(
         step,
-        Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
+        Step::Merge | Step::JoinTrain | Step::CloseAlreadyLanded
     );
     if f.queued_merge && f.open && (by_train || !ready) {
         return (

@@ -378,7 +378,8 @@ pub struct Settings {
     /// Renovate's login, whose comments say when a refresh may land.
     #[schemars(extend("x-spender" = false))]
     pub renovate_login: Option<String>,
-    /// The label on an automerged upstream batch.
+    /// Unread: the label on an automerged upstream batch, from when Renovate
+    /// merged its own PRs. Kept until burrow stops rendering it.
     #[schemars(extend("x-spender" = false))]
     pub batch_label: String,
     /// The label that holds a PR.
@@ -428,8 +429,8 @@ pub struct Settings {
     /// Seconds a PR may wait in the train before it's overdue.
     #[schemars(extend("x-spender" = false))]
     pub train_stall_after: u64,
-    /// Seconds a Renovate PR may wait on its own automerge before it's
-    /// overdue.
+    /// Unread: seconds a Renovate PR could wait on its own automerge, from
+    /// when Renovate merged its own PRs. Kept until burrow stops rendering it.
     #[schemars(extend("x-spender" = false))]
     pub renovate_merge_after: u64,
     /// Seconds Renovate is given to act after it's asked to rebase.
@@ -613,8 +614,6 @@ pub struct Facts {
     pub gate_edited: bool,
     pub major: Option<Major>,
     pub release_at: Option<u64>,
-    pub bot_merges: bool,
-    pub bot_automerge_enabled: bool,
     pub rebase_requested: bool,
     pub rebase_removed: Vec<u64>,
     pub timeline_cut_at: Option<u64>,
@@ -748,7 +747,6 @@ pub enum Step {
     /// judge's reasons), and in decisions saved before steps carried them.
     Judge(Vec<Trigger>),
     UpdateBranch,
-    Settle,
     Merge,
     JoinTrain,
     LeaveTrain,
@@ -766,10 +764,12 @@ pub enum Step {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WaitOn {
+    /// Also what a decision saved waiting on Renovate's own merge loads as:
+    /// Renovate merges nothing in a repository conaryd lands.
+    #[serde(alias = "Renovate")]
     Steward,
     Hold,
     Sweep,
-    Renovate,
     Train,
 }
 

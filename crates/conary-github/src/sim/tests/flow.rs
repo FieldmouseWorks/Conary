@@ -573,7 +573,7 @@ fn reader_uses_latest_run_and_ignores_own_status() {
 }
 
 fn landing(step: &Step) -> bool {
-    matches!(step, Step::Merge | Step::Settle | Step::JoinTrain)
+    matches!(step, Step::Merge | Step::JoinTrain)
 }
 
 fn read_checks(hub: &Hub) -> Vec<Check> {
@@ -632,10 +632,7 @@ fn only_known_bot_history_skips_review() {
         });
         c.hub
             .commit_details(&head(3), Some("deps: bump"), Some(email), Some(email));
-        assert_eq!(
-            c.view(4000).step,
-            if renovate { Step::Settle } else { Step::Merge }
-        );
+        assert_eq!(c.view(4000).step, Step::Merge);
         c.hub.fail(crate::sim::Call::CompareCommits);
         assert!(matches!(c.view(4000).step, Step::AskReview(_)));
         c.hub.heal(crate::sim::Call::CompareCommits);

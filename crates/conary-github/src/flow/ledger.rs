@@ -89,7 +89,7 @@ pub(crate) fn reconcile<G: Write>(
             )
         });
         for intent in record.landing.iter_mut().chain(&mut record.pending) {
-            if !intent.delegated && !intent.accepted && pull.state == "open" && !pull.is_merged() {
+            if !intent.accepted && pull.state == "open" && !pull.is_merged() {
                 intent.retry = retryable(github, repo, pr, &pull, intent)?;
             }
         }
@@ -118,14 +118,13 @@ fn submissions(record: &Record) -> Vec<crate::ingest::Submission> {
         })
         .collect()
 }
-pub(crate) fn intent(f: &Facts, delegated: bool) -> Result<Landing> {
+pub(crate) fn intent(f: &Facts) -> Result<Landing> {
     Ok(Landing {
         permission: None,
         head: f.revision.head.clone(),
         target: f.revision.base.clone(),
         revision: Some(f.revision.clone()),
         base: f.base_tip.clone().ok_or("landing base unknown")?,
-        delegated,
         accepted: false,
         retry: false,
     })
@@ -175,7 +174,7 @@ fn retryable<G: Write>(
     Ok(superseded || history.complete)
 }
 pub(crate) fn begin(f: &Facts, record: &mut Record) -> Result<()> {
-    let new = intent(f, false)?;
+    let new = intent(f)?;
     if let Some(old) = record.landing.take()
         && (old.head != new.head
             || old.target != new.target

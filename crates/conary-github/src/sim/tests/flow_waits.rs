@@ -113,16 +113,12 @@ fn a_head_no_review_came_for_is_listed_without_watching_it() {
 }
 
 #[test]
-fn a_settled_bot_waits_on_renovate_only_when_its_run_exists_on_the_machine() {
-    // watched.py:259,272: enabled automerge uses Renovate's deadline; no local runner kicks steward.
-    for (enabled, here, who, duration) in [
-        (true, true, WaitOn::Renovate, 3600),
-        (false, true, WaitOn::Steward, 7200),
-        (true, false, WaitOn::Steward, 3600),
-    ] {
+fn a_settled_renovate_pr_waits_on_the_flows_own_merge() {
+    // Renovate merges nothing in a repository conaryd lands, so its own
+    // automerge, on or off, is never what a settled update waits on.
+    for (enabled, here) in [(true, true), (false, true), (true, false)] {
         let mut c = Case::new();
         c.settings.renovate_sweep = here;
-        c.settings.renovate_merge_after = 3600;
         c.settings.renovate_email = Some("bot@example.org".into());
         c.hub.edit_pull(REMI, 3, |p| {
             p["head"]["ref"] = json!("renovate/foo");
@@ -144,9 +140,9 @@ fn a_settled_bot_waits_on_renovate_only_when_its_run_exists_on_the_machine() {
             0,
         );
         let n = c.pass(450);
-        assert_eq!(n.step, Step::Settle);
-        assert_eq!(n.wait_on, Some(who));
-        assert_eq!(n.overdue_at, Some(450 + duration));
+        assert_eq!(n.step, Step::Merge);
+        assert_eq!(n.wait_on, Some(WaitOn::Steward));
+        assert_eq!(n.overdue_at, Some(450 + 7200));
         assert_eq!(c.pass(460).overdue_at, n.overdue_at);
     }
 }

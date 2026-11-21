@@ -33,37 +33,23 @@ fn bot(renovate: bool, major: bool) -> Case {
     c
 }
 #[test]
-fn automerge_configuration_gives_only_the_documented_batches_to_the_steward() {
-    // deps.py:59,63,74,83: batch labels and configuration, including conflicting quoted statuses.
+fn renovate_automerge_configuration_never_hands_the_merge_to_renovate() {
+    // Renovate merges nothing in a repository conaryd lands, so whatever
+    // its automerge says and whatever batch it's in, the flow merges.
     let spent = "🚦 **Automerge**: Disabled because a matching PR was automerged previously.";
-    for (label, body, expected) in [
-        (false, "🚦 **Automerge**: Enabled.", Step::Settle),
-        (true, "🚦 **Automerge**: Enabled.", Step::Merge),
-        (true, "🚦 **Automerge**: Disabled by config.", Step::Settle),
-        (false, spent, Step::Merge),
-        (true, spent, Step::Merge),
-    ] {
-        let c = bot(true, false);
-        if label {
-            c.label(&["upstream batch"]);
+    for label in [false, true] {
+        for body in [
+            "🚦 **Automerge**: Enabled.",
+            "🚦 **Automerge**: Disabled by config.",
+            spent,
+        ] {
+            let c = bot(true, false);
+            if label {
+                c.label(&["upstream batch"]);
+            }
+            c.description(body, 0);
+            assert_eq!(c.view(8000).step, Step::Merge, "{label} {body}");
         }
-        c.description(body, 0);
-        assert_eq!(c.view(8000).step, expected);
-    }
-    for enabled in [false, true] {
-        let c = bot(true, false);
-        c.description(
-            &format!(
-                "### Release Notes\n\n{spent}\n\n---\n\n### Configuration\n\n🚦 **Automerge**: {}.",
-                if enabled {
-                    "Enabled"
-                } else {
-                    "Disabled by config"
-                }
-            ),
-            0,
-        );
-        assert_eq!(c.view(8000).step, Step::Settle);
     }
 }
 #[test]
@@ -123,7 +109,7 @@ fn majors_threads_and_security_use_their_own_gates() {
     c.label(&["security"]);
     c.threads(0);
     assert_eq!(c.facts().dependency, Some(Dependency::Minor));
-    assert_eq!(c.view(8000).step, Step::Settle);
+    assert_eq!(c.view(8000).step, Step::Merge);
     let c = bot(false, false);
     c.threads(1);
     assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));

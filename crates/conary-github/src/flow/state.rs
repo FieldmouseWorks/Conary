@@ -185,7 +185,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         && (!f.renovate || fixed_renovate)
         && !matches!(
             step,
-            Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
+            Step::Merge | Step::JoinTrain | Step::CloseAlreadyLanded
         )
     {
         Some(OwnerNotice::OpenOverDay)
@@ -204,8 +204,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             f.settings.hold_stall_after
         } else if stage == Stage::Train {
             f.settings.train_stall_after
-        } else if stage == Stage::Merge && f.renovate && f.bot_merges && f.bot_automerge_enabled {
-            f.settings.renovate_merge_after
         } else {
             f.settings.stall_after.at(f.rank().level)
         };
@@ -297,25 +295,15 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 } else if stage == Stage::Train {
                     WaitOn::Train
                 } else if f.settings.renovate_sweep
-                    && f.major_generation.is_some()
-                    && f.major.is_none()
-                    && stage == Stage::Review
-                    && matches!(step, Step::Wait { .. })
-                {
-                    WaitOn::Sweep
-                } else if f.settings.renovate_sweep
-                    && f.renovate
-                    && f.bot_merges
-                    && f.bot_automerge_enabled
-                    && stage == Stage::Merge
-                {
-                    WaitOn::Renovate
-                } else if f.settings.renovate_sweep
-                    && f.renovate
-                    && f.dependency.is_some()
-                    && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
-                    && (f.checks.iter().any(|c| c.state == Ci::Red)
-                        || f.dependency == Some(Dependency::Major) && f.major.is_none())
+                    && ((f.major_generation.is_some()
+                        && f.major.is_none()
+                        && stage == Stage::Review
+                        && matches!(step, Step::Wait { .. }))
+                        || (f.renovate
+                            && f.dependency.is_some()
+                            && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
+                            && (f.checks.iter().any(|c| c.state == Ci::Red)
+                                || f.dependency == Some(Dependency::Major) && f.major.is_none())))
                 {
                     WaitOn::Sweep
                 } else {

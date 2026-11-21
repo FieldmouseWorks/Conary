@@ -179,10 +179,7 @@ fn run(row: &Row) {
         assert!(names(&three, row.read), "{three}");
         // Counted failed: nothing is granted, and nothing lands.
         assert!(
-            !matches!(
-                three["step"].as_str(),
-                Some("Merge" | "Settle" | "JoinTrain")
-            ),
+            !matches!(three["step"].as_str(), Some("Merge" | "JoinTrain")),
             "{three}"
         );
         assert_eq!(c.hub.count(Call::Merge), 0, "{three}");
@@ -268,12 +265,13 @@ fn an_unvisited_pr_s_reads_that_fail_are_recorded() {
     assert_eq!(naming(&c, "restored", "pause"), 1);
 }
 
-/// A PR the pass doesn't visit, holding a live grant, whose read fails:
-/// main kept the grant, since only a PR read closed withdrew it.
+/// A PR the pass doesn't visit, holding a live grant (a train seat, the
+/// permission that outlasts its pass), whose read fails: main kept the
+/// grant, since only a PR read closed withdrew it.
 #[test]
 fn an_unvisited_pr_whose_read_fails_loses_its_grant() {
     let mut c = Case::new();
-    c.as_bot();
+    c.config.settings.train = true;
     c.clean_review();
     let now = jobs::now();
     c.pass(now, false);

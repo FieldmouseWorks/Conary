@@ -95,10 +95,7 @@ pub(crate) fn holding(
         switches.push((Switch::NoPlugin { kind: kind.into() }, vec![]));
     }
     let granting = super::pass::grants(unswitched, f);
-    if !f.settings.train
-        && matches!(step, Step::Merge | Step::Settle)
-        && f.classified.class == conary_core::Class::R2
-    {
+    if !f.settings.train && *step == Step::Merge && f.classified.class == conary_core::Class::R2 {
         switches.push((Switch::TrainOff, vec![]));
     }
     // A person's approval is what the owner label, an R2 change or a
