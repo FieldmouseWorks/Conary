@@ -96,6 +96,25 @@ const ROWS: &[Row] = &[
         arm: |h| h.fail(Call::Commit),
         heal: |h| h.heal(Call::Commit),
     },
+    // Who put the owner label on, the steward's listing with no mark of the
+    // flow's: while it can't be told the label is neither listed nor gone
+    // past, and the PR lands once it reads as an App's.
+    Row {
+        read: "owner_label",
+        arm: |h| {
+            h.label_as(REPO, 3, &["needs-peter"], (crate::sim::STEWARD, "Bot"));
+            // The decision's read fails, the class's read of the timeline
+            // after it answers, and every scope check's read fails again.
+            h.fail(Call::Timeline);
+            h.race(Call::Timeline, |h| {
+                h.race(Call::Timeline, |h| {
+                    h.heal(Call::Timeline);
+                    h.race(Call::Timeline, |h| h.fail(Call::Timeline));
+                })
+            });
+        },
+        heal: |h| h.heal(Call::Timeline),
+    },
     // The flow's own wait, named, where main handed it to the owner: it
     // lands once GitHub gives the snapshot in full.
     Row {

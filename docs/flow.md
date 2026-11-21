@@ -190,12 +190,15 @@ another one is closed. Joining never widens an approval: R2 still needs
 the marked review on the exact head ([Person approval](#person-approval)).
 
 The flow's own listing is no door. Memory's `labelled` says the flow put
-the owner label on, until a pass reads it off; only a label it didn't put
-on is a person's. A label put on before the flow kept that mark, by the
-steward or an earlier flow, still reads as a person's
-([#537](https://github.com/FieldmouseWorks/Conary/issues/537)). A decision,
-or a switch's step, saved before a listing named its door loads as a wait,
-and the next pass decides it again.
+the owner label on, until a pass reads it off. A label without that mark
+is a person's door only when a person put it on. While it's on, each read
+of the PR (a scope check's too) reads its timeline for its newest
+`labeled` event: a `User` there is a person, a `Bot` an App (the steward,
+or the flow before it kept its mark), which lists nothing of its own.
+When that can't be told (the read, `owner_label`, fails, or names
+neither) the PR waits at no stage, neither listed nor gone past. A
+decision, or a switch's step, saved before a listing named its door
+loads as a wait, and the next pass decides it again.
 
 ## State and workers
 
@@ -520,7 +523,9 @@ paths it records:
     candidate merges it again and checks that); `diff` (the gates count as
     edited); `tree`, the head's tree, read once a check has reached its
     [deadline twice](#deadlines) on one tree (whether this is that tree is
-    unknown, so nothing starts for it); `default_branch`, no
+    unknown, so nothing starts for it); `owner_label`, the timeline read
+    for who put the owner label on (it waits, neither listed nor gone
+    past: [Asking the owner](#asking-the-owner)); `default_branch`, no
     observation of the default branch's CI for a fix of it (the base is
     held); `snapshot`, a snapshot that stops short of the PR's reviews,
     comments, labels or threads (the PR waits at no stage, overdue in the

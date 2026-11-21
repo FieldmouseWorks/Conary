@@ -150,12 +150,20 @@ impl Write for Hub {
             Asked::new(Call::FlowOwner, repo).pr(pr),
             &[repo, &pr.to_string(), label],
             || {
-                self.edit_pull(repo, pr, |p| {
-                    let labels = p["labels"].as_array_mut().unwrap();
-                    if !labels.iter().any(|l| l["name"] == label) {
-                        labels.push(json!({"name":label}));
-                    }
+                let mut labels: Vec<String> = self.repo_mut(repo, |r| {
+                    r.pulls[&pr]["labels"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|l| l["name"].as_str().unwrap().to_owned())
+                        .collect()
                 });
+                if !labels.iter().any(|l| l == label) {
+                    labels.push(label.into());
+                }
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                // The flow writes as its App.
+                self.label_as(repo, pr, &labels, (super::STEWARD, "Bot"));
                 Ok(())
             },
         )

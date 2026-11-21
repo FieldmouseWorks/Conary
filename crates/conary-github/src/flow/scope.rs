@@ -54,6 +54,7 @@ fn validate<G: Write>(
         new.extend(e.met().into_iter().skip(1).filter(|d| !known(d)));
         Box::new(super::degraded::Withdrawn(new))
     })?;
+    super::approval::labeller(github, &mut fresh, &record.memory);
     if cleanup {
         super::observe::hydrate_cleanup(&mut fresh, record, pass.now, &f.working)?;
     } else {
@@ -91,6 +92,7 @@ fn validate<G: Write>(
         || fresh.draft != f.draft
         || fresh.complete != f.complete
         || labels(&fresh) != labels(f)
+        || fresh.labelled_by != f.labelled_by
         || fresh.open_threads != f.open_threads
         || fresh.reviewers != f.reviewers
         || fresh.changes_requested != f.changes_requested

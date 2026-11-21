@@ -281,6 +281,7 @@ impl Pass<'_> {
                         );
                     }
                 };
+                super::approval::labeller(github, &mut facts, &record.memory);
                 report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.

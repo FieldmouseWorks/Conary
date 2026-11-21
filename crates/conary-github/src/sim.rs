@@ -555,10 +555,35 @@ impl Hub {
         self.edit_pull(repo, number, |p| p["base"]["ref"] = json!(base));
     }
 
-    /// PR `number`'s labels are `labels`.
+    /// PR `number`'s labels are `labels`, each it didn't have put on by a
+    /// person.
     pub(crate) fn label(&self, repo: &str, number: u64, labels: &[&str]) {
-        let labels: Vec<Value> = labels.iter().map(|l| json!({"name": l})).collect();
-        self.edit_pull(repo, number, |p| p["labels"] = json!(labels));
+        self.label_as(repo, number, labels, ("owner", "User"));
+    }
+
+    /// PR `number`'s labels are `labels`, each it didn't have put on by
+    /// `by`, a login and its kind (`User` or `Bot`), on its timeline.
+    pub(crate) fn label_as(&self, repo: &str, number: u64, labels: &[&str], by: (&str, &str)) {
+        let at = self.now();
+        self.repo_mut(repo, |r| {
+            let p = r.pulls.get_mut(&number).unwrap();
+            for l in labels {
+                if !p["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|o| o["name"] == *l)
+                {
+                    let mut e = fixtures::labeled();
+                    e["actor"] = fixtures::user(by.0, by.1);
+                    e["label"]["name"] = json!(l);
+                    e["created_at"] = json!(at);
+                    r.timeline.entry(number).or_default().push(e);
+                }
+            }
+            let labels: Vec<Value> = labels.iter().map(|l| json!({"name": l})).collect();
+            p["labels"] = json!(labels);
+        });
     }
 
     /// Head `head` does just what `other`'s does: it holds `other`'s patch
