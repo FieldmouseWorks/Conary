@@ -3,6 +3,7 @@
 //! the other writer recorded and anchored meanwhile is kept by both.
 use super::flow_pass_case::{Case, REPO};
 use crate::anchor;
+use crate::api::Source;
 use crate::sim::{Call, unblocked};
 use conary_core::ChangeId;
 use conary_core::log;
@@ -241,5 +242,77 @@ fn a_pass_whose_pr_another_writer_recorded_meanwhile_records_nothing_twice() {
         assert_eq!(pr_3(raced.path()).0, kinds[..kinds.len() - 1]);
         assert_eq!(pass(&c, &mut a), None);
         assert_eq!(pr_3(raced.path()), (kinds, change));
+    });
+}
+
+/// Another writer raising the case's PR 3 to R2 in the ledger at `dir`, as
+/// `cn class` records a raise, just before the pass's first `call` once
+/// the pass has classified PR 3.
+fn race_raise_of_3(c: &Case, dir: &Path, call: Call) -> Rc<Cell<bool>> {
+    let raised: Rc<Cell<bool>> = Rc::default();
+    arm_raise(&c.hub, dir.to_owned(), call, Rc::clone(&raised));
+    raised
+}
+
+fn arm_raise(hub: &crate::sim::Hub, at: std::path::PathBuf, call: Call, raised: Rc<Cell<bool>>) {
+    hub.race(call.repo(REPO), move |hub| {
+        let public = log::load_public_key(&log::public_path(&log::key_path(&at))).unwrap();
+        let classified = conary_core::reader::read(&at, &public)
+            .unwrap()
+            .by_pr(&REPO.parse().unwrap(), 3)
+            .is_some_and(|c| !c.classes.is_empty());
+        if !classified {
+            return arm_raise(hub, at, call, raised);
+        }
+        let key = log::load_signing_key(&log::key_path(&at)).unwrap();
+        let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
+        let change = other
+            .store
+            .ledger()
+            .by_pr(&REPO.parse().unwrap(), 3)
+            .unwrap();
+        let said = change.classes.last().unwrap().clone();
+        let body = Body::Classify {
+            change: change.id,
+            revision: said.revision,
+            class: conary_core::Class::R2,
+            because: Some("labelled r2".into()),
+            docs: false,
+            policy: said.policy,
+            raised: vec![conary_core::policy::R2_LABEL.into()],
+        };
+        other.store.record(body).unwrap();
+        other.publish(hub).unwrap();
+        raised.set(true);
+    });
+}
+
+// Another writer raises the pass's PR to R2 after the pass classified it and
+// before it merges: the pass's last looks read the ledger as it stands, and
+// from the last one to the merge it holds the lock, so it never merges on
+// the class it read before and takes its permission back.
+#[test]
+fn a_pass_never_merges_a_pr_another_writer_raised_meanwhile() {
+    unblocked(120, || {
+        // Raised before the permission's last look, or after it and before
+        // the merge.
+        for call in [Call::Statuses, Call::CompareCommits] {
+            let c = Case::new();
+            c.clean_review();
+            let (ledger, mut a) = anchored(&c);
+            let raised = race_raise_of_3(&c, ledger.path(), call);
+            let error = pass(&c, &mut a);
+            assert!(raised.get(), "{call:?}");
+            assert!(error.is_some(), "{call:?}");
+            assert_eq!(c.hub.merged(REPO, 3), None, "{call:?}: {error:?}");
+            let settled = c
+                .hub
+                .statuses(REPO, &super::head(3))
+                .unwrap()
+                .into_iter()
+                .find(|s| s.context == crate::flow::SETTLED)
+                .unwrap();
+            assert_ne!(settled.state, "success", "{call:?}");
+        }
     });
 }

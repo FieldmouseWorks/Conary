@@ -21,6 +21,13 @@ pub(crate) fn raised(f: &mut Facts, memory: &mut Memory, ledger: Option<&Ledger>
         .clone()
         .raise(memory.raised.iter().cloned().collect());
 }
+/// Whether `ledger`, as it stands now, still gives the PR the class the
+/// decision read: a raise another writer recorded since says it doesn't.
+pub(crate) fn unraised(f: &Facts, record: &Record, ledger: &Ledger) -> bool {
+    let mut now = f.clone();
+    raised(&mut now, &mut record.memory.clone(), Some(ledger));
+    now.classified == f.classified
+}
 pub(crate) fn classify<G: Write>(
     pass: &Pass<'_>,
     github: &G,

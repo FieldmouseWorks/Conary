@@ -3,14 +3,18 @@
 //! Non-granting cleanup also allows the expected exit of cancelled workers.
 use super::persist::Result;
 use super::*;
+use conary_core::Ledger;
 
+/// `ledger` is the ledger as it stands now, so a raise another writer
+/// recorded since the decision read it withdraws the permission.
 pub(crate) fn current<G: Write>(
     pass: &Pass<'_>,
     github: &G,
     f: &Facts,
     record: &Record,
+    ledger: Option<&Ledger>,
 ) -> Result<()> {
-    validate(pass, github, f, record, false)
+    validate(pass, github, f, record, ledger, false)
 }
 
 /// The same PR scope check, allowing only the completion of work that was
@@ -21,14 +25,16 @@ pub(crate) fn cleanup<G: Write>(
     github: &G,
     f: &Facts,
     record: &Record,
+    ledger: Option<&Ledger>,
 ) -> Result<()> {
-    validate(pass, github, f, record, true)
+    validate(pass, github, f, record, ledger, true)
 }
 fn validate<G: Write>(
     pass: &Pass<'_>,
     github: &G,
     f: &Facts,
     record: &Record,
+    ledger: Option<&Ledger>,
     cleanup: bool,
 ) -> Result<()> {
     // What degraded now that didn't when the decision read: what it
@@ -62,7 +68,7 @@ fn validate<G: Write>(
     }
     super::observe::issuances(&mut fresh, &record.memory);
     let mut memory = record.memory.clone();
-    super::ledger::raised(&mut fresh, &mut memory, pass.ledger);
+    super::ledger::raised(&mut fresh, &mut memory, ledger);
     if fresh.changes_requested && !f.changes_requested {
         return Err("Review changes were requested before permission was used".into());
     }

@@ -93,6 +93,14 @@ impl Store {
         })
     }
 
+    /// The ledger as the log holds it now: what other writers appended since
+    /// this store's last write applied, under the lock for only as long as
+    /// that takes.
+    pub fn refresh(&mut self) -> Result<&Ledger, StoreError> {
+        drop(self.writer()?);
+        Ok(&self.ledger)
+    }
+
     /// Takes the writer lock, applies what other writers appended, and
     /// holds it, every write after included, until the store is dropped:
     /// for a writer whose reads, of the ledger and GitHub, must still hold
