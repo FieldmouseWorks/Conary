@@ -33,9 +33,6 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
-    /// The reads that failed or stopped short, each holding what it was
-    /// for pending, and those that answered.
-    pub reads: Reads,
 }
 
 const LANE: &str = "lane into ";
@@ -181,7 +178,8 @@ fn replacement(
 /// lazy: a replacement run clears an old cancellation without asking why the
 /// old run stopped. API failure propagates, never guesses a timeout verdict.
 /// A read it goes on past (the docs lane's fork point, a run's suite) is a
-/// degraded read in the result's `reads`, and what it was for is pending.
+/// degraded read in `reads`, and what it was for is pending. Each read's
+/// outcome is kept in `reads`, even when a later one ends it.
 /// `documentation` is whether the machine's policy names every path of
 /// `paths` documentation: the docs lane's word alone, a job anyone's PR
 /// can name, never waives a proof.
@@ -195,9 +193,9 @@ pub(super) fn checks(
     documentation: bool,
     suites: &BTreeMap<u64, Suite>,
     settings: &Settings,
+    reads: &mut Reads,
 ) -> std::result::Result<Result, ReadError> {
     let proofs = &settings.machine();
-    let mut reads = Reads::default();
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
     let raw_runs = reads.ask(Reading::Checks, source.check_runs(repo, head))?;
@@ -418,6 +416,5 @@ pub(super) fn checks(
         docs,
         has_ci,
         runs: effective.into_values().collect(),
-        reads,
     })
 }

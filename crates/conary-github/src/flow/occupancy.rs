@@ -137,7 +137,10 @@ impl Occupancy {
                         facts
                     }
                     Err(e) => {
-                        reads.met.push(e.degradation.clone());
+                        reads.extend(Reads {
+                            met: e.met(),
+                            answered: e.reads.answered.clone(),
+                        });
                         return Err(e.into());
                     }
                 };

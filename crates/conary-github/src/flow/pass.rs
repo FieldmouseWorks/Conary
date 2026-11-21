@@ -270,14 +270,13 @@ impl Pass<'_> {
                 let mut facts = match read {
                     Ok(facts) => facts,
                     Err(e) => {
-                        let found = e.degradation.clone();
                         return self.stopped(
                             store.as_deref_mut(),
                             data.as_ref(),
                             &pull,
                             &mut record,
                             &mut report,
-                            found,
+                            (e.met(), &e.reads.answered),
                             &e,
                         );
                     }
@@ -325,13 +324,15 @@ impl Pass<'_> {
                             },
                             why: super::degraded::why(&*e),
                         };
+                        let mut met = vec![found];
+                        met.extend(facts.reads.met.iter().cloned());
                         return self.stopped(
                             store.as_deref_mut(),
                             data.as_ref(),
                             &pull,
                             &mut record,
                             &mut report,
-                            found,
+                            (met, &facts.reads.answered),
                             &*e,
                         );
                     }
@@ -521,8 +522,9 @@ impl Pass<'_> {
         Ok(reports)
     }
     /// The decision for a PR a read it can't go on without failed for: it
-    /// waits at no stage, naming the read, which is recorded, and nothing
-    /// acts for it. Its error books the pass again, to read it again.
+    /// waits at no stage, naming the read, and nothing acts for it. What
+    /// its reads met (that read first) is recorded, and what they answered
+    /// is cleared. Its error books the pass again, to read it again.
     #[allow(clippy::too_many_arguments)]
     fn stopped(
         &self,
@@ -531,13 +533,16 @@ impl Pass<'_> {
         pull: &crate::api::PullRequest,
         record: &mut Record,
         report: &mut Report,
-        found: super::Degradation,
+        (found, answered): (
+            Vec<super::Degradation>,
+            &std::collections::BTreeSet<super::Degraded>,
+        ),
         error: &dyn std::error::Error,
     ) -> Result<()> {
-        let found = [found];
+        let again = |w: &super::Degraded| answered.contains(w);
         let recorded = match store {
             Some(store) if !self.dry_run => {
-                super::degraded::record(store, &report.repo, pull.number, &found, |_| false)
+                super::degraded::record(store, &report.repo, pull.number, &found, again)
                     .map(|()| Some(store.ledger()))
             }
             Some(store) => Ok(Some(store.ledger())),
@@ -545,7 +550,7 @@ impl Pass<'_> {
         };
         let next = super::degraded::waiting(
             &found,
-            |_| false,
+            again,
             super::Rank::of(&self.config.settings, &self.config.trusted_authors, pull).level,
             recorded.as_ref().ok().copied().flatten(),
             &report.repo,

@@ -123,12 +123,14 @@ impl Reads {
     }
 }
 
-/// A read the decision can't go on without that failed: what degraded, and
-/// GitHub's error, which it shows as.
+/// A read the decision can't go on without that failed: what degraded,
+/// GitHub's error, which it shows as, and what the reads before it met and
+/// answered, which are recorded and cleared with it.
 #[derive(Debug)]
 pub struct ReadError {
     pub degradation: Degradation,
     pub error: crate::ApiError,
+    pub reads: Reads,
 }
 impl ReadError {
     pub(crate) fn new(read: Reading, error: crate::ApiError) -> Self {
@@ -144,7 +146,21 @@ impl ReadError {
                 why,
             },
             error,
+            reads: Reads::default(),
         }
+    }
+    /// Everything this read met: it, then the reads before it that
+    /// degraded.
+    pub(crate) fn met(&self) -> Vec<Degradation> {
+        let mut met = vec![self.degradation.clone()];
+        met.extend(
+            self.reads
+                .met
+                .iter()
+                .filter(|d| d.what != self.degradation.what)
+                .cloned(),
+        );
+        met
     }
 }
 impl std::fmt::Display for ReadError {

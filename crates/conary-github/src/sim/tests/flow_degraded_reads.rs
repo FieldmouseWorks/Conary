@@ -314,3 +314,36 @@ fn a_read_that_fails_before_permission_is_used_withdraws_it() {
         "{three:?}"
     );
 }
+
+/// A read the decision can't go on without that fails after others met or
+/// answered: what they met is recorded and named with it, and what they
+/// answered is cleared. At 762e522 only the failing read was kept.
+#[test]
+fn the_reads_before_one_that_fails_are_kept() {
+    let c = Case::new();
+    let now = jobs::now() + 10_000;
+    c.pass(now - 1, false);
+    c.clean_review();
+    // The checks stop short, then the comments don't read.
+    snap(&c.hub, |s| s.checks_complete = false);
+    c.hub.fail(Call::Comments);
+    let three = decided(&c.pass(now, false), 3);
+    assert!(
+        names(&three, "reviews") && names(&three, "checks"),
+        "{three}"
+    );
+    assert_eq!(naming(&c, "degraded", "reviews"), 1);
+    assert_eq!(naming(&c, "degraded", "checks"), 1);
+    snap(&c.hub, |s| s.checks_complete = true);
+    c.hub.heal(Call::Comments);
+    // The PR doesn't read; then it does, and its files don't.
+    c.hub.fail(Call::FlowSnapshot);
+    c.pass(now + 1, false);
+    assert_eq!(naming(&c, "degraded", "pull"), 1);
+    c.hub.heal(Call::FlowSnapshot);
+    c.hub.fail(Call::Files);
+    let three = decided(&c.pass(now + 2, false), 3);
+    assert_eq!(naming(&c, "restored", "pull"), 1, "{three}");
+    assert!(!names(&three, "pull"), "{three}");
+    assert!(names(&three, "files"), "{three}");
+}

@@ -410,6 +410,7 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
             head,
         )
         .map_err(failed)?;
+    let mut reads = super::Reads::default();
     let observed = super::ci::checks(
         github,
         &repo,
@@ -421,9 +422,10 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
         f.classified.docs,
         &snapshot.suites,
         &f.settings,
+        &mut reads,
     )
     .map_err(|e| cant(read, e.degradation.why))?;
-    if let Some(d) = observed.reads.met.first() {
+    if let Some(d) = reads.met.first() {
         return Err(cant(read, d.why.clone()));
     }
     if head == f.revision.head {

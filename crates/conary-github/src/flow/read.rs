@@ -63,8 +63,31 @@ pub fn read(
     settings: Settings,
     trusted_authors: &[String],
 ) -> Result<Facts, ReadError> {
+    let reads = &mut Reads::default();
+    match gather(source, repo, pr, policy, settings, trusted_authors, reads) {
+        Ok(mut facts) => {
+            facts.reads = std::mem::take(reads);
+            Ok(facts)
+        }
+        // What the reads before it met and answered is kept with it.
+        Err(mut e) => {
+            e.reads = std::mem::take(reads);
+            Err(e)
+        }
+    }
+}
+
+/// [`read`]'s reads, each one's outcome kept in `reads`.
+fn gather(
+    source: &dyn Read,
+    repo: &Repo,
+    pr: u64,
+    policy: &Policy,
+    settings: Settings,
+    trusted_authors: &[String],
+    reads: &mut Reads,
+) -> Result<Facts, ReadError> {
     let repository = repo.to_string();
-    let mut reads = Reads::default();
     let pull = reads.ask(Reading::Pull, source.pull(&repository, pr))?;
     let extra = reads.ask(Reading::Pull, source.snapshot(&repository, pr))?;
     let revision = Revision::from(&pull);
@@ -124,7 +147,7 @@ pub fn read(
         claims: Vec::new(),
         stopped_jobs: BTreeSet::new(),
         unreadable: Vec::new(),
-        reads,
+        reads: Reads::default(),
         working: BTreeSet::new(),
         paused: None,
         pushes: BTreeMap::new(),
@@ -180,7 +203,7 @@ pub fn read(
     if excluded(&facts) {
         return Ok(facts);
     }
-    let open = facts.reads.ask(
+    let open = reads.ask(
         Reading::Pulls,
         source.pulls(&repository, crate::api::Pulls::Open),
     )?;
@@ -210,11 +233,9 @@ pub fn read(
     if facts.stacked_on.is_some() {
         return Ok(facts);
     }
-    let tip = facts
-        .reads
-        .ask(Reading::Base, source.branch(&repository, &pull.base.name))?;
+    let tip = reads.ask(Reading::Base, source.branch(&repository, &pull.base.name))?;
     let base = tip.as_deref().unwrap_or(&pull.base.sha);
-    let paths = facts.reads.ask(
+    let paths = reads.ask(
         Reading::Files,
         source.files(&repository, base, &pull.head.sha),
     )?;
@@ -229,10 +250,10 @@ pub fn read(
         facts.classified.docs,
         &extra.suites,
         &facts.settings,
+        reads,
     )?;
-    facts.reads.extend(std::mem::take(&mut ci.reads));
     if !extra.checks_complete {
-        facts.reads.met(
+        reads.met(
             Reading::Checks,
             "GitHub listed more check suites than one read holds".into(),
         );
@@ -243,16 +264,10 @@ pub fn read(
         ci.docs = false;
     }
     if facts.settings.job_login.is_some() {
-        facts.pushes = facts
-            .reads
-            .ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
+        facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
     }
-    let records = facts
-        .reads
-        .ask(Reading::Reviews, source.reviews(&repository, pr))?;
-    let comments = facts
-        .reads
-        .ask(Reading::Reviews, source.comments(&repository, pr))?;
+    let records = reads.ask(Reading::Reviews, source.reviews(&repository, pr))?;
+    let comments = reads.ask(Reading::Reviews, source.comments(&repository, pr))?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);
     facts.changes_requested = super::reviews::changes_requested(&records);
     facts.review_bodies = super::judging::review_bodies(&records);
@@ -271,16 +286,11 @@ pub fn read(
     facts.major_generation = markers.major_generation;
     facts.judge_asked = markers.judge_asked;
     facts.major = markers.major;
-    let history = facts.reads.take(
+    let history = reads.take(
         Reading::Commits,
         source.compare_commits(&repository, base, &pull.head.sha),
     );
-    let provenance = super::history::provenance(
-        history.as_ref(),
-        &facts.settings,
-        renovate,
-        &mut facts.reads,
-    );
+    let provenance = super::history::provenance(history.as_ref(), &facts.settings, renovate, reads);
     facts.authorship_known = provenance.known;
     facts.needs_judge = provenance.judge;
     facts.bot_edited = provenance.edited;
@@ -288,7 +298,6 @@ pub fn read(
     // answer; a read of it that fails is degraded, and the merge's effect
     // unknown.
     facts.empty = if let (Some(tip), Some(merge)) = (&tip, &pull.merge_commit_sha) {
-        let reads = &mut facts.reads;
         reads
             .take(Reading::MergeTree, source.commit(&repository, merge))
             .filter(|c| {
@@ -309,11 +318,11 @@ pub fn read(
     if facts.red_fix && !facts.draft {
         // No observation of the default branch can't tell whether it's red.
         match &extra.default_branch {
-            None => facts.reads.met(
+            None => reads.met(
                 Reading::DefaultBranch,
                 "GitHub's snapshot held no observation of the default branch".into(),
             ),
-            Some(_) => facts.reads.answered(Reading::DefaultBranch),
+            Some(_) => reads.answered(Reading::DefaultBranch),
         }
         facts.base_held = extra
             .default_branch
@@ -321,7 +330,6 @@ pub fn read(
             .is_none_or(|b| b.ci != Ci::Red || tip.as_deref() != Some(&b.head));
     }
 
-    let reads = &mut facts.reads;
     facts.gate_edited = super::gates::edited(&paths, || {
         reads.take(
             Reading::Diff,
