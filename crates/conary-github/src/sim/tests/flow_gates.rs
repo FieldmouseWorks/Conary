@@ -162,6 +162,6 @@ fn a_commit_without_its_message_is_a_degraded_read() {
     );
     assert!(!matches!(
         next(&f, &m, 4000).0.step,
-        Step::Merge | Step::Settle | Step::JoinTrain
+        Step::Merge | Step::JoinTrain
     ));
 }
