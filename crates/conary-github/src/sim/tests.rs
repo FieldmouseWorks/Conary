@@ -318,6 +318,8 @@ mod flow;
 
 mod flow_ci;
 
+mod flow_queue;
+
 mod flow_reader;
 
 mod flow_markers;

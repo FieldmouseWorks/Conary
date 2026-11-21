@@ -294,6 +294,7 @@ pub(crate) fn waiting(
         description: String::new(),
         wait_until: None,
         overdue_at: None,
+        queued: None,
         proof: None,
         wait_on: None,
         on_usage: false,
