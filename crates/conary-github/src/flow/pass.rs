@@ -380,17 +380,7 @@ impl Pass<'_> {
                 }
                 // A degraded record, answer or mark counts as failed: the PR
                 // waits on it, granted nothing.
-                let failed: Vec<_> = read
-                    .iter()
-                    .chain(
-                        facts
-                            .reads
-                            .met
-                            .iter()
-                            .filter(|d| super::degraded::waits(&d.what)),
-                    )
-                    .cloned()
-                    .collect();
+                let failed = super::degraded::failing(&read, &facts.reads);
                 super::degraded::wait(&mut next, &failed);
                 let mut looked = std::collections::BTreeSet::new();
                 // The reads it went on past, or that stopped short, have

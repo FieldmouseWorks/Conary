@@ -7,7 +7,7 @@
 //! so these run on a tree that has no such path.
 use super::flow_degraded::{decided, ops};
 use super::flow_pass_case::{Case, REPO};
-use super::flow_pass_slots::{prepared, two};
+use super::flow_pass_slots::{kick, prepared, step, two};
 use super::head;
 use crate::api::Source;
 use crate::flow::*;
@@ -273,4 +273,38 @@ fn an_answer_to_another_kind_of_work_is_recorded_once_counts_failed_and_is_named
     let three = decided(&c.pass(now + 3, false), 3);
     assert_eq!(three.get("degraded"), None, "{three}");
     assert_eq!(naming(&c, "restored", &what), 1);
+}
+
+/// A PR a mark that didn't parse keeps from work holds no place in the
+/// proof queue: with one slot, PR 3 ranked first and prepared, its verdict
+/// broken, PR 5's proof takes the idle slot, in a full pass and a kick of
+/// PR 5 alike, dry or not. The queue's discovery took PR 3 as waiting
+/// ahead, so PR 5 waited on a slot no one held.
+#[test]
+fn a_pr_a_broken_mark_keeps_from_work_holds_no_place_ahead_of_a_proof() {
+    let now = jobs::now();
+    for kicked in [false, true] {
+        for dry in [true, false] {
+            let mut c = two(1);
+            prepared(&c, now, true);
+            (ROWS[0].arm)(&mut c);
+            let reports = if kicked {
+                kick(&c, 5, dry, now + 1)
+            } else {
+                c.pass(now + 1, dry)
+            };
+            let five = reports.iter().position(|r| r.pr == 5).unwrap();
+            assert_eq!(
+                step(&reports, five).1,
+                Step::Prove,
+                "kicked {kicked}, dry {dry}: {:?}",
+                reports[five].next
+            );
+            if !kicked {
+                let three = decided(&reports, 3);
+                assert!(names_only(&three, &mark("verdict")), "{three}");
+            }
+            assert_eq!(c.deferred.0.borrow().len(), usize::from(!dry));
+        }
+    }
 }

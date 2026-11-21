@@ -317,6 +317,17 @@ pub(crate) fn waits(what: &Degraded) -> bool {
     }
 }
 
+/// What counts the PR's checks failed ([`wait`]): its degraded record and
+/// answers (`read`), and each mark its `reads` met. The one list both its
+/// decision and the proof queue's discovery of it wait on, so a PR kept
+/// from work holds no place ahead of another's proof.
+pub(crate) fn failing(read: &[Degradation], reads: &Reads) -> Vec<Degradation> {
+    read.iter()
+        .chain(reads.met.iter().filter(|d| waits(&d.what)))
+        .cloned()
+        .collect()
+}
+
 /// A degraded record, answer or mark (`read`) counts as its check's
 /// failure: the PR waits on it, at no stage, so nothing is granted (a wait
 /// at the train stage with a seat would be), whatever else it would do but
