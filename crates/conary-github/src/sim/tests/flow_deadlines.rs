@@ -43,8 +43,9 @@ fn proofs(p: &Purpose) -> bool {
 /// Real passes from `t` on, each when the last one said to wake (a minute
 /// on when it named no time), answering every preparation ready when
 /// `ready`. Every other worker the plugin is asked for never answers.
-/// Stops once `purpose` has three workers, or after `passes` passes.
-fn drive(c: &Case, t: &mut u64, ready: bool, purpose: fn(&Purpose) -> bool) -> Next {
+/// Stops once it's stalled, or `purpose` has `limit` workers, or after
+/// forty passes.
+fn drive(c: &Case, t: &mut u64, ready: bool, purpose: fn(&Purpose) -> bool, limit: usize) -> Next {
     let mut next = None;
     for _ in 0..40 {
         if ready {
@@ -52,8 +53,10 @@ fn drive(c: &Case, t: &mut u64, ready: bool, purpose: fn(&Purpose) -> bool) -> N
         }
         let decided = c.pass(*t, false)[0].next.clone().unwrap();
         *t = decided.wait_until.filter(|w| *w > *t).unwrap_or(*t + 60);
+        let done =
+            decided.description.starts_with("Stalled") || launched(c, purpose).len() >= limit;
         next = Some(decided);
-        if launched(c, purpose).len() >= 3 {
+        if done {
             break;
         }
     }
@@ -89,12 +92,15 @@ fn stalled(c: &Case, t: u64, next: &Next, hit: &[Work]) {
 fn a_preparation_that_never_answers_stalls_at_its_second_deadline() {
     let c = case();
     let mut t = jobs::now();
-    let next = drive(&c, &mut t, false, prepares);
+    let next = drive(&c, &mut t, false, prepares, 3);
     stalled(&c, t, &next, &launched(&c, prepares));
     // It stays stalled, the same stall, however long it waits.
-    let again = drive(&c, &mut t, false, prepares);
-    assert_eq!(again.description, next.description);
-    assert_eq!(again.overdue_at, next.overdue_at);
+    for _ in 0..3 {
+        t += 3600;
+        let again = c.pass(t, false)[0].next.clone().unwrap();
+        assert_eq!(again.description, next.description);
+        assert_eq!(again.overdue_at, next.overdue_at);
+    }
     assert_eq!(launched(&c, prepares).len(), 2);
     assert!(launched(&c, proofs).is_empty());
 }
@@ -103,8 +109,40 @@ fn a_preparation_that_never_answers_stalls_at_its_second_deadline() {
 fn a_proof_that_never_answers_stalls_at_its_second_deadline() {
     let c = case();
     let mut t = jobs::now();
-    let next = drive(&c, &mut t, true, proofs);
+    let next = drive(&c, &mut t, true, proofs, 3);
     stalled(&c, t, &next, &launched(&c, proofs));
+}
+
+/// A preparation's deadline and a proof's are the same check's: one of
+/// each on the same tree stalls it.
+#[test]
+fn a_preparations_deadline_and_a_proofs_add_up() {
+    let c = case();
+    let mut t = jobs::now();
+    drive(&c, &mut t, false, prepares, 2);
+    // The first preparation's worker is gone: only the second answers.
+    let first = launched(&c, prepares).remove(0).path;
+    c.deferred.0.borrow_mut().retain(|p| *p != first);
+    let next = drive(&c, &mut t, true, proofs, 2);
+    let mut hit = launched(&c, prepares);
+    hit.truncate(1);
+    hit.extend(launched(&c, proofs));
+    stalled(&c, t, &next, &hit);
+}
+
+/// Stopped work, here as obsolete, reached no deadline of its own: it
+/// counts toward no stall.
+#[test]
+fn stopped_work_counts_toward_no_stall() {
+    let c = case();
+    let mut t = jobs::now();
+    c.pass(t, false);
+    let first = launched(&c, prepares).remove(0);
+    std::fs::write(first.path.with_extension("cancel"), b"obsolete\n").unwrap();
+    let next = drive(&c, &mut t, false, prepares, 4);
+    let all = launched(&c, prepares);
+    assert_eq!(all.len(), 3, "{next:?}");
+    stalled(&c, t, &next, &all[1..]);
 }
 
 /// A deadline hit once is retried as it always was.
@@ -136,7 +174,7 @@ fn only_a_new_tree_or_recipe_starts_the_count_again() {
     for change in ["same tree", "new tree", "recipe"] {
         let mut c = case();
         let mut t = jobs::now();
-        drive(&c, &mut t, false, prepares);
+        drive(&c, &mut t, false, prepares, 3);
         assert_eq!(launched(&c, prepares).len(), 2, "{change}");
         match change {
             "recipe" => {
@@ -174,7 +212,7 @@ fn only_a_new_tree_or_recipe_starts_the_count_again() {
 fn a_tree_that_cant_be_read_starts_nothing() {
     let c = case();
     let mut t = jobs::now();
-    drive(&c, &mut t, false, prepares);
+    drive(&c, &mut t, false, prepares, 3);
     c.hub.fail(crate::sim::Call::Tree);
     let next = c.pass(t, false)[0].next.clone().unwrap();
     assert!(matches!(next.step, Step::Wait { .. }), "{next:?}");

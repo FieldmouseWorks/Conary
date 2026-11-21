@@ -680,6 +680,18 @@ recipe set:
 - **`proof`** then runs the checks. It takes a slot, in the queue order
   above, unless its preparation answered `slot: false`.
 
+A `Job` recipe is a model-run check, not a proof, and is never sent to a
+proof plugin: its check waits, with that reason. A targeted kick reads the
+other open PRs' [place in line](#priority) even before their first pass; dry
+runs reserve virtual slots within the pass in the same order.
+
+A refused write is saved as a failure observation for the next decision.
+Retry passes still revoke permission while leaving the failed substantive
+action until its deadline. Three strikes make the wait overdue, as a check
+[stalled on its deadlines](#deadlines) does at once. One PR's
+read, plugin or write failure is reported on that PR and does not stop
+processing the others.
+
 ### Deadlines
 
 A deadline work keeps hitting is a stall to fix, not a retry
@@ -703,18 +715,6 @@ flow reads the head's tree before deciding. A read of it that fails is the
 degraded `tree` read: whether the head is on the stalled tree can't be told,
 so nothing starts until it reads. Work saved before trees were kept counts
 toward no tree.
-
-A `Job` recipe is a model-run check, not a proof, and is never sent to a
-proof plugin: its check waits, with that reason. A targeted kick reads the
-other open PRs' [place in line](#priority) even before their first pass; dry
-runs reserve virtual slots within the pass in the same order.
-
-A refused write is saved as a failure observation for the next decision.
-Retry passes still revoke permission while leaving the failed substantive
-action until its deadline. Three strikes make the wait overdue, as a check
-[stalled on its deadlines](#deadlines) does at once. One PR's
-read, plugin or write failure is reported on that PR and does not stop
-processing the others.
 
 ## Comparing decisions
 
