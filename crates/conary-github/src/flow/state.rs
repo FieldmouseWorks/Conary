@@ -295,18 +295,15 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 } else if stage == Stage::Train {
                     WaitOn::Train
                 } else if f.settings.renovate_sweep
-                    && f.major_generation.is_some()
-                    && f.major.is_none()
-                    && stage == Stage::Review
-                    && matches!(step, Step::Wait { .. })
-                {
-                    WaitOn::Sweep
-                } else if f.settings.renovate_sweep
-                    && f.renovate
-                    && f.dependency.is_some()
-                    && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
-                    && (f.checks.iter().any(|c| c.state == Ci::Red)
-                        || f.dependency == Some(Dependency::Major) && f.major.is_none())
+                    && ((f.major_generation.is_some()
+                        && f.major.is_none()
+                        && stage == Stage::Review
+                        && matches!(step, Step::Wait { .. }))
+                        || (f.renovate
+                            && f.dependency.is_some()
+                            && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
+                            && (f.checks.iter().any(|c| c.state == Ci::Red)
+                                || f.dependency == Some(Dependency::Major) && f.major.is_none())))
                 {
                     WaitOn::Sweep
                 } else {
