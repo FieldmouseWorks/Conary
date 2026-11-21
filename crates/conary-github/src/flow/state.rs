@@ -299,10 +299,14 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         // in its stall. The wait stays what was decided, so the stall's
         // clock runs on whatever the status says.
         if !failing && let Some(look) = super::recover::look(f, &m, stage, &step, &wait, now) {
+            // A fix still to hand says so; the pass shows the recovery if
+            // it can't hand it after all.
             if let Some(ask) = look.step {
                 step = ask;
+                description = look.recovery.describe();
+            } else if let Step::Wait { .. } = step {
+                description = look.recovery.describe();
             }
-            description = look.recovery.describe();
             recovery = Some(look.recovery);
         }
         m.wait = Some(wait);

@@ -83,7 +83,8 @@ pub(super) struct Look {
 /// At an expired deadline of a wait (`wait`, its stall), the first recovery
 /// that applies and wasn't asked for on this head, if this stall had none
 /// yet; else the one this stall had, to show while it waits. A red check's
-/// fix that can't be handed stalls the same way.
+/// fix that can't be handed stalls the same way, and [`unhanded`] shows the
+/// recovery its stall had while it still can't.
 pub(super) fn look(
     f: &Facts,
     m: &Memory,
@@ -104,7 +105,7 @@ pub(super) fn look(
         .filter(mine)
         .find(|r| r.since == wait.since)
     {
-        return waits.then(|| Look {
+        return Some(Look {
             step: None,
             recovery: r.clone(),
         });
@@ -182,5 +183,24 @@ pub(super) fn answered(next: &mut Next, m: &Memory) {
     {
         next.description = r.describe();
         next.recovery = Some(r.clone());
+    }
+}
+
+/// A decided step the pass can't take (`why`) waits instead. A fix that
+/// can't be handed is the stall a recovery was asked for: the status keeps
+/// showing that ask and GitHub's answer, not `why`, for as long as it lasts.
+pub(super) fn unhanded(next: &mut Next, why: String) {
+    next.step = Step::Wait { until: None };
+    next.description = match &next.recovery {
+        Some(r) => r.describe(),
+        None => why,
+    };
+}
+
+/// A fix the pass hands goes to its job: the stall's recovery is no longer
+/// what the PR waits on, and isn't shown.
+pub(super) fn handed(next: &mut Next) {
+    if let Step::HandFix(_) = next.step {
+        next.recovery = None;
     }
 }

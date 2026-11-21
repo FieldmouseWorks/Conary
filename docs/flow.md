@@ -760,7 +760,8 @@ that stall or for that way on that head; a new head starts afresh. A rerun
 that comes back cancelled again stays overdue. A refusal is quoted as
 GitHub gave it, its words first in the status (cut to GitHub's 140
 characters) and whole in Next's `recovery`, in the pass that got it, since
-nothing on GitHub changes to bring a pass. An answer that never came (GitHub
+nothing on GitHub changes to bring a pass, and in every pass of the stall
+after it, a fix that still can't be handed included. An answer that never came (GitHub
 unavailable, or its answer lost) says so the same way, and isn't asked again
 either. The wait itself, its `overdue_at` and its stall clock, stays what
 was decided: after its recovery a stall is overdue in the flow's status. A

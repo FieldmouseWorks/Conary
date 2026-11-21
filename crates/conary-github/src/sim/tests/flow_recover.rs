@@ -289,3 +289,42 @@ fn a_timed_out_run_no_fix_can_take_is_run_again_once() {
     }
     assert_eq!(asked(&c), 1);
 }
+
+#[test]
+fn a_refused_rerun_at_a_fix_none_can_take_stays_quoted_while_it_cant() {
+    const SAID: &str = "Resource not accessible by integration";
+    let mut c = stopped("github-actions", Some(RUN), "timed_out");
+    let plugin = c.config.plugins.fix.take();
+    assert!(plugin.is_some());
+    c.hub.refuse_with(Call::FlowRerun, SAID);
+    next(&c, START);
+    let due = next(&c, START + 10).overdue_at.unwrap();
+    let n = next(&c, due);
+    assert_eq!(n.step, Step::Recover(Recovery::Rerun(RUN)));
+    assert!(n.description.starts_with(SAID), "{}", n.description);
+    // The fix still can't be handed: each pass after it, read afresh as a
+    // restart does, quotes GitHub, not the missing plugin, and asks nothing.
+    c.hub.heal(Call::FlowRerun);
+    for now in [due + 60, due + 3600, due + 3 * STALL] {
+        c.hub.label(REPO, 3, &["unrelated"]);
+        let after = next(&c, now);
+        assert_eq!(after.step, Step::Wait { until: None });
+        assert_eq!(after.stage, Stage::Fix);
+        assert_eq!(after.overdue_at, Some(due));
+        assert_eq!(after.description, n.description);
+        assert_eq!(
+            after.recovery.as_ref().unwrap().answer,
+            Answer::Refused(SAID.into())
+        );
+        assert_eq!(status(&c), n.description);
+    }
+    assert_eq!(asked(&c), 1);
+    // Once a fix can be handed, it is, and the recovery isn't what the PR
+    // waits on any more.
+    c.config.plugins.fix = plugin;
+    let handed = next(&c, due + 3 * STALL + 60);
+    assert_eq!(handed.step, Step::HandFix(Kind::Red));
+    assert_ne!(handed.description, n.description);
+    assert_eq!(handed.recovery, None);
+    assert_eq!(asked(&c), 1);
+}
