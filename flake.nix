@@ -3,7 +3,7 @@
 
   # Pinned by commit, so Renovate moves it with the workflows' pins on burrow
   # (burrow's templates/project/flake.nix).
-  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=beb352998c108d98740f85a27f6db991e2fc3e08";
+  inputs.burrow.url = "git+https://github.com/FieldmouseWorks/burrow?ref=main&rev=eb0cf805b67fb1a592ba3e4b8db1cb66711eb3f5";
 
   # Conary's toolchain can be newer than burrow's. Own the overlay pin so
   # lock maintenance keeps it current instead of restoring burrow's lock.
