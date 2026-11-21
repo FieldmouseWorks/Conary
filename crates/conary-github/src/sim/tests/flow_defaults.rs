@@ -28,7 +28,6 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         bot_emails,
         renovate_email,
         renovate_login,
-        batch_label: _,
         hold_label: _,
         priority_labels: _,
         default_priority: _,
@@ -43,7 +42,6 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         stall_after: _,
         hold_stall_after: _,
         train_stall_after: _,
-        renovate_merge_after: _,
         renovate_run: _,
         renovate_sweep,
     } = Settings::default();
