@@ -31,6 +31,16 @@ fn validate<G: Write>(
     record: &Record,
     cleanup: bool,
 ) -> Result<()> {
+    // What degraded now that didn't when the decision read: what it
+    // answered and the scope's read can't use withdraws the permission.
+    let known = |d: &super::degraded::Degradation| {
+        f.unreadable
+            .iter()
+            .chain(&f.reads.met)
+            .any(|o| o.what == d.what)
+    };
+    // A read the decision can't go on without that fails now withdraws it
+    // whatever it met before: the decision went on past it.
     let mut fresh = read(
         github,
         &f.repo,
@@ -38,7 +48,12 @@ fn validate<G: Write>(
         pass.policy,
         pass.config.settings.clone(),
         &pass.config.trusted_authors,
-    )?;
+    )
+    .map_err(|e| -> super::persist::Error {
+        let mut new = vec![e.degradation.clone()];
+        new.extend(e.met().into_iter().skip(1).filter(|d| !known(d)));
+        Box::new(super::degraded::Withdrawn(new))
+    })?;
     if cleanup {
         super::observe::hydrate_cleanup(&mut fresh, record, pass.now, &f.working)?;
     } else {
@@ -57,12 +72,7 @@ fn validate<G: Write>(
         .unreadable
         .iter()
         .chain(&fresh.reads.met)
-        .filter(|d| {
-            !f.unreadable
-                .iter()
-                .chain(&f.reads.met)
-                .any(|o| o.what == d.what)
-        })
+        .filter(|d| !known(d))
         .cloned()
         .collect();
     if !new.is_empty() {

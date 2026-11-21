@@ -369,3 +369,54 @@ fn the_reads_before_one_that_fails_are_kept() {
     assert!(!names(&three, "pull"), "{three}");
     assert!(names(&three, "files"), "{three}");
 }
+
+/// The `n`th call of `call` fails, and only it.
+fn at(h: &Hub, call: Call, n: usize) {
+    if n <= 1 {
+        once(h, call)
+    } else {
+        h.race(call, move |h| at(h, call, n - 1))
+    }
+}
+
+/// A read the decision can't go on without that answered it and fails at
+/// the scope's re-read: the permission is withdrawn, recorded and named, as
+/// a read the decision goes on past is. At b18e84e the error reached the
+/// pass as a plain read error: refused, but nothing recorded and the saved
+/// decision said Merge.
+#[test]
+fn a_required_read_that_fails_before_permission_is_used_is_recorded() {
+    // Which call of it is the scope's re-read.
+    let mut failed = Vec::new();
+    for (call, read, n) in [(Call::Pulls, "pulls", 5), (Call::Branch, "base", 4)] {
+        let c = Case::new();
+        let now = jobs::now() + 10_000;
+        c.pass(now - 1, false);
+        c.clean_review();
+        at(&c.hub, call, n);
+        let reports = c.pass(now, false);
+        let three = reports.iter().find(|r| r.pr == 3).unwrap();
+        let saved = serde_json::to_value(c.record().decision.unwrap()).unwrap();
+        let withdrawn = three
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("before permission was used"));
+        if c.hub.pull(REPO, 3).unwrap().is_merged()
+            || !withdrawn
+            || naming(&c, "degraded", read) != 1
+            || !names(&saved, read)
+            || !saved["stage"].is_null()
+        {
+            failed.push(format!("{read}: {three:?} {saved}"));
+            continue;
+        }
+        // It reads again: cleared, and the PR lands.
+        c.hub.heal(call);
+        c.pass(now + 1, false);
+        c.pass(now + 86_400, false);
+        if naming(&c, "restored", read) != 1 || !c.hub.pull(REPO, 3).unwrap().is_merged() {
+            failed.push(format!("{read}: not restored and landed"));
+        }
+    }
+    assert!(failed.is_empty(), "failed: {failed:#?}");
+}
