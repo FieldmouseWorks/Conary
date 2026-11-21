@@ -128,6 +128,16 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             m.handed.insert(*kind, job.revision.clone());
         }
     }
+    // The label the flow put on is its own until a pass reads it off: only
+    // then can it be a person's.
+    if !f
+        .settings
+        .owner_label
+        .as_ref()
+        .is_some_and(|l| f.labels.contains(l))
+    {
+        m.labelled = false;
+    }
     let decision = super::decide::decide(f, &mut m, now);
     if let Step::StopJob(id) = &decision.1 {
         m.stopping.insert(id.clone());
@@ -172,7 +182,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         || !f.open
         || f.labels.contains(&f.settings.hold_label)
         || f.stacked_on.is_some()
-        || matches!(step, Step::ListOwner)
+        || matches!(step, Step::ListOwner(_))
+        // Two lost jobs are no door: their stall stays overdue in the
+        // status, however long the PR has been open.
+        || description == super::decide::LOST
     {
         None
     } else if no_reviewer
@@ -199,7 +212,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             || f.paused.is_some()
             || !f.open
             || (f.stacked_on.is_some() && stage == Stage::Base)
-            || matches!(step, Step::ListOwner));
+            || matches!(step, Step::ListOwner(_)));
     let mut queued = None;
     let mut recovery = None;
     let overdue_at = if watched {
@@ -234,7 +247,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             matches!(s, super::proofs::Stall::Twice { .. })
                 && description == s.to_string().chars().take(140).collect::<String>()
         });
-        let failing = m.strikes.values().any(|n| *n >= 3) || stalled;
+        let lost = description == super::decide::LOST;
+        let failing = m.strikes.values().any(|n| *n >= 3) || stalled || lost;
         // A wait on CI counts from its runs' start, never their queue.
         let clock = if stage == Stage::Ci && !failing {
             super::ci::clock(&f.checks)
@@ -298,7 +312,11 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         // Past its deadline, a wait is brought back as GitHub allows, once
         // in its stall. The wait stays what was decided, so the stall's
         // clock runs on whatever the status says.
-        if !failing && let Some(look) = super::recover::look(f, &m, stage, &step, &wait, now) {
+        // Two jobs lost go to it too, overdue at once: a timed-out run a
+        // fix can't be handed for comes back by its kind.
+        if (!failing || lost)
+            && let Some(look) = super::recover::look(f, &m, stage, &step, &wait, now)
+        {
             // A fix still to hand says so; the pass shows the recovery if
             // it can't hand it after all.
             if let Some(ask) = look.step {
@@ -315,6 +333,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         m.wait = None;
         None
     };
+    let owner = super::approval::ask(f, &mut m, &step, now);
     (
         Next {
             stage: if f.draft || f.paused.is_some() || f.labels.contains(&f.settings.hold_label) {
@@ -375,6 +394,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             switches: Vec::new(),
             priority: f.rank().level,
             degraded: Vec::new(),
+            owner,
         },
         m,
     )

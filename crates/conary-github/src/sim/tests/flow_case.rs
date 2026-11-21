@@ -25,6 +25,8 @@ pub(super) struct Case {
     pub train: TrainState,
     /// What each finished judge job was asked on, as its invocation says.
     pub judge_requests: BTreeMap<String, Option<Basis>>,
+    /// Why the flow's own judge answered `owner`, as its worker's answer says.
+    pub judge_reason: Option<String>,
 }
 impl Case {
     pub fn new() -> Self {
@@ -44,6 +46,7 @@ impl Case {
             base_held: false,
             train: TrainState::default(),
             judge_requests: BTreeMap::new(),
+            judge_reason: None,
         }
     }
     pub fn roles(&mut self, names: &[&str]) {
@@ -185,6 +188,7 @@ impl Case {
             &conary_core::Policy::parse(br#"{"r2":["^secrets/","(^|/)CODEOWNERS$"],"docs":["^docs/","^README.md$"],"notDocs":["^docs/DESIGN.md$"]}"#).unwrap(),
             self.settings.clone(),&["owner".into()]).unwrap();
         f.judge_requests = self.judge_requests.clone();
+        f.judge_reason = self.judge_reason.clone();
         f.jobs = self.jobs.clone();
         f.claims = self.claims.clone();
         f.stopped_jobs = self.stopped_jobs.clone();

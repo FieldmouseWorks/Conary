@@ -303,6 +303,7 @@ pub(crate) fn waiting(
         switches: Vec::new(),
         priority,
         degraded: Vec::new(),
+        owner: None,
     };
     wait(&mut next, found);
     name(&mut next, found, Vec::new(), again, ledger, repo, pr);

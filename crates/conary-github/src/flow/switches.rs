@@ -36,7 +36,9 @@ pub struct Holding {
     #[serde(flatten)]
     pub switch: Switch,
     /// The step the PR would take now with every switch that masks this one
-    /// lifted: what this one keeps off.
+    /// lifted: what this one keeps off. Loaded as a decision's step is,
+    /// so a record saved with an older step's words still reads.
+    #[serde(deserialize_with = "super::persist::step::deserialize")]
     pub step: Step,
     /// The PR's workers this switch is stopping.
     pub workers: Vec<String>,
@@ -98,13 +100,9 @@ pub(crate) fn holding(
     if !f.settings.train && *step == Step::Merge && f.classified.class == conary_core::Class::R2 {
         switches.push((Switch::TrainOff, vec![]));
     }
-    // A person's approval is what the owner label, an R2 change or a
+    // A person's approval is what a person's owner label, an R2 change or a
     // judge's owner verdict waits on, at the owner or at a landing step.
-    let approval = super::approval::required(f)
-        || f.settings
-            .owner_label
-            .as_ref()
-            .is_some_and(|l| f.labels.contains(l));
+    let approval = super::approval::required(f) || super::approval::person_labelled(f, memory);
     let owner_decides = unswitched.stage == Stage::Owner && f.trusted && f.complete && approval;
     if f.settings.people.is_empty() && (owner_decides || granting && super::approval::required(f)) {
         switches.push((Switch::NoPeople, vec![]));

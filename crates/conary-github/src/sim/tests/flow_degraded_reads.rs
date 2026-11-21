@@ -41,15 +41,12 @@ fn snap(h: &Hub, edit: fn(&mut Snapshot)) {
 }
 
 /// One read of the family: how a test makes it fail or stop short this
-/// pass, the read the decision names, how GitHub answers again, and
-/// whether the PR lands then.
+/// pass, the read the decision names, and how GitHub answers again, after
+/// which the PR lands.
 struct Row {
     read: &'static str,
     arm: fn(&Hub),
     heal: fn(&Hub),
-    /// Whether the PR lands once it heals: one handed to the owner stays
-    /// theirs.
-    lands: bool,
 }
 
 /// Each read a reviewed, green PR's decision takes, failing or stopping
@@ -62,57 +59,49 @@ const ROWS: &[Row] = &[
         read: "pull",
         arm: |h| h.fail(Call::FlowSnapshot),
         heal: |h| h.heal(Call::FlowSnapshot),
-        lands: true,
     },
     Row {
         read: "base",
         arm: |h| h.fail(Call::Branch),
         heal: |h| h.heal(Call::Branch),
-        lands: true,
     },
     Row {
         read: "files",
         arm: |h| h.fail(Call::Files),
         heal: |h| h.heal(Call::Files),
-        lands: true,
     },
     Row {
         read: "checks",
         arm: |h| h.fail(Call::Statuses),
         heal: |h| h.heal(Call::Statuses),
-        lands: true,
     },
     Row {
         read: "reviews",
         arm: |h| h.fail(Call::Comments),
         heal: |h| h.heal(Call::Comments),
-        lands: true,
     },
     // Reads it goes on past, holding what they were for failed.
     Row {
         read: "commits",
         arm: |h| h.fail(Call::CompareCommits),
         heal: |h| h.heal(Call::CompareCommits),
-        lands: true,
     },
     Row {
         read: "checks",
         arm: |h| snap(h, |s| s.checks_complete = false),
         heal: |h| snap(h, |s| s.checks_complete = true),
-        lands: true,
     },
     Row {
         read: "merge_tree",
         arm: |h| h.fail(Call::Commit),
         heal: |h| h.heal(Call::Commit),
-        lands: true,
     },
-    // Handed to the owner, as before, and named.
+    // The flow's own wait, named, where main handed it to the owner: it
+    // lands once GitHub gives the snapshot in full.
     Row {
         read: "snapshot",
         arm: |h| snap(h, |s| s.complete = false),
         heal: |h| snap(h, |s| s.complete = true),
-        lands: false,
     },
     // A run whose suite a snapshot behind GitHub doesn't hold: whether its
     // workflow is still running can't be told, where main counted it green.
@@ -123,7 +112,6 @@ const ROWS: &[Row] = &[
             h.check_run(&head(3), "late", "success", None);
         },
         heal: |h| h.fresh(Call::FlowSnapshot),
-        lands: true,
     },
     // Evidence's shared reads, failing once the decision's own answered:
     // the reviews after a check's attestation is read, and the head's
@@ -132,7 +120,6 @@ const ROWS: &[Row] = &[
         read: "reviews",
         arm: |h| h.race(Call::Artifacts, |h| once(h, Call::Reviews)),
         heal: |_| {},
-        lands: true,
     },
     Row {
         read: "observations",
@@ -142,7 +129,6 @@ const ROWS: &[Row] = &[
             })
         },
         heal: |_| {},
-        lands: true,
     },
     // Evidence's re-read of the head's checks stops short, and only it.
     Row {
@@ -160,7 +146,6 @@ const ROWS: &[Row] = &[
             })
         },
         heal: |_| {},
-        lands: true,
     },
 ];
 
@@ -199,18 +184,13 @@ fn run(row: &Row) {
             .is_some_and(|d| d.iter().any(|d| d["read"] == row.read)),
         "{shown}"
     );
-    // GitHub answers again: the same read clears it, and the PR lands
-    // unless it went to the owner.
+    // GitHub answers again: the same read clears it, and the PR lands.
     let reports = c.pass(now + 2, false);
     let three = decided(&reports, 3);
     assert!(!names(&three, row.read), "{three}");
     assert_eq!(naming(&c, "restored", row.read), 1);
     assert_eq!(naming(&c, "degraded", row.read), 1);
-    assert_eq!(
-        c.hub.pull(REPO, 3).unwrap().is_merged(),
-        row.lands,
-        "{three}"
-    );
+    assert!(c.hub.pull(REPO, 3).unwrap().is_merged(), "{three}");
 }
 
 #[test]

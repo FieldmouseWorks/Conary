@@ -161,11 +161,11 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         c.label(labels);
         if labels.contains(&"r2") {
             c.judge("pass");
-            assert_eq!(c.pass(800).step, Step::ListOwner);
+            assert_eq!(c.pass(800).step, Step::ListOwner(Door::R2));
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
             c.label(&[]);
-            assert_eq!(c.pass(819).step, Step::ListOwner);
+            assert_eq!(c.pass(819).step, Step::ListOwner(Door::R2));
             c.approve();
             assert_eq!(c.pass(820).step, Step::JoinTrain);
         } else {

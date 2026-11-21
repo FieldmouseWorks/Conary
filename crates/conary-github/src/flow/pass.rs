@@ -346,6 +346,8 @@ impl Pass<'_> {
                 facts.failed = record.failed.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let approved = facts.owner_approved;
+                facts.judge_reason =
+                    super::approval::judge_reason(&record, &facts.revision, self.now);
                 let (mut next, memory) = next(&facts, &record.memory, self.now);
                 next.switches =
                     super::switches::holding(self, &facts, &record.memory, &next, self.now);

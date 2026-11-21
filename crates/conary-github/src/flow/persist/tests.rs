@@ -28,6 +28,9 @@ fn canonical_record() -> Value {
     // A decision saved before it carried its priority level reads as the
     // default level's.
     value["decision"]["priority"] = json!("medium");
+    // A listing saved before it named its door loads as a wait: the next
+    // pass decides it again.
+    value["decision"]["step"] = json!({"Wait": {"until": null}});
     // What the flow kept when it ran its own review service loads and is
     // dropped: the reviewer is Codex's GitHub connector now.
     for field in DROPPED_MEMORY {
@@ -319,6 +322,27 @@ fn saved_decisions_load_from_when_renovate_merged_its_own_prs() {
         assert_eq!(decision.step, Step::Merge);
         assert_eq!(decision.wait_on, Some(WaitOn::Steward));
         assert_eq!(serde_json::to_value(&record).unwrap(), expected);
+    }
+}
+
+#[test]
+fn saved_listings_load_from_before_they_named_their_door() {
+    // A listing saved before it named its door, as the decision's step and
+    // as what a switch keeps off: each loads as a wait, and the next pass
+    // decides it again.
+    let (root, repo, data) = fixture();
+    let mut value: Value = serde_json::from_str(BASE_RECORD).unwrap();
+    assert_eq!(value["decision"]["step"], json!("ListOwner"));
+    value["decision"]["switches"] =
+        json!([{"switch": "no_people", "step": "ListOwner", "workers": []}]);
+    std::fs::write(data.path(3), value.to_string()).unwrap();
+    for record in [
+        data.load(3).unwrap(),
+        Data::read(root.path(), &repo, 3).unwrap(),
+    ] {
+        let decision = record.decision.as_ref().unwrap();
+        assert_eq!(decision.step, Step::Wait { until: None });
+        assert_eq!(decision.switches[0].step, Step::Wait { until: None });
     }
 }
 

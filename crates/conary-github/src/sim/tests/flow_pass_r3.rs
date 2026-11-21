@@ -154,7 +154,10 @@ fn excluded_prs_keep_read_classification_and_can_act_on_exclusion() {
         assert_eq!(report[0].error, None, "{excluded}: {:?}", report[0]);
         assert_eq!(c.hub.count(Call::Land), 0);
         if excluded == "untrusted" {
-            assert_eq!(report[0].next.as_ref().unwrap().step, Step::ListOwner);
+            assert_eq!(
+                report[0].next.as_ref().unwrap().step,
+                Step::ListOwner(Door::Outside)
+            );
             assert!(
                 c.hub.pull(REPO, 3).unwrap().labels.iter().any(|l| c
                     .config

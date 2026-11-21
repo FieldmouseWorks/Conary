@@ -140,7 +140,7 @@ fn judge_verdicts_are_read_from_sealed_comments() {
     // gates.py / misdescribed.py: each verdict is a scoped producer's answer.
     for (said, expected) in [
         ("pass", Step::Merge),
-        ("owner", Step::ListOwner),
+        ("owner", Step::ListOwner(Door::Judge)),
         ("fail", Step::HandFix(Kind::JudgeFailure)),
         // Old steward words, read once until Conary#256 slice 5 deletes them.
         // A v2 issuance doesn't say what it was judged on, so its land is
@@ -175,7 +175,7 @@ fn a_judge_plugin_answer_round_trips_through_its_marker_to_a_decision() {
     for (verdict, expected) in [
         (Judgment::Pass, Step::Merge),
         (Judgment::Fail, Step::HandFix(Kind::JudgeFailure)),
-        (Judgment::Owner, Step::ListOwner),
+        (Judgment::Owner, Step::ListOwner(Door::Judge)),
         (Judgment::Misdescribed, Step::HandFix(Kind::Description)),
     ] {
         let (h, m) = setup();
@@ -298,14 +298,14 @@ fn owner_release_requires_an_authenticated_review_for_this_revision() {
         &marker(&h, &s, "autoland-judgment", "pass"),
     );
     let (n, m) = next(&read_f(&h, s.clone()), &m, 4000);
-    assert_eq!(n.step, Step::ListOwner);
+    assert_eq!(n.step, Step::ListOwner(Door::R2));
     assert!(!read_f(&h, s.clone()).owner_approved);
     h.label(REMI, 3, &["needs-peter"]);
     let (_, m) = next(&read_f(&h, s.clone()), &m, 4001);
     h.label(REMI, 3, &[]);
     assert_eq!(
         next(&read_f(&h, s.clone()), &m, 4002).0.step,
-        Step::ListOwner
+        Step::ListOwner(Door::R2)
     );
     let revision = Revision::from(&crate::api::Source::pull(&h, REMI, 3).unwrap());
     h.person_review(

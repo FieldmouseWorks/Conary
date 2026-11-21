@@ -21,6 +21,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
             overdue_at: None,
             queued: None,
             recovery: None,
+            owner: None,
             description: "waiting".into(),
             proof: None,
             wait_on: None,

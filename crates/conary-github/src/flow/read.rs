@@ -143,6 +143,7 @@ fn gather(
         owner_approved: false,
         reviewers: BTreeMap::new(),
         judgment: None,
+        judge_reason: None,
         judgment_generation: None,
         major_generation: None,
         jobs: BTreeMap::new(),

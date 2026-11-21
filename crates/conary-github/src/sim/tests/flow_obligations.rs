@@ -30,7 +30,9 @@ fn rejected_sweep_generations_survive_security_labels_deletions_and_old_replays(
             c.review("reviewer", Verdict::Clean, 600);
             let first = c.hub.comments(REMI, 3).unwrap().len();
             c.sweep("held");
-            assert_eq!(c.pass(1000).step, Step::ListOwner);
+            let n = c.pass(1000);
+            assert_eq!(n.step, Step::Wait { until: None });
+            assert!(n.description.starts_with("Major update held"), "{n:?}");
             let key = c.settings.major_key.clone().unwrap();
             let invalid = key.decision(
                 REMI,

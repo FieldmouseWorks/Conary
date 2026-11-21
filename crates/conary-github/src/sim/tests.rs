@@ -406,6 +406,7 @@ mod flow_pass_v4;
 
 mod flow_pass_threads;
 
+mod flow_doors;
 mod flow_pass_context;
 
 mod events;
