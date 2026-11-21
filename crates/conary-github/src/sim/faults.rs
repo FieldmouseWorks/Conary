@@ -18,6 +18,8 @@ pub(crate) enum Call {
     FlowReply,
     FlowResolve,
     FlowUpdate,
+    FlowRerun,
+    FlowRerequest,
     FlowClose,
     FlowOwner,
     FlowDisable,
@@ -143,6 +145,8 @@ type Race = Box<dyn FnOnce(&Hub)>;
 pub(super) struct Faults {
     /// Calls that fail before doing anything, until healed.
     failing: RefCell<Vec<On>>,
+    /// Calls GitHub refuses, doing nothing, in the words given, until healed.
+    refusing: RefCell<Vec<(On, String)>>,
     /// Writes that are done, and their answer lost, until healed.
     losing: RefCell<Vec<On>>,
     /// Reads that answer from GitHub as it was, until fresh again.
@@ -157,6 +161,15 @@ impl Hub {
         self.faults.failing.borrow_mut().push(on.into());
     }
 
+    /// Calls `on` covers are refused, doing nothing, GitHub saying `said`,
+    /// until [`Hub::heal`]ed.
+    pub(crate) fn refuse_with(&self, on: impl Into<On>, said: &str) {
+        self.faults
+            .refusing
+            .borrow_mut()
+            .push((on.into(), said.into()));
+    }
+
     /// Writes `on` covers are done, and GitHub's answer is lost, until
     /// [`Hub::heal`]ed.
     pub(crate) fn lose(&self, on: impl Into<On>) {
@@ -166,6 +179,10 @@ impl Hub {
     /// Calls of this kind fail and lose nothing any more.
     pub(crate) fn heal(&self, call: Call) {
         self.faults.failing.borrow_mut().retain(|f| f.call != call);
+        self.faults
+            .refusing
+            .borrow_mut()
+            .retain(|(f, _)| f.call != call);
         self.faults.losing.borrow_mut().retain(|f| f.call != call);
     }
 
@@ -213,6 +230,17 @@ impl Hub {
                 "{:?}: Server Error",
                 asked.call
             )));
+        }
+        if let Some((_, said)) = self
+            .faults
+            .refusing
+            .borrow()
+            .iter()
+            .find(|(f, _)| f.covers(asked))
+        {
+            return Err(
+                ApiError::new(format!("{:?}: http status: 403: {said}", asked.call)).saying(said),
+            );
         }
         Ok(())
     }

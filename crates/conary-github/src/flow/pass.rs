@@ -430,15 +430,14 @@ impl Pass<'_> {
                 if let Step::HandFix(kind) = next.step
                     && let Err(why) = super::handoff::problems(&facts, kind)
                 {
-                    next.step = Step::Wait { until: None };
-                    next.description = why;
+                    super::recover::unhanded(&mut next, why);
                 }
                 if let Some(kind) = plugin_kind(&next.step)
                     && self.path(kind).is_none()
                 {
-                    next.step = Step::Wait { until: None };
-                    next.description = format!("No plugin configured for {kind}");
+                    super::recover::unhanded(&mut next, format!("No plugin configured for {kind}"));
                 }
+                super::recover::handed(&mut next);
                 if super::approval::required(&facts) && !approved {
                     report.owner_approval =
                         Some(super::approval::owner_approval(repo, pr, &facts.revision));
@@ -496,6 +495,7 @@ impl Pass<'_> {
                             }
                         }
                     }
+                    super::recover::answered(&mut next, &record.memory);
                     data.save(pr, &record)?;
                 }
                 next.wait_until = next

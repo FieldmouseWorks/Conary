@@ -239,6 +239,9 @@ pub struct ApiError {
     /// GitHub couldn't be asked just now: its rate limit, its own errors, or
     /// the network. Asking again later is the whole fix.
     pub unavailable: bool,
+    /// What GitHub itself said of an error status, its words as it gave
+    /// them: its message and any errors it listed.
+    said: Option<String>,
 }
 
 impl ApiError {
@@ -246,6 +249,7 @@ impl ApiError {
         Self {
             what: what.into(),
             unavailable: false,
+            said: None,
         }
     }
 
@@ -253,7 +257,19 @@ impl ApiError {
         Self {
             what: what.into(),
             unavailable: true,
+            said: None,
         }
+    }
+
+    /// The same error, with what GitHub said of it.
+    pub fn saying(mut self, said: impl Into<String>) -> Self {
+        self.said = Some(said.into());
+        self
+    }
+
+    /// What GitHub said of the error, as it gave it, when it said anything.
+    pub fn said(&self) -> Option<&str> {
+        self.said.as_deref()
     }
 }
 
@@ -552,6 +568,7 @@ fn failed(url: &str, response: &mut Response) -> ApiError {
         || header(response, "retry-after").is_some();
     let said = said(url, response);
     let mut what = format!("{url}: http status: {status}");
+    let mut words = None;
     match &said {
         Ok(Some(s)) => {
             let errors = s
@@ -559,7 +576,9 @@ fn failed(url: &str, response: &mut Response) -> ApiError {
                 .as_ref()
                 .map(|e| format!(" {e}"))
                 .unwrap_or_default();
-            what = format!("{what}: {}", brief(&format!("{}{errors}", s.message)));
+            let given = format!("{}{errors}", s.message);
+            what = format!("{what}: {}", brief(&given));
+            words = Some(given);
         }
         Ok(None) => {}
         Err(e) => what = format!("{what}, its message unread: {e}"),
@@ -573,10 +592,14 @@ fn failed(url: &str, response: &mut Response) -> ApiError {
                         .is_some_and(|s| s.message.to_lowercase().contains("rate limit")),
                     Err(e) => e.unavailable,
                 });
-    if unavailable {
+    let error = if unavailable {
         ApiError::unavailable(what)
     } else {
         ApiError::new(what)
+    };
+    match words {
+        Some(words) => error.saying(words),
+        None => error,
     }
 }
 

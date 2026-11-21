@@ -238,8 +238,8 @@ id = "recover-by-kind"
 lesson = "A failed or cancelled check is brought back by a way GitHub allows for its kind, and the status quotes the error GitHub gave."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/1062"]
 applies = ["flow", "effects and retries", "M6 slice 5d"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "docs/flow.md#deadlines", "crates/conary-github/src/sim/tests/flow_recover.rs", "docs/m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error"]
 
 [[lessons]]
 id = "scope-below-a-repo"

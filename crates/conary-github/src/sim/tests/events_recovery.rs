@@ -26,6 +26,7 @@ fn booked(at: u64) -> Report {
             wait_until: Some(at),
             overdue_at: None,
             queued: None,
+            recovery: None,
             proof: None,
             wait_on: None,
             on_usage: false,

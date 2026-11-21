@@ -13,6 +13,10 @@ pub trait Write: Read + crate::train::Forge {
     /// Resolve review thread `thread`.
     fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError>;
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError>;
+    /// Run GitHub Actions workflow run `run` again.
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError>;
+    /// Ask the App whose check suite `suite` is to run it again.
+    fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError>;
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
     fn owner(&self, repo: &str, pr: u64, label: &str) -> Result<(), ApiError>;
     fn disable_auto_merge(&self, repo: &str, pr: u64) -> Result<(), ApiError>;

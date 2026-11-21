@@ -589,6 +589,12 @@ pub struct Facts {
     pub labels: BTreeSet<String>,
     pub merging: Merge,
     pub checks: Vec<Check>,
+    /// Each cancelled check run nothing replaced that GitHub has a way to
+    /// run again, by that way, with the checks it brings back.
+    pub stopped: BTreeMap<super::Recovery, Vec<String>>,
+    /// Each check run that timed out GitHub has a way to run again, the
+    /// same way.
+    pub timed_out: BTreeMap<super::Recovery, Vec<String>>,
     pub has_ci: bool,
     pub open_threads: u32,
     pub changes_requested: bool,
@@ -694,6 +700,8 @@ pub enum Failure {
     Answer,
     Lost,
     Stop,
+    /// Asking GitHub to run a check again.
+    Rerun,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -752,6 +760,10 @@ pub struct Memory {
     #[serde(with = "super::persist::pairs")]
     pub push_looks: BTreeMap<(String, String), (u32, u64)>,
     pub wait: Option<Wait>,
+    /// Every recovery asked for on this head, and GitHub's answer
+    /// ([`super::recover`]): each asked for once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered: Vec<super::Recovered>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,6 +782,9 @@ pub enum Step {
     /// judge's reasons), and in decisions saved before steps carried them.
     Judge(Vec<Trigger>),
     UpdateBranch,
+    /// Ask GitHub to bring a stalled stage back this way, once
+    /// ([`super::recover`]).
+    Recover(super::Recovery),
     Merge,
     JoinTrain,
     LeaveTrain,
@@ -839,4 +854,8 @@ pub struct Next {
     /// none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<super::Degradation>,
+    /// The recovery its stall, overdue, asked GitHub for, and GitHub's
+    /// answer in full ([`super::recover`]). Left out when there's none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<super::Recovered>,
 }

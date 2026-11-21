@@ -24,11 +24,15 @@ impl Api {
         }
         Ok(())
     }
-    fn flow_put(&self, path: &str, body: Value) -> Result<(), ApiError> {
+    /// A PUT, or else a POST, whose answer says nothing the flow reads.
+    fn flow_call(&self, put: bool, path: &str, body: Value) -> Result<(), ApiError> {
         let url = format!("{}{path}", self.base);
-        let mut response = self
-            .agent
-            .put(&url)
+        let request = if put {
+            self.agent.put(&url)
+        } else {
+            self.agent.post(&url)
+        };
+        let mut response = request
             .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
@@ -101,9 +105,24 @@ impl Write for Api {
         )
     }
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError> {
-        self.flow_put(
+        self.flow_call(
+            true,
             &format!("/repos/{repo}/pulls/{pr}/update-branch"),
             json!({"expected_head_sha":head}),
+        )
+    }
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.flow_call(
+            false,
+            &format!("/repos/{repo}/actions/runs/{run}/rerun"),
+            json!({}),
+        )
+    }
+    fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
+        self.flow_call(
+            false,
+            &format!("/repos/{repo}/check-suites/{suite}/rerequest"),
+            json!({}),
         )
     }
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError> {

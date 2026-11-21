@@ -217,6 +217,43 @@ pub(crate) fn act<G: Write>(
                 jobs::cancel(work, why)?;
             }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
+            Step::Recover(recovery) => {
+                let mut asked = next
+                    .recovery
+                    .clone()
+                    .filter(|r| {
+                        &r.recovery == recovery
+                            && r.head == f.revision.head
+                            && r.answer == Answer::Asked
+                    })
+                    .ok_or("a recovery decided without its record")?;
+                // Saved before GitHub is asked: whatever happens next, no
+                // event, wake or restart asks again.
+                record.memory.recovered.push(asked.clone());
+                data.save(f.number, record)?;
+                let asking = match recovery {
+                    Recovery::Update => github.update(&repo, f.number, &f.revision.head),
+                    Recovery::Rerun(run) => github.rerun(&repo, *run),
+                    Recovery::Rerequest(suite) => github.rerequest(&repo, *suite),
+                };
+                asked.answer = match asking {
+                    Ok(()) => Answer::Accepted,
+                    Err(e) if e.unavailable => Answer::Unanswered(e.to_string()),
+                    Err(e) => {
+                        Answer::Refused(e.said().map_or_else(|| e.to_string(), str::to_owned))
+                    }
+                };
+                let accepted = asked.answer == Answer::Accepted;
+                let text = asked.describe();
+                *record.memory.recovered.last_mut().expect("pushed above") = asked;
+                data.save(f.number, record)?;
+                // Nothing on GitHub changes to bring a refusal back: its
+                // status says it now.
+                if !accepted {
+                    github.status(&repo, &f.revision.head, false, &text)?;
+                    return Ok(vec![Failure::Status]);
+                }
+            }
             Step::Merge => {
                 // Read back the permission; a refused or lost status write must never merge.
                 let statuses = github.statuses(&repo, &f.revision.head)?;
@@ -355,7 +392,8 @@ pub(crate) fn act<G: Write>(
 }
 fn failure(step: &Step) -> Failure {
     match step {
-        Step::UpdateBranch => Failure::Update,
+        Step::UpdateBranch | Step::Recover(Recovery::Update) => Failure::Update,
+        Step::Recover(_) => Failure::Rerun,
         Step::Merge | Step::JoinTrain | Step::LeaveTrain => Failure::Merge,
         Step::CloseAlreadyLanded => Failure::Close,
         Step::AskReview(_) => Failure::Post,

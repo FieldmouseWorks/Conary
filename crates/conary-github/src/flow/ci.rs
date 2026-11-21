@@ -1,6 +1,8 @@
 //! The check decision from prs.py. A suite which judged another diff is
 //! neither green nor red for this PR. Cancelled work is pending until an
-//! equivalent, completed workflow run replaces it, or annotations prove a timeout.
+//! equivalent, completed workflow run replaces it, or annotations prove a
+//! timeout. What nothing replaced is listed by the way GitHub runs it again,
+//! for the stall's recovery ([`super::recover`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,7 +10,7 @@ use crate::api::CheckRun;
 use conary_core::policy::Paths;
 
 use super::degraded::{ReadError, Reading, Reads};
-use super::{Check, Ci, Place, Read, Settings};
+use super::{Check, Ci, Place, Read, Recovery, Settings};
 
 /// Workflow metadata from GitHub's suite/workflow-run reads. Missing metadata
 /// is not evidence that a cancelled run was replaced.
@@ -17,6 +19,8 @@ pub struct Workflow {
     pub id: String,
     pub name: String,
     pub path: Option<String>,
+    /// The workflow run's own id, which its rerun is asked by.
+    pub run: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +37,10 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
+    /// Cancelled runs nothing replaced, by the way GitHub runs each again.
+    pub stopped: BTreeMap<Recovery, Vec<String>>,
+    /// Runs that timed out, by the way GitHub runs each again.
+    pub timed_out: BTreeMap<Recovery, Vec<String>>,
 }
 
 const LANE: &str = "lane into ";
@@ -85,6 +93,19 @@ fn judged<'a>(
         return None;
     }
     Some((base, Some(fork)))
+}
+/// How GitHub runs a check run again, by its kind: a GitHub Actions run by
+/// its workflow run's rerun, another App's by its check suite's re-request,
+/// once the suite has finished, as a rerun needs. A run in no suite the
+/// snapshot read, or an Actions run whose workflow run it didn't name, has
+/// no way the flow knows.
+fn rerun(run: &CheckRun, suites: &BTreeMap<u64, Suite>) -> Option<Recovery> {
+    let s = suite(run, suites).filter(|s| s.status == "completed")?;
+    match s.app.as_str() {
+        "" => None,
+        "github-actions" => s.workflow.as_ref()?.run.map(Recovery::Rerun),
+        _ => suite_id(run).map(Recovery::Rerequest),
+    }
 }
 fn cancelled(run: &CheckRun) -> bool {
     run.status == "completed" && run.conclusion.as_deref() == Some("cancelled")
@@ -362,6 +383,8 @@ pub(super) fn checks(
         });
     }
     let mut effective = BTreeMap::<(Option<String>, String), CheckRun>::new();
+    let mut stopped = BTreeMap::<Recovery, Vec<String>>::new();
+    let mut timed_out = BTreeMap::<Recovery, Vec<String>>::new();
     for run in &runs {
         if suite_id(run).is_some_and(|id| stale.contains(&id)) {
             continue;
@@ -405,9 +428,15 @@ pub(super) fn checks(
                 .iter()
                 .any(|m| m.contains("has exceeded the maximum execution time"))
             {
+                if let Some(way) = rerun(run, suites) {
+                    timed_out.entry(way).or_default().push(run.name.clone());
+                }
                 name.push_str(" (timed out)");
                 Ci::Red
             } else {
+                if let Some(way) = rerun(run, suites) {
+                    stopped.entry(way).or_default().push(run.name.clone());
+                }
                 name.push_str(" (cancelled, to be run again)");
                 Ci::Pending
             }
@@ -415,6 +444,11 @@ pub(super) fn checks(
             run.conclusion.as_deref(),
             Some("success" | "neutral" | "skipped")
         ) {
+            if run.conclusion.as_deref() == Some("timed_out")
+                && let Some(way) = rerun(run, suites)
+            {
+                timed_out.entry(way).or_default().push(run.name.clone());
+            }
             Ci::Red
         } else if unsuited {
             name.push_str(" (its suite unread)");
@@ -500,5 +534,7 @@ pub(super) fn checks(
         docs,
         has_ci,
         runs: effective.into_values().collect(),
+        stopped,
+        timed_out,
     })
 }

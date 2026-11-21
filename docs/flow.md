@@ -730,7 +730,43 @@ check run event says so. A check pending only behind the others (a job that
 finished in a workflow run still going, or a machine proof waiting for CI)
 has no clock of its own. Any other pending check that isn't a run known to
 be queued or started (a commit status, a run GitHub gives no start for, a
-cancelled run to be run again) keeps the wait's own clock, as before.
+cancelled run to be run again) keeps the wait's own clock, as before, and
+a cancelled run's clock running out is what brings it back (below).
+
+A wait past its deadline is brought back the way GitHub allows, once
+(`recover-by-kind`). The pass at its deadline takes the first recovery that
+applies and wasn't asked for on this head:
+
+1. At a wait on CI or the merge, a head GitHub says is behind its base and
+   merges cleanly is updated with it, as the merge's own update is. Not a
+   dependency bot's PR, whose bot rebases it, nor one stacked on another.
+2. A check run brought back by its kind, once the run's suite has
+   finished: a GitHub Actions run by its workflow run's rerun (the token's
+   Actions write permission), another App's by a re-request of its check
+   suite (an App token's Checks write permission). At a wait on CI, that's
+   a cancelled run nothing replaced. A run that timed out is red and goes
+   to a fix as any failure does; at a stalled fix that no fix job or
+   dependency sweep has (its fix can't be handed), it's run again. A
+   commit status, a run in a suite the read didn't hold, or an Actions run
+   whose workflow run it didn't name has no way GitHub allows, and is never
+   asked for.
+
+Retrying a known flake isn't among them: it needs a flaky-test record Conary
+doesn't keep.
+
+The ask is saved before it's made, and its answer after, in the PR's
+memory, so whatever GitHub answers, no event, wake or restart asks again in
+that stall or for that way on that head; a new head starts afresh. A rerun
+that comes back cancelled again stays overdue. A refusal is quoted as
+GitHub gave it, its words first in the status (cut to GitHub's 140
+characters) and whole in Next's `recovery`, in the pass that got it, since
+nothing on GitHub changes to bring a pass, and in every pass of the stall
+after it, a fix that still can't be handed included. An answer that never came (GitHub
+unavailable, or its answer lost) says so the same way, and isn't asked again
+either. The wait itself, its `overdue_at` and its stall clock, stays what
+was decided: after its recovery a stall is overdue in the flow's status. A
+PR the owner hears of already (open over a day) has no deadline here, and
+so no recovery.
 
 ## Comparing decisions
 

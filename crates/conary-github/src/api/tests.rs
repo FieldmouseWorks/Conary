@@ -160,6 +160,43 @@ fn a_refusal_keeps_what_github_said_of_it() {
 }
 
 #[test]
+fn a_rerun_and_a_rerequest_are_asked_as_github_takes_them_and_a_refusal_keeps_its_words() {
+    use crate::flow::Write as _;
+    let refused = r#"{"message":"Unable to re-run this workflow run because it was created over a month ago"}"#;
+    let (base, heads) = github(vec![
+        whole("201 Created", "").leak(),
+        whole("403 Forbidden", refused).leak(),
+        whole("201 Created", "{}").leak(),
+    ]);
+    let api = Api::new(&base, Tokens::given("t"));
+    api.rerun("o/r", 42).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/actions/runs/42/rerun http/1.1")
+    );
+    let err = api.rerun("o/r", 43).unwrap_err();
+    assert!(!err.unavailable);
+    // GitHub's words, as it gave them, beside the error's own account.
+    assert_eq!(
+        err.said(),
+        Some("Unable to re-run this workflow run because it was created over a month ago")
+    );
+    assert!(err.to_string().contains("http status: 403"), "{err}");
+    heads.recv().unwrap();
+    api.rerequest("o/r", 9).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/check-suites/9/rerequest http/1.1")
+    );
+    // An error GitHub said nothing of has no words to quote.
+    assert_eq!(error("404 Not Found", "").said(), None);
+}
+
+#[test]
 fn no_answer_at_all_is_github_unavailable() {
     // A port nothing listens on.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -135,6 +135,8 @@ fn gather(
         labels,
         merging: Merge::from_github(&extra.merge_state),
         checks: Vec::new(),
+        stopped: BTreeMap::new(),
+        timed_out: BTreeMap::new(),
         has_ci: false,
         open_threads: extra.open_threads,
         changes_requested: false,
@@ -261,6 +263,8 @@ fn gather(
             run: Place::Unplaced,
         }];
         ci.docs = false;
+        ci.stopped.clear();
+        ci.timed_out.clear();
     }
     if facts.settings.job_login.is_some() {
         facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
@@ -373,6 +377,8 @@ fn gather(
         };
     }
     facts.has_ci = ci.has_ci;
+    facts.stopped = ci.stopped;
+    facts.timed_out = ci.timed_out;
     facts.checks = ci
         .checks
         .into_iter()

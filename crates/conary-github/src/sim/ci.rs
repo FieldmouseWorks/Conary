@@ -169,6 +169,40 @@ impl Hub {
         self.world.borrow_mut().checks.insert(sha.into(), runs);
     }
 
+    /// GitHub running a suite's runs that didn't pass again: each a new
+    /// run, queued, in the same suite, as a rerun is.
+    pub(crate) fn run_again(&self, suite: u64) {
+        let mut w = self.world.borrow_mut();
+        let mut id = w
+            .checks
+            .values()
+            .flatten()
+            .filter_map(|c| c["id"].as_u64())
+            .max()
+            .unwrap_or(0);
+        for runs in w.checks.values_mut() {
+            let again: Vec<Value> = runs
+                .iter()
+                .filter(|c| {
+                    c["check_suite"]["id"].as_u64() == Some(suite)
+                        && c["status"] == "completed"
+                        && !matches!(
+                            c["conclusion"].as_str(),
+                            Some("success" | "neutral" | "skipped")
+                        )
+                })
+                .map(|c| {
+                    id += 1;
+                    json!({
+                        "id": id, "name": c["name"], "status": "queued",
+                        "conclusion": null, "check_suite": {"id": suite},
+                    })
+                })
+                .collect();
+            runs.extend(again);
+        }
+    }
+
     /// One more check run on `sha`, as a test writes GitHub's answer.
     pub(crate) fn add_check(&self, sha: &str, v: Value) {
         self.world
