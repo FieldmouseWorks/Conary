@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "5ee5cs0t8q7h5rvzk192rr180c",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 566,
+  "url": "https://github.com/fieldmouseworks/conary/pull/566",
+  "summary": "deps: update fieldmouseworks/burrow to 892b5ed",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "62d54cce61465ded3c7935fa77d47b1c8c9d1320ddc0e617ec5edbb565238b7a",
+    "before": "906ffa0d0b9641307a990762c763b1106961722b",
+    "after": "1fa87aebc525a9a629a14cf0912a19bf36735e48",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795344554605
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "renovate/stability-days",
+      "result": "pass",
+      "source": "https://docs.renovatebot.com/key-concepts/minimum-release-age/"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308088/job/137177079360"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308088/job/137177079326"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308120/job/137177079212"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308088/job/137177079188"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#566)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (actions)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308120/job/137177170622"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012307762/job/137177077553"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308088/job/137177097109"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "none",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45012308088/job/137177079360"
+    }
+  ]
+}
