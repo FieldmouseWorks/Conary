@@ -243,6 +243,20 @@ fn an_unread_check_page_does_not_land_on_its_green_first_page() {
     assert!(n.description.contains("over 100 checks"));
 }
 #[test]
+fn a_red_check_past_the_first_page_of_suites_is_read() {
+    // handle.py:978: something beyond the first check page could be red, and
+    // the suites are read to the end to see it.
+    let c = Case::new();
+    let head = c.scope().head;
+    for i in 0..crate::api::PER_PAGE {
+        c.hub
+            .check_run(&head, &format!("shard {i}"), "success", None);
+    }
+    c.hub.check_run(&head, "last", "failure", None);
+    let n = c.view(7200);
+    assert_eq!(n.step, Step::HandFix(Kind::Red), "{}", n.description);
+}
+#[test]
 fn red_negative_and_other_named_checks_request_the_same_ci_fix_kind() {
     // handle.py:890: the negative's explanatory brief is executor formatting; its decision is a red-CI fix.
     for name in ["check / negative", "negative", "check / non-negative", "ci"] {

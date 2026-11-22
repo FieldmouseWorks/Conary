@@ -726,3 +726,5 @@ mod flow;
 
 #[path = "tests/events.rs"]
 mod events;
+
+mod pages;

@@ -36,13 +36,12 @@ impl Source for Hub {
     }
     fn comments(&self, repo: &str, pr: u64) -> Result<Vec<crate::api::Comment>, ApiError> {
         let n = pr.to_string();
-        self.read(Asked::new(Call::Comments, repo).pr(pr), &[repo, &n], |w| {
+        self.read_pages(Asked::new(Call::Comments, repo).pr(pr), &[repo, &n], |w| {
             Ok(repo_of(w, repo)?
                 .comments
                 .get(&pr)
                 .into_iter()
                 .flatten()
-                .map(parse)
                 .collect())
         })
     }
@@ -96,23 +95,30 @@ impl Source for Hub {
     }
 
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-        self.read(Asked::new(Call::Pulls, repo), &[repo], |w| {
-            let all = repo_of(w, repo)?.pulls.values();
-            Ok(match which {
-                Pulls::All => all.map(parse).collect(),
-                Pulls::Open => all.filter(|p| p["state"] == "open").map(parse).collect(),
-                Pulls::RecentlyClosed => all
+        let asked = Asked::new(Call::Pulls, repo);
+        match which {
+            Pulls::All => self.read_pages(asked, &[repo], |w| {
+                Ok(repo_of(w, repo)?.pulls.values().collect())
+            }),
+            Pulls::Open => self.read_pages(asked, &[repo], |w| {
+                let all = repo_of(w, repo)?.pulls.values();
+                Ok(all.filter(|p| p["state"] == "open").collect())
+            }),
+            // One page, as GitHub's is.
+            Pulls::RecentlyClosed => self.read(asked, &[repo], |w| {
+                let all = repo_of(w, repo)?.pulls.values();
+                Ok(all
                     .filter(|p| p["state"] == "closed")
                     .rev()
                     .map(parse)
-                    .collect(),
-            })
-        })
+                    .collect())
+            }),
+        }
     }
 
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {
-        self.read(Asked::new(Call::CheckRuns, repo), &[repo, sha], |w| {
-            Ok(w.checks.get(sha).into_iter().flatten().map(parse).collect())
+        self.read_pages(Asked::new(Call::CheckRuns, repo), &[repo, sha], |w| {
+            Ok(w.checks.get(sha).into_iter().flatten().collect())
         })
     }
 
@@ -124,24 +130,19 @@ impl Source for Hub {
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
-        self.read(Asked::new(Call::Statuses, repo), &[repo, sha], |w| {
-            Ok(w.statuses
-                .get(sha)
-                .into_iter()
-                .flatten()
-                .map(parse)
-                .collect())
+        self.read_pages(Asked::new(Call::Statuses, repo), &[repo, sha], |w| {
+            Ok(w.statuses.get(sha).into_iter().flatten().collect())
         })
     }
 
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError> {
         let n = number.to_string();
-        self.read(
+        self.read_pages(
             Asked::new(Call::Reviews, repo).pr(number),
             &[repo, &n],
             |w| {
                 let r = repo_of(w, repo)?.reviews.get(&number);
-                Ok(r.into_iter().flatten().map(parse).collect())
+                Ok(r.into_iter().flatten().collect())
             },
         )
     }
@@ -164,12 +165,12 @@ impl Source for Hub {
 
     fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError> {
         let n = number.to_string();
-        self.read(
+        self.read_pages(
             Asked::new(Call::Timeline, repo).pr(number),
             &[repo, &n],
             |w| {
                 let t = repo_of(w, repo)?.timeline.get(&number);
-                Ok(t.into_iter().flatten().map(parse).collect())
+                Ok(t.into_iter().flatten().collect())
             },
         )
     }
@@ -563,6 +564,14 @@ impl crate::flow::Read for Hub {
                             named.status = "in_progress".into();
                         }
                     }
+                }
+                // One query holds a page of suites, as GitHub's does.
+                if snapshot.suites.len() > crate::api::PER_PAGE {
+                    snapshot.suites = std::mem::take(&mut snapshot.suites)
+                        .into_iter()
+                        .take(crate::api::PER_PAGE)
+                        .collect();
+                    snapshot.checks_complete = false;
                 }
                 Ok(snapshot)
             },

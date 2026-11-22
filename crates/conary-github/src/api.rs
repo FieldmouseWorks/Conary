@@ -481,19 +481,40 @@ impl Api {
 
     fn pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, ApiError> {
         let sep = if path.contains('?') { '&' } else { '?' };
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: Vec<T> = self.get(&format!("{path}{sep}per_page=100&page={page}"))?;
-            let short = got.len() < 100;
-            all.extend(got);
-            if short {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+        paged(path, |page| {
+            let items: Vec<T> = self.get(&format!("{path}{sep}per_page=100&page={page}"))?;
+            // A short page is the last.
+            let more = items.len() == PER_PAGE;
+            Ok(Page { items, more })
+        })
     }
+}
+
+/// The most GitHub answers in one page.
+pub(crate) const PER_PAGE: usize = 100;
+
+/// One page of a paged read: what it held, and whether GitHub has more.
+pub(crate) struct Page<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) more: bool,
+}
+
+/// Reads `what` page by page, asking `page` for each from the first.
+pub(crate) fn paged<T>(
+    what: &str,
+    mut page: impl FnMut(usize) -> Result<Page<T>, ApiError>,
+) -> Result<Vec<T>, ApiError> {
+    let mut all = Vec::new();
+    for n in 1..=MAX_PAGES {
+        let got = page(n)?;
+        all.extend(got.items);
+        if !got.more {
+            return Ok(all);
+        }
+    }
+    Err(ApiError::new(format!(
+        "{what}: more than {MAX_PAGES} pages"
+    )))
 }
 
 /// The repository (OWNER/NAME) a path is under, `/repos/OWNER/NAME/...`:
@@ -697,18 +718,16 @@ impl Source for Api {
         // Every run, reruns included, not only each check's latest; the runs
         // come wrapped with their count rather than as a bare page.
         let path = format!("/repos/{repo}/commits/{sha}/check-runs?filter=all");
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
+        let mut read = 0;
+        paged(&path, |page| {
             let got: CheckRuns = self.get(&format!("{path}&per_page=100&page={page}"))?;
-            let short = got.check_runs.len() < 100;
-            all.extend(got.check_runs);
-            if short || all.len() >= got.total_count {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+            read += got.check_runs.len();
+            let more = got.check_runs.len() == PER_PAGE && read < got.total_count;
+            Ok(Page {
+                items: got.check_runs,
+                more,
+            })
+        })
     }
 
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
