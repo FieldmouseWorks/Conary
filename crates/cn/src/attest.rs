@@ -35,6 +35,9 @@ pub enum AttestCommand {
     Ci(ci::CiArgs),
     /// Construct base code with head test files, without running code.
     PrepareNegative(ci::RevisionArgs),
+    /// Run the negative command on the trees `prepare-negative` planned,
+    /// and say what its new tests did on the old code.
+    JudgeNegative(ci::JudgeArgs),
     /// A push's gate on a commit.
     Commit {
         /// The commit pushed.
@@ -189,6 +192,7 @@ pub fn run(cli: &Cli, command: &AttestCommand) -> Result<()> {
     match command {
         AttestCommand::Ci(args) => return ci::attest(cli, args),
         AttestCommand::PrepareNegative(args) => return ci::prepare(args),
+        AttestCommand::JudgeNegative(args) => return ci::judge(args),
         AttestCommand::Job(args) => return job(cli, args),
         _ => {}
     }
@@ -247,7 +251,10 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         Ok(Log::of(&bytes, &out.log_artifact))
     };
     Ok(match command {
-        AttestCommand::Ci(_) | AttestCommand::PrepareNegative(_) | AttestCommand::Job(_) => {
+        AttestCommand::Ci(_)
+        | AttestCommand::PrepareNegative(_)
+        | AttestCommand::JudgeNegative(_)
+        | AttestCommand::Job(_) => {
             unreachable!()
         }
         AttestCommand::Commit { commit, gate, out } => (

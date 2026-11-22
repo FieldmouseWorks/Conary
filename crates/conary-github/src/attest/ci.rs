@@ -2,6 +2,8 @@
 //! hooks, filters or programs run while deriving the attested identities.
 use std::process::Command;
 
+pub mod removal;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn git(repo: &std::path::Path, args: &[&str]) -> Result<String> {
@@ -36,6 +38,9 @@ pub struct Plan {
     pub base: String,
     pub tree: Option<String>,
     pub tests: Vec<String>,
+    /// Where the PR deletes a test file, the trees a failure on `tree` is
+    /// judged by. Never signed.
+    pub judging: Option<removal::Judging>,
 }
 
 // These are the path rules documented in ci-attestation.md. Git's glob
@@ -86,63 +91,23 @@ pub fn plan(repo: &std::path::Path, base: &str, head: &str) -> Result<Plan> {
     oid(head)?;
     let base = git(repo, &["merge-base", base, head])?.trim().to_owned();
     let tests = paths(repo, &base, head, true, "--diff-filter=ACMT")?;
-    let changed_tests = paths(repo, &base, head, true, "--diff-filter=ACDMT")?;
+    let changes = removal::changes(repo, &base, head)?;
     let all = paths(repo, &base, head, false, "--diff-filter=ACDMT")?;
-    if tests.is_empty() || all.iter().all(|p| changed_tests.contains(p)) {
+    if tests.is_empty() || all.iter().all(|p| changes.iter().any(|c| &c.path == p)) {
         return Ok(Plan {
             base,
             tree: None,
             tests: vec![],
+            judging: None,
         });
     }
-    // A separate index prevents touching the candidate's worktree, hooks,
-    // filters, or configuration-controlled checkout conversions.
-    let temporary = tempfile::tempdir()?;
-    let index = temporary.path().join("index");
-    let run = |cmd: &[&str]| -> Result<String> {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .env("GIT_INDEX_FILE", &index)
-            .args(cmd)
-            .output()?;
-        if !out.status.success() {
-            return Err("negative index construction failed".into());
-        }
-        Ok(String::from_utf8(out.stdout)?.trim().to_owned())
-    };
-    run(&["read-tree", &base])?;
-    // ls-tree supplies modes and blob IDs; update-index --index-info takes
-    // those verbatim and never invokes a candidate's smudge/clean filters.
-    for path in changed_tests {
-        let entry = git(
-            repo,
-            &["ls-tree", "-z", head, "--", &format!(":(literal){path}")],
-        )?;
-        use std::io::Write;
-        use std::process::Stdio;
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .env("GIT_INDEX_FILE", &index)
-            .args(["update-index", "-z", "--index-info"])
-            .stdin(Stdio::piped())
-            .spawn()?;
-        let entry = if entry.is_empty() {
-            format!("0 {}\t{path}\0", "0".repeat(head.len()))
-        } else {
-            entry
-        };
-        child.stdin.take().unwrap().write_all(entry.as_bytes())?;
-        if !child.wait()?.success() {
-            return Err("negative index update failed".into());
-        }
-    }
-    let tree = run(&["write-tree"])?;
+    let tree = removal::tree_with(repo, &base, &changes.iter().collect::<Vec<_>>())?;
+    let judging = removal::judging(repo, &base, &changes)?;
     Ok(Plan {
         base,
         tree: Some(tree),
         tests,
+        judging,
     })
 }
 

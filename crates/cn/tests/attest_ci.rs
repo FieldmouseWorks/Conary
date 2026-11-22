@@ -278,3 +278,70 @@ fn changed_ci_wiring_cannot_sign_fabricated_success_or_an_unrelated_negative() {
         assert!(!log.exists());
     }
 }
+
+/// A PR that moves a test module its old code declares, as the reusable
+/// workflow runs it: the negative tree fails for the missing file alone, so
+/// nothing is attested; a failing test in a file that stayed still is.
+#[test]
+fn a_moved_test_module_is_judged_by_trees_with_it_put_back() {
+    let judged = |stayed: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("candidate");
+        std::fs::create_dir_all(repo.join("tests")).unwrap();
+        git(&repo, &["init", "-q"]);
+        // The old code runs each test file it names.
+        std::fs::write(repo.join("code"), "old\n").unwrap();
+        std::fs::write(repo.join("suite"), "tests/a.sh\ntests/c.sh\n").unwrap();
+        std::fs::write(repo.join("tests/a.sh"), "true\n").unwrap();
+        std::fs::write(repo.join("tests/c.sh"), "true\n").unwrap();
+        let base = commit(&repo);
+        std::fs::rename(repo.join("tests/a.sh"), repo.join("tests/b.sh")).unwrap();
+        std::fs::write(repo.join("suite"), "tests/b.sh\ntests/c.sh\n").unwrap();
+        std::fs::write(repo.join("code"), "new\n").unwrap();
+        std::fs::write(repo.join("tests/c.sh"), stayed).unwrap();
+        let head = commit(&repo);
+        let plan = cn(&[
+            "prepare-negative",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base,
+            "--head",
+            &head,
+        ]);
+        let plan_file = dir.path().join("plan.json");
+        std::fs::write(&plan_file, made(plan).to_string()).unwrap();
+        // Each planned tree in a checkout of its own, as the workflow has it.
+        let runner = dir.path().join("run-tree");
+        // No /usr/bin/env in a build sandbox: the bash on PATH.
+        let bash = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join("bash"))
+            .find(|b| b.is_file())
+            .unwrap();
+        std::fs::write(
+            &runner,
+            format!(
+                "#!{}\nset -u\nw={}\nrm -rf \"$w/t\" && mkdir \"$w/t\" || exit 2\ngit -C \"$w/candidate\" archive \"$1\" | tar -x -C \"$w/t\" || exit 2\ncd \"$w/t\" && while read -r t; do bash \"$t\" || exit 1; done < suite\n",
+                bash.display(),
+                dir.path().display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+        cn(&[
+            "judge-negative",
+            "--plan",
+            plan_file.to_str().unwrap(),
+            "--run",
+            runner.to_str().unwrap(),
+        ])
+    };
+    let moved = judged("true\n");
+    assert!(!moved.status.success());
+    assert!(moved.stdout.is_empty(), "nothing is said to be signed");
+    assert!(String::from_utf8_lossy(&moved.stderr).contains("can't tell"));
+    let caught = judged("grep -qx new code\n");
+    assert!(caught.status.success());
+    assert_eq!(String::from_utf8_lossy(&caught.stdout), "fail\n");
+}
