@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "6p98f3x3jcr0tv2ysnjb861y0z",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 575,
+  "url": "https://github.com/fieldmouseworks/conary/pull/575",
+  "summary": "flow: give a GraphQL thread's App the login REST gives it",
+  "task": "FieldmouseWorks/Conary#571",
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "3b79e693fd1122eb8b86c5444902fcabee9b3bc34c13f7ca4fa9aeea40f03739",
+    "before": "5fb294e2f7702301ed8a2003a93b65cf5ec4d36d",
+    "after": "cdde15ec2e4d4a03017e00b25e617d2d33a014fa",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795383528739
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854496/job/137357229605"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854496/job/137357229603"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854546/job/137357228907"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557/job/137357226435"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#575)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070853557"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854546/job/137357365326"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854496/job/137357262385"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/575#issuecomment-7086005028 at 2026-11-22T21:23:41Z"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854496/job/137357229277"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "fail",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45070854496/job/137357229277"
+    }
+  ]
+}
