@@ -96,7 +96,8 @@ fn a_marked_read_says_what_a_full_one_does_of_a_changed_log() {
     let path = log_path(dir.path());
     let whole = fs::read(&path).unwrap();
     let public = key().verifying_key();
-    // A stride prime to the line's length, so it lands in every field.
+    // Every 37th byte: each case costs two reads, and the test above takes
+    // every byte of the mark's own check.
     for at in (0..whole.len()).step_by(37) {
         let mut flipped = whole.clone();
         flipped[at] ^= 1;
