@@ -2,6 +2,7 @@
 use super::*;
 use crate::flow::Read;
 use serde_json::{Value, json};
+use std::io::Read as _;
 
 fn answer(v: Value) -> &'static str {
     let body = v.to_string();
@@ -78,4 +79,57 @@ fn a_heads_check_suites_are_read_past_the_first_page() {
         second["variables"],
         json!({"owner":"o","name":"r","head":"h","after":"c1"})
     );
+}
+
+/// A paged read past its own deadline fails, as GitHub unavailable, and
+/// asks for no page past it.
+#[test]
+fn a_paged_read_past_its_deadline_fails() {
+    let within = std::time::Duration::from_millis(50);
+    let mut asked = 0;
+    let err = paged("a list", within, |_, left| {
+        asked += 1;
+        assert!(left <= within);
+        thread::sleep(within + std::time::Duration::from_millis(10));
+        Ok(Page {
+            items: vec![()],
+            more: true,
+        })
+    })
+    .unwrap_err();
+    assert!(err.unavailable, "{err}");
+    assert_eq!(asked, 1);
+}
+
+/// A page that stalls is cut off at what's left of its read's deadline, not
+/// at a call's own minute.
+#[test]
+fn a_page_that_stalls_is_cut_off_at_its_reads_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let full = answer(json!(
+        (0..PER_PAGE)
+            .map(|n| json!({"number": n}))
+            .collect::<Vec<_>>()
+    ));
+    thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut head = [0; 1024];
+        _ = conn.read(&mut head);
+        conn.write_all(full.as_bytes()).unwrap();
+        // The second page: asked, and never answered.
+        let (mut conn, _) = listener.accept().unwrap();
+        _ = conn.read(&mut head);
+        thread::sleep(std::time::Duration::from_secs(30));
+    });
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut api = Api::new(&base, Tokens::given("t"));
+        api.read_for = std::time::Duration::from_millis(500);
+        _ = tx.send(api.commit_pulls("o/r", "h"));
+    });
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the read is cut off at its deadline");
+    assert!(got.unwrap_err().unavailable);
 }

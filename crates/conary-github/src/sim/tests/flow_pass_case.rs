@@ -105,7 +105,6 @@ impl Case {
                 resolved_reviews: Default::default(),
                 updated_at: 0,
                 suites: Default::default(),
-                checks_complete: true,
                 rebase_removed: vec![],
                 timeline_cut_at: None,
                 since: Default::default(),

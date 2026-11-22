@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use crate::api::{ApiError, PER_PAGE, Page, paged};
+use crate::api::{ApiError, PER_PAGE, Page, READ_FOR, paged};
 use crate::train::Mark;
 
 use super::{Hub, World};
@@ -12,6 +12,7 @@ use super::{Hub, World};
 pub(crate) enum Call {
     Pull,
     FlowSnapshot,
+    CheckSuites,
     FlowStatus,
     FlowStage,
     FlowComment,
@@ -290,7 +291,7 @@ impl Hub {
         args: &[&str],
         list: impl Fn(&World) -> Result<Vec<&serde_json::Value>, ApiError>,
     ) -> Result<Vec<T>, ApiError> {
-        paged(&format!("{:?}", asked.call), |n| {
+        paged(&format!("{:?}", asked.call), READ_FOR, |n, _| {
             self.read(asked.clone(), args, |w| {
                 let all = list(w)?;
                 let from = ((n - 1) * PER_PAGE).min(all.len());

@@ -32,7 +32,6 @@ pub struct Snapshot {
     pub resolved_reviews: BTreeSet<u64>,
     pub updated_at: u64,
     pub suites: BTreeMap<u64, Suite>,
-    pub checks_complete: bool,
     pub rebase_removed: Vec<u64>,
     pub timeline_cut_at: Option<u64>,
     /// When the PR last changed without a push, and when its head was
@@ -244,7 +243,7 @@ fn gather(
     )?;
     facts.classified = policy.classify(repo, &paths).raise(pull.raises());
     let machine = facts.settings.machine();
-    let mut ci = super::ci::checks(
+    let ci = super::ci::checks(
         source,
         &repository,
         &pull.head.sha,
@@ -255,20 +254,6 @@ fn gather(
         &facts.settings,
         reads,
     )?;
-    if !extra.checks_complete {
-        reads.met(
-            Reading::Checks,
-            "GitHub listed more check suites than one read holds".into(),
-        );
-        ci.checks = vec![Check {
-            name: "over 100 checks, too many to read".into(),
-            state: Ci::Pending,
-            run: Place::Unplaced,
-        }];
-        ci.docs = false;
-        ci.stopped.clear();
-        ci.timed_out.clear();
-    }
     if facts.settings.job_login.is_some() {
         facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
     }

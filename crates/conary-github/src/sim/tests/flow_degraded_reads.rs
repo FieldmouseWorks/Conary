@@ -33,6 +33,14 @@ fn once(h: &Hub, call: Call) {
     h.race(call, move |h| h.race(call, move |h| h.heal(call)));
 }
 
+/// A page more of green check suites on the PR's head, so its snapshot
+/// reads them past the first.
+fn page_of_suites(h: &Hub) {
+    for i in 0..crate::api::PER_PAGE {
+        h.check_run(&head(3), &format!("shard {i}"), "success", None);
+    }
+}
+
 /// The PR's stored snapshot, edited.
 fn snap(h: &Hub, edit: fn(&mut Snapshot)) {
     let mut snapshot = h.snapshot(REPO, 3).unwrap();
@@ -81,15 +89,20 @@ const ROWS: &[Row] = &[
         heal: |h| h.heal(Call::Comments),
     },
     // Reads it goes on past, holding what they were for failed.
+    // A page of the head's check suites past the first doesn't read: the
+    // PR's snapshot hasn't, which main took as all its checks and a cut.
+    Row {
+        read: "pull",
+        arm: |h| {
+            page_of_suites(h);
+            h.fail(Call::CheckSuites);
+        },
+        heal: |h| h.heal(Call::CheckSuites),
+    },
     Row {
         read: "commits",
         arm: |h| h.fail(Call::CompareCommits),
         heal: |h| h.heal(Call::CompareCommits),
-    },
-    Row {
-        read: "checks",
-        arm: |h| snap(h, |s| s.checks_complete = false),
-        heal: |h| snap(h, |s| s.checks_complete = true),
     },
     Row {
         read: "merge_tree",
@@ -149,19 +162,14 @@ const ROWS: &[Row] = &[
         },
         heal: |_| {},
     },
-    // Evidence's re-read of the head's checks stops short, and only it.
+    // Evidence's re-read of the head's checks fails past its first page of
+    // suites, and only it.
     Row {
         read: "observations",
         arm: |h| {
+            page_of_suites(h);
             h.race(Call::Comments, |h| {
-                h.race(Call::Comments, |h| {
-                    snap(h, |s| s.checks_complete = false);
-                    h.race(Call::FlowSnapshot, |h| {
-                        h.race(Call::FlowSnapshot, |h| {
-                            snap(h, |s| s.checks_complete = true)
-                        })
-                    });
-                })
+                h.race(Call::Comments, |h| once(h, Call::CheckSuites))
             })
         },
         heal: |_| {},
@@ -343,8 +351,9 @@ fn the_reads_before_one_that_fails_are_kept() {
     let now = jobs::now() + 10_000;
     c.pass(now - 1, false);
     c.clean_review();
-    // The checks stop short, then the comments don't read.
-    snap(&c.hub, |s| s.checks_complete = false);
+    // A run's suite isn't in the snapshot, then the comments don't read.
+    c.hub.stale(Call::FlowSnapshot);
+    c.hub.check_run(&head(3), "late", "success", None);
     c.hub.fail(Call::Comments);
     let three = decided(&c.pass(now, false), 3);
     assert!(
@@ -353,7 +362,7 @@ fn the_reads_before_one_that_fails_are_kept() {
     );
     assert_eq!(naming(&c, "degraded", "reviews"), 1);
     assert_eq!(naming(&c, "degraded", "checks"), 1);
-    snap(&c.hub, |s| s.checks_complete = true);
+    c.hub.fresh(Call::FlowSnapshot);
     c.hub.heal(Call::Comments);
     // The PR doesn't read; then it does, and its files don't.
     c.hub.fail(Call::FlowSnapshot);

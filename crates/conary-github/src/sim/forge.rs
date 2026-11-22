@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use conary_core::policy::Paths;
 
 use crate::api::{
-    ApiError, CheckRun, Commit, Comparison, Event, PullRequest, Pulls, Review, Source, Status,
-    compared,
+    ApiError, CheckRun, Commit, Comparison, Event, PER_PAGE, Page, PullRequest, Pulls, READ_FOR,
+    Review, Source, Status, compared, paged,
 };
 use crate::attest::{Actions, Artifact, Job, Key, testing};
 use crate::branches::{Branches, Merged};
@@ -522,60 +522,101 @@ impl crate::flow::Read for Hub {
         })
     }
 
+    /// The PR and its head's first page of check suites in one call, as
+    /// GitHub's query answers, then the rest a page at a time, on that
+    /// head, through the pager the API reads GitHub's with.
     fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
         let n = number.to_string();
-        self.read(
-            Asked::new(Call::FlowSnapshot, repo).pr(number),
-            &[repo, &n],
-            |w| {
-                let mut snapshot = repo_of(w, repo)?
-                    .flow
-                    .get(&number)
-                    .cloned()
-                    .ok_or_else(|| not_found(format!("flow #{number}")))?;
-                for thread in snapshot.threads.values_mut() {
-                    for comment in &mut thread.comments {
-                        *comment = super::flow::read_back(comment);
-                    }
-                }
-                if snapshot.default_branch.is_none() {
-                    snapshot.default_branch = w.base_observation(repo);
-                }
-                // A complete snapshot holds every suite of the head's check
-                // runs, as GitHub's does: one a test didn't name is an App's
-                // that runs no workflow.
-                if snapshot.checks_complete {
-                    for value in w.checks.get(&snapshot.revision.head).into_iter().flatten() {
-                        let run: CheckRun = parse(value);
-                        let Some(suite) = run.check_suite else {
-                            continue;
-                        };
-                        let named =
-                            snapshot
-                                .suites
-                                .entry(suite.id)
-                                .or_insert_with(|| crate::flow::Suite {
-                                    status: "completed".into(),
-                                    conclusion: None,
-                                    app: String::new(),
-                                    workflow: None,
-                                });
-                        if named.app.is_empty() && run.status != "completed" {
-                            named.status = "in_progress".into();
+        let mut first = None;
+        let mut head = String::new();
+        let suites = paged(&format!("flow #{number}"), READ_FOR, |page, _| {
+            if page == 1 {
+                let snapshot = self.read(
+                    Asked::new(Call::FlowSnapshot, repo).pr(number),
+                    &[repo, &n],
+                    |w| {
+                        let mut snapshot = repo_of(w, repo)?
+                            .flow
+                            .get(&number)
+                            .cloned()
+                            .ok_or_else(|| not_found(format!("flow #{number}")))?;
+                        for thread in snapshot.threads.values_mut() {
+                            for comment in &mut thread.comments {
+                                *comment = super::flow::read_back(comment);
+                            }
                         }
-                    }
-                }
-                // One query holds a page of suites, as GitHub's does.
-                if snapshot.suites.len() > crate::api::PER_PAGE {
-                    snapshot.suites = std::mem::take(&mut snapshot.suites)
-                        .into_iter()
-                        .take(crate::api::PER_PAGE)
-                        .collect();
-                    snapshot.checks_complete = false;
-                }
-                Ok(snapshot)
-            },
-        )
+                        if snapshot.default_branch.is_none() {
+                            snapshot.default_branch = w.base_observation(repo);
+                        }
+                        snapshot.suites = suites(w, &snapshot.suites, &snapshot.revision.head);
+                        Ok(snapshot)
+                    },
+                );
+                let mut snapshot = snapshot?;
+                head.clone_from(&snapshot.revision.head);
+                let all = std::mem::take(&mut snapshot.suites);
+                first = Some(snapshot);
+                Ok(suite_page(all, 1))
+            } else {
+                self.read(
+                    Asked::new(Call::CheckSuites, repo).pr(number),
+                    &[repo, &head],
+                    |w| {
+                        let named = &repo_of(w, repo)?
+                            .flow
+                            .get(&number)
+                            .ok_or_else(|| not_found(format!("flow #{number}")))?
+                            .suites;
+                        Ok(suite_page(suites(w, named, &head), page))
+                    },
+                )
+            }
+        })?;
+        let mut snapshot = first.expect("a paged read reads its first page");
+        snapshot.suites = suites.into_iter().collect();
+        Ok(snapshot)
+    }
+}
+
+/// Every suite of the head's check runs, as GitHub's snapshot holds them:
+/// those a test `named`, and one it didn't is an App's that runs no
+/// workflow.
+fn suites(
+    w: &World,
+    named: &std::collections::BTreeMap<u64, crate::flow::Suite>,
+    head: &str,
+) -> std::collections::BTreeMap<u64, crate::flow::Suite> {
+    let mut suites = named.clone();
+    for run in w.checks.get(head).into_iter().flatten() {
+        let Some(id) = run["check_suite"]["id"].as_u64() else {
+            continue;
+        };
+        let suite = suites.entry(id).or_insert_with(|| crate::flow::Suite {
+            status: "completed".into(),
+            conclusion: None,
+            app: String::new(),
+            workflow: None,
+        });
+        if suite.app.is_empty() && run["status"] != "completed" {
+            suite.status = "in_progress".into();
+        }
+    }
+    suites
+}
+
+/// Page `n` of a head's suites, oldest first.
+fn suite_page(
+    all: std::collections::BTreeMap<u64, crate::flow::Suite>,
+    n: usize,
+) -> Page<(u64, crate::flow::Suite)> {
+    let more = all.len() > n * PER_PAGE;
+    Page {
+        items: all
+            .into_iter()
+            .skip((n - 1) * PER_PAGE)
+            .take(PER_PAGE)
+            .collect(),
+        more,
     }
 }
 

@@ -27,7 +27,6 @@ pub(super) fn setup() -> (Hub, Facts, Memory) {
             resolved_reviews: Default::default(),
             updated_at: 0,
             suites: BTreeMap::new(),
-            checks_complete: true,
             rebase_removed: Vec::new(),
             timeline_cut_at: None,
             since: Default::default(),
