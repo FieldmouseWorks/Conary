@@ -293,7 +293,11 @@ Three rules make it trustworthy:
    test is a file, by its path (`tests/**`, `**/tests.rs`, `**/test_*.py`
    and the like), so a change adds one when it adds or changes a test file
    and changes anything else too: a change of tests alone has the base's
-   code as its own.
+   code as its own. A test file that only moved, its mode and blob
+   unchanged from a test path the change deletes, adds none, so code
+   changed beside a pure move is code changed with no test; an identical
+   file that reads differently at its new path is the limit of that
+   ([the rule](ci-attestation.md#negative-runs)).
    The record comes from burrow's shared CI, which builds the checks that
    read those files on the base with the head's test files, and attests
    whether they failed ([how](ci-attestation.md#negative-runs)). A test

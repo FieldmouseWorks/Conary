@@ -50,13 +50,16 @@ const TESTS: &[&str] = &[
     ":(glob)src/test/**",
 ];
 
-fn paths(
-    repo: &std::path::Path,
-    base: &str,
-    head: &str,
-    tests: bool,
-    filter: &str,
-) -> Result<Vec<String>> {
+/// One entry of `git diff-tree --raw`: the path, its status letter, and the
+/// mode and blob ID on each side (zeros where a side has no file).
+struct Change {
+    path: String,
+    status: String,
+    old: (String, String),
+    new: (String, String),
+}
+
+fn changes(repo: &std::path::Path, base: &str, head: &str, tests: bool) -> Result<Vec<Change>> {
     let mut args = vec![
         "diff-tree",
         "--no-commit-id",
@@ -64,9 +67,10 @@ fn paths(
         "--no-ext-diff",
         "--no-textconv",
         "--no-renames",
-        "--name-only",
+        "--raw",
+        "--no-abbrev",
         "-z",
-        filter,
+        "--diff-filter=ACDMT",
         base,
         head,
         "--",
@@ -74,21 +78,67 @@ fn paths(
     if tests {
         args.extend_from_slice(TESTS);
     }
-    Ok(git(repo, &args)?
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .collect())
+    let out = git(repo, &args)?;
+    // With -z each entry is ":MODE MODE ID ID STATUS\0PATH\0"; paths may
+    // hold newlines, so only NUL separates them.
+    let mut fields = out.split('\0');
+    let mut changes = vec![];
+    while let Some(meta) = fields.next().filter(|m| !m.is_empty()) {
+        let path = fields.next().ok_or("diff-tree entry without a path")?;
+        let meta: Vec<&str> = meta
+            .strip_prefix(':')
+            .ok_or("malformed diff-tree entry")?
+            .split(' ')
+            .collect();
+        let [old_mode, new_mode, old_id, new_id, status] = meta[..] else {
+            return Err("malformed diff-tree entry".into());
+        };
+        changes.push(Change {
+            path: path.to_owned(),
+            status: status.to_owned(),
+            old: (old_mode.to_owned(), old_id.to_owned()),
+            new: (new_mode.to_owned(), new_id.to_owned()),
+        });
+    }
+    Ok(changes)
+}
+
+/// Whether the test changes add or change a test beyond pure moves. An
+/// added test path is a move only when the same revision deletes a test
+/// path with the identical mode and blob ID, each deletion accounting for
+/// one addition at most. No similarity score: a file edited as it moved,
+/// or moved in from a path that is no test path, still counts.
+fn adds_tests(tests: &[Change]) -> bool {
+    let mut deleted = std::collections::HashMap::<&(String, String), usize>::new();
+    for change in tests.iter().filter(|c| c.status == "D") {
+        *deleted.entry(&change.old).or_default() += 1;
+    }
+    tests.iter().any(|change| match change.status.as_str() {
+        "D" => false,
+        "A" => match deleted.get_mut(&change.new) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        },
+        _ => true,
+    })
 }
 
 pub fn plan(repo: &std::path::Path, base: &str, head: &str) -> Result<Plan> {
     oid(base)?;
     oid(head)?;
     let base = git(repo, &["merge-base", base, head])?.trim().to_owned();
-    let tests = paths(repo, &base, head, true, "--diff-filter=ACMT")?;
-    let changed_tests = paths(repo, &base, head, true, "--diff-filter=ACDMT")?;
-    let all = paths(repo, &base, head, false, "--diff-filter=ACDMT")?;
-    if tests.is_empty() || all.iter().all(|p| changed_tests.contains(p)) {
+    let test_changes = changes(repo, &base, head, true)?;
+    let changed_tests: Vec<String> = test_changes.iter().map(|c| c.path.clone()).collect();
+    let tests: Vec<String> = test_changes
+        .iter()
+        .filter(|c| c.status != "D")
+        .map(|c| c.path.clone())
+        .collect();
+    let all = changes(repo, &base, head, false)?;
+    if !adds_tests(&test_changes) || all.iter().all(|c| changed_tests.contains(&c.path)) {
         return Ok(Plan {
             base,
             tree: None,
