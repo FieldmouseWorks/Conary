@@ -79,6 +79,3 @@ pub(super) fn keep(
     let text = format!("{} {}\n", mark.len, hex(&mark.sig.to_bytes()));
     replace(&dir.join(MARK_FILE), &text)
 }
-
-#[cfg(test)]
-pub(super) mod tests;

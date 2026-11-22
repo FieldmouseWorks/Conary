@@ -1,6 +1,10 @@
+//! The mark beside the log, `log/verified.rs`.
+
 use std::cell::Cell;
 
+use super::key;
 use crate::id::ChangeId;
+use crate::log::verified::Mark;
 use crate::log::*;
 
 thread_local! {
@@ -10,10 +14,6 @@ thread_local! {
 
 pub(in crate::log) fn checked() {
     CHECKED.set(CHECKED.get() + 1);
-}
-
-fn key() -> SigningKey {
-    SigningKey::from_bytes(&[7; 32])
 }
 
 fn open(dir: &Path, key: SigningKey) -> OpLog {

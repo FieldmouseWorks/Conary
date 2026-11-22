@@ -321,7 +321,7 @@ fn verify_line(
     let sig = parse_sig(line.sig).ok_or_else(|| corrupt("signature isn't 64 hex bytes"))?;
     if !marked {
         #[cfg(test)]
-        verified::tests::checked();
+        tests::marks::checked();
         key.verify_strict(line.id.as_bytes(), &sig)
             .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
     }
