@@ -615,8 +615,9 @@ counted as `evidence` says, and its candidates hold at most
 step fails and nothing lands. It isn't taken in a dry run, in a pass of one
 PR, while the repository is paused, or when the decision of a PR in the
 train failed in this pass, as it may not be settled any more; nor
-when the train has nothing in it or in flight. A step that changed what a PR
-is (landed, red, refused, out) books that PR's next pass at once, since the
+when the train has nothing in it or in flight and its last candidate
+finished, unless it holds a PR out as red alone, which only a step releases.
+A step that changed what a PR is (landed, red, released, refused, out) books that PR's next pass at once, since the
 train's own statuses start none; a step that failed says so on each PR in
 the train, which books it again. conaryd's passes are always of the whole
 repo, and the events that move a train kick one: a check suite or workflow

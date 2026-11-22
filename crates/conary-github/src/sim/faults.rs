@@ -38,6 +38,7 @@ pub(crate) enum Call {
     Files,
     Diff,
     Job,
+    WorkflowRun,
     Artifacts,
     Artifact,
     Keys,

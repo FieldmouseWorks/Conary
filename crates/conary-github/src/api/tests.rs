@@ -161,7 +161,7 @@ fn a_refusal_keeps_what_github_said_of_it() {
 
 #[test]
 fn a_rerun_and_a_rerequest_are_asked_as_github_takes_them_and_a_refusal_keeps_its_words() {
-    use crate::flow::Write as _;
+    use crate::{flow::Write as _, train::Forge as _};
     let refused = r#"{"message":"Unable to re-run this workflow run because it was created over a month ago"}"#;
     let (base, heads) = github(vec![
         whole("201 Created", "").leak(),
@@ -283,6 +283,31 @@ fn whole(status: &str, body: &str) -> String {
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+#[test]
+fn a_jobs_attempt_and_its_runs_are_read_as_github_says_them() {
+    use crate::{attest::Actions as _, train::Forge as _};
+    let (base, heads) = github(vec![
+        whole(
+            "200 OK",
+            r#"{"id":7,"run_id":42,"run_attempt":1,"runner_name":"fresh-1"}"#,
+        )
+        .leak(),
+        whole(
+            "200 OK",
+            r#"{"id":42,"run_attempt":2,"status":"in_progress"}"#,
+        )
+        .leak(),
+    ]);
+    let api = Api::new(&base, Tokens::given("t"));
+    let job = api.job("o/r", 7).unwrap().unwrap();
+    assert_eq!((job.run_id, job.run_attempt), (42, 1));
+    heads.recv().unwrap();
+    let run = api.workflow_run("o/r", 42).unwrap();
+    assert_eq!((run.run_attempt, run.status.as_str()), (2, "in_progress"));
+    let asked = heads.recv().unwrap();
+    assert!(asked.starts_with("get /repos/o/r/actions/runs/42 http/1.1"));
 }
 
 #[test]

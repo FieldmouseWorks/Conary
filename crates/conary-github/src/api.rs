@@ -237,6 +237,14 @@ pub(crate) struct ComparedFile {
 /// rest, so a list this long may be cut short.
 pub const COMPARED_FILES: usize = 300;
 
+/// Whether a check run's annotations say GitHub stopped it at its timeout,
+/// which it concludes as cancelled.
+pub(crate) fn overran(annotations: &[String]) -> bool {
+    annotations
+        .iter()
+        .any(|m| m.contains("has exceeded the maximum execution time"))
+}
+
 #[derive(Debug)]
 pub struct ApiError {
     what: String,
@@ -304,6 +312,8 @@ pub trait Source {
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError>;
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError>;
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError>;
+    /// What GitHub noted on check run `run`.
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError>;
@@ -699,6 +709,12 @@ impl Source for Api {
         Err(ApiError::new(format!(
             "{path}: more than {MAX_PAGES} pages"
         )))
+    }
+
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let all: Vec<flow::Annotation> =
+            self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;
+        Ok(all.into_iter().map(|a| a.message).collect())
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {

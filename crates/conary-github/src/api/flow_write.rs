@@ -25,7 +25,7 @@ impl Api {
         Ok(())
     }
     /// A PUT, or else a POST, whose answer says nothing the flow reads.
-    fn flow_call(&self, put: bool, path: &str, body: Value) -> Result<(), ApiError> {
+    pub(super) fn flow_call(&self, put: bool, path: &str, body: Value) -> Result<(), ApiError> {
         let url = format!("{}{path}", self.base);
         let request = if put {
             self.agent.put(&url)
@@ -109,13 +109,6 @@ impl Write for Api {
             true,
             &format!("/repos/{repo}/pulls/{pr}/update-branch"),
             json!({"expected_head_sha":head}),
-        )
-    }
-    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
-        self.flow_call(
-            false,
-            &format!("/repos/{repo}/actions/runs/{run}/rerun"),
-            json!({}),
         )
     }
     fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {

@@ -499,6 +499,11 @@ pub enum Body {
         candidate: CandidateId,
         verdict: Verdict,
     },
+    /// The gate of a candidate red with one change passed after its
+    /// verdict, on that same commit: the change may join again. The verdict
+    /// stays red, and the change is gated afresh in the candidate it's
+    /// built into next.
+    Release { candidate: CandidateId },
     /// Every change in a green candidate landed, and trunk ended on `tree`,
     /// the last landing's. When that's the candidate's tree, the
     /// candidate's evidence is about that landing's tree.
@@ -556,6 +561,7 @@ impl Body {
             | Self::Candidate { .. }
             | Self::CandidateEvidence { .. }
             | Self::Verdict { .. }
+            | Self::Release { .. }
             | Self::Finish { .. } => None,
         }
     }

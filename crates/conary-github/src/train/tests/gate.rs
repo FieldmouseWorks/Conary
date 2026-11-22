@@ -169,7 +169,13 @@ fn each_checks_latest_run_is_its_word() {
     // Runs of one name in two suites (two workflows, or two Apps) are two
     // checks, and a status and a run of one name are too.
     for (a, b) in [("success", "failure"), ("failure", "success")] {
-        let runs = vec![run(7, 1, Some(a), at), run(8, 2, Some(b), at)];
+        // The one that failed failed its second try as well.
+        let failed_in = if a == "failure" { 1 } else { 2 };
+        let runs = vec![
+            run(7, 1, Some(a), at),
+            run(8, 2, Some(b), at),
+            run(9, failed_in, Some("failure"), at),
+        ];
         assert_eq!(gate(runs, json!([])), Some(Verdict::Red));
     }
     let failed = json!([{"context": "check / check", "state": "failure", "target_url": null}]);
@@ -456,6 +462,7 @@ fn red_needs_no_attestation_and_a_check_not_required_needs_none_to_pass() {
         &commit_of(&store, id),
         &[("check / check", "success"), ("lint", "failure")],
     );
+    hub.fails_again(&commit_of(&store, id));
     assert_eq!(step_once(&mut store, &hub).verdicts, [(id, Verdict::Red)]);
     assert_eq!(hub.count(Call::Artifact), 0);
     // A pass of a check that isn't required counts unattested beside the
