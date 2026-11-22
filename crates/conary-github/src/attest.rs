@@ -119,6 +119,8 @@ impl std::fmt::Display for Signer {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
     pub run_id: u64,
+    /// Which attempt of its run it's in.
+    pub run_attempt: u64,
     /// The runner that took it, as GitHub records it: no workflow can
     /// change which one that was.
     #[serde(default)]

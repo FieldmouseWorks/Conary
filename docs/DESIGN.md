@@ -406,9 +406,9 @@ Op {
   at:      timestamp
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
-           train's join, leave, candidate, candidate_evidence, verdict and
-           finish (section 4.7); undo (section 5); classify (section 4.4);
-           degraded and restored (below)
+           train's join, leave, candidate, candidate_evidence, verdict,
+           release and finish (section 4.7); undo (section 5); classify
+           (section 4.4); degraded and restored (below)
   sig:     the ledger key's signature over the id
 }
 ```
@@ -508,8 +508,9 @@ so the wait is one run, however many are waiting.
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
   recorded: whatever else is pushed to its branch counts for nothing. The
-  gate is red once any check's latest result failed, which takes no
-  attestation. It's green once every check on that commit has passed and the
+  gate is red once any check's latest result failed and has had its
+  second try (Red, below), which takes no attestation. It's green once
+  every check on that commit has passed and the
   ones the repo requires are among them, each required one's latest run a
   success its job attests on a runner started fresh for it
   ([CI attestations](ci-attestation.md)), checked as it's recorded and kept
@@ -570,15 +571,28 @@ so the wait is one run, however many are waiting.
   landed tree's evidence, as it is without a train. A merge GitHub refuses
   partway puts the changes after it back in the train, and the refused PR's
   train status becomes an error, so nothing else lands it.
-- **Red.** The failed check gets the one second try every failed test gets.
+- **Red.** The failed check gets the one second try every failed test gets,
+  and the train makes it, since a gate that died can't make its own and says
+  what a failing test says. It asks GitHub to run the failure's workflow run
+  again, all of it (a rerun of the failed jobs alone gives the passes copies
+  their attestations don't name), once that run's first attempt has ended,
+  and waits. The run's attempt is the only record of the try. A failure with
+  no try to have (a status, another App's run, a rerun GitHub refuses) is
+  red as it stands, and so is one past its timeout, as it is to the flow,
+  so a change that hangs the gate is split out like any bad one. A check run
+  that ends with no verdict (cancelled short of its timeout, or stale) and
+  has no try left is never red: its gate waits, a stall, until it's dropped.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
   that's green lands without waiting on the other. A change red on its own
   leaves the train and gets the fix job red CI gets today. One bad change in
-  eight costs up to seven runs, still fewer than the eight it stands for, and
-  `size` is the knob if the ledger shows red candidates costing more. The
+  eight costs up to seven candidates, each red one gated twice, and `size`
+  is the knob if the ledger shows red candidates costing more. The
   change red on its own gets the train's status as a failure, naming the
-  checks, which is how the steward knows to start that job.
+  checks, which is how the steward knows to start that job. If that
+  candidate's gate is green later, by the same rule and on the same commit,
+  a step puts that status to pending and records a `release` op: the change
+  may join again at that head and is gated afresh. The verdict stays red.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
   makes. It joins `alone`, and the changes before it go without it. Right
@@ -613,7 +627,8 @@ landing, or a red candidate it was alone in. One leaving a candidate in
 flight stops the candidate there, and its other changes wait again as they
 were. A change that left red alone, on a conflict, on an empty merge or on
 a refused merge is held: it can't join again at that revision, so it never
-rebuilds the candidate it failed in. A new head lets it go, and for a
+rebuilds the candidate it failed in. A new head lets it go, for one red
+alone a `release` too, and for a
 conflict, an empty merge or a refusal so does trunk moving, or, for a
 conflict or an empty merge, one of the changes it was merged after leaving. A candidate's `verdict` is green, red or dropped:
 dropped is a gate that never finished, the stall watchdog's last word, a

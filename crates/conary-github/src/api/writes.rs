@@ -232,6 +232,18 @@ impl crate::branches::Branches for Api {
 }
 
 impl crate::train::Forge for Api {
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<crate::train::WorkflowRun, ApiError> {
+        self.get(&format!("/repos/{repo}/actions/runs/{run}"))
+    }
+
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.flow_call(
+            false,
+            &format!("/repos/{repo}/actions/runs/{run}/rerun"),
+            serde_json::json!({}),
+        )
+    }
+
     fn mark(
         &self,
         repo: &str,

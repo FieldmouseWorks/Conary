@@ -43,7 +43,6 @@ pub struct Snapshot {
 pub trait Read: Source + crate::branches::Branches {
     fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
 }
 
 /// Why a read GitHub answered with something that doesn't parse degraded.

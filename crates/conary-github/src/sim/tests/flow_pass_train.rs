@@ -7,6 +7,7 @@ use crate::flow::*;
 use crate::sim::{Call, On};
 use crate::train::{Mark, train_branch};
 use conary_core::ledger::State;
+use conary_core::plugin::FixResult;
 
 const GATE: &str = "fresh / check";
 
@@ -61,6 +62,38 @@ fn gate(c: &Case, commit: &str, conclusion: &str) {
     }
 }
 
+/// Every worker launched has ended, a fix's, with `result`.
+fn fix_ended(c: &Case, result: FixResult) {
+    for path in c.deferred.0.borrow_mut().drain(..) {
+        let completion = jobs::Completion {
+            at: jobs::now(),
+            result: Some(Ok(conary_core::plugin::Response {
+                contract: conary_core::plugin::CONTRACT.into(),
+                by: conary_core::plugin::Identity {
+                    engine: "fixture".into(),
+                    session: None,
+                },
+                execution: None,
+                answer: conary_core::plugin::Answer::Fix {
+                    result: result.clone(),
+                    answers: Some(Vec::new()),
+                },
+            })),
+        };
+        let answer = serde_json::to_vec(&completion).unwrap();
+        std::fs::write(path.with_extension("answer"), answer).unwrap();
+    }
+}
+
+/// Each pass on the commit attested by its producer.
+fn attest_passes(c: &Case, commit: &str) {
+    for run in c.hub.checks_on(commit) {
+        if run.conclusion.as_deref() == Some("success") {
+            c.attest_run(commit, run.id, None);
+        }
+    }
+}
+
 /// Seated by the first pass, which steps the train after it: its
 /// candidate is built and gating on its train branch.
 fn seated_and_gating(c: &Case) -> (conary_core::CandidateId, String) {
@@ -104,6 +137,7 @@ fn a_held_train_repos_pass_sends_a_red_candidate_away() {
     let c = train_repo();
     let (id, commit) = seated_and_gating(&c);
     gate(&c, &commit, "failure");
+    c.hub.fails_again(&commit);
     c.pass(jobs::now() + 1, false);
     assert_eq!(c.hub.count(Call::Land), 0);
     assert!(c.hub.merged(REPO, 3).is_none());
@@ -118,6 +152,93 @@ fn a_held_train_repos_pass_sends_a_red_candidate_away() {
         (next.stage, &next.step),
         (Stage::Fix, &Step::HandFix(Kind::Red))
     );
+}
+
+#[test]
+fn a_gate_that_failed_once_is_tried_again_and_lands_on_its_pass() {
+    // Conary#554: the gate's own disk filled, and it said what a failing
+    // test says, a failure.
+    let c = train_repo();
+    let (id, commit) = seated_and_gating(&c);
+    gate(&c, &commit, "failure");
+    c.pass(jobs::now() + 1, false);
+    assert_eq!(state(&c, id), State::Gating);
+    assert_eq!(c.hub.marked(), []);
+    c.hub.finish_again(&commit, "success");
+    attest_passes(&c, &commit);
+    c.pass(jobs::now() + 2, false);
+    assert!(matches!(state(&c, id), State::Finished { .. }));
+    assert!(c.hub.merged(REPO, 3).is_some());
+}
+
+#[test]
+fn a_pr_red_alone_rejoins_once_its_candidates_gate_passes() {
+    for found in [
+        FixResult::Unchanged,
+        FixResult::Unable {
+            why: "it doesn't fail here".into(),
+        },
+    ] {
+        rejoins_after_a_fix_job_that(found);
+    }
+}
+
+fn rejoins_after_a_fix_job_that(found: FixResult) {
+    // Conary#554, as the ledger held it: red recorded, then a rerun passed.
+    let c = train_repo();
+    let (id, commit) = seated_and_gating(&c);
+    gate(&c, &commit, "failure");
+    c.hub.fails_again(&commit);
+    c.pass(jobs::now() + 1, false);
+    assert_eq!(state(&c, id), State::Red);
+    c.hub.rerun_again(&commit, "success");
+    attest_passes(&c, &commit);
+    c.pass(jobs::now() + 2, false);
+    assert_eq!(c.hub.latest(&head(3)), Some(Mark::Waiting));
+    // The job the red started ends with nothing to push.
+    fix_ended(&c, found);
+    c.pass(jobs::now() + 3, false);
+    c.pass(jobs::now() + 600, false);
+    // Seated again in a candidate of its own: the red verdict stays.
+    assert_eq!(state(&c, id), State::Red);
+    assert_ne!(in_flight(&c).expect("it rejoined").0, id);
+}
+
+#[test]
+fn an_idle_train_still_steps_to_release_a_pr_red_alone() {
+    let c = train_repo();
+    let (_, commit) = seated_and_gating(&c);
+    gate(&c, &commit, "failure");
+    c.hub.fails_again(&commit);
+    c.pass(jobs::now() + 1, false);
+    // Another PR lands since: nothing's in the train or in flight, and its
+    // last candidate finished.
+    super::flow_pass_slots::another(&c, 5);
+    c.hub.post_status(
+        &head(5),
+        serde_json::json!({"context": "machine", "state": "success"}),
+    );
+    c.pass(jobs::now() + 2, false);
+    let (later, landing) = in_flight(&c).expect("the other PR's candidate");
+    gate(&c, &landing, "success");
+    c.pass(jobs::now() + 3, false);
+    assert!(matches!(state(&c, later), State::Finished { .. }));
+    assert_eq!((joined(&c), in_flight(&c)), (0, None));
+    assert_eq!(c.hub.latest(&head(3)), Some(Mark::Red));
+
+    c.hub.rerun_again(&commit, "success");
+    attest_passes(&c, &commit);
+    // Refused, it stays held, and its own report says so.
+    c.hub
+        .refuse_with(On::from(Call::Mark).mark(Mark::Waiting), "Not Found");
+    let reports = c.pass(jobs::now() + 4, false);
+    let held = reports.iter().find(|r| r.pr == 3).unwrap();
+    let error = held.error.as_deref().unwrap_or_default();
+    assert!(error.contains("red alone"), "{error}");
+    assert_eq!(c.hub.latest(&head(3)), Some(Mark::Red));
+    c.hub.heal(Call::Mark);
+    c.pass(jobs::now() + 5, false);
+    assert_eq!(c.hub.latest(&head(3)), Some(Mark::Waiting));
 }
 
 #[test]

@@ -914,6 +914,7 @@ fn a_green_candidate_can_be_dropped_only_alone_or_on_passes_nobody_attested() {
 mod alone;
 mod empty;
 mod land;
+mod release;
 
 #[test]
 fn a_green_on_passes_nobody_attested_drops_keeping_what_it_landed_and_the_rest_waits_again() {

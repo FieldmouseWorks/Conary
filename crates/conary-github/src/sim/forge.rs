@@ -11,7 +11,7 @@ use crate::api::{
 };
 use crate::attest::{Actions, Artifact, Job, Key, testing};
 use crate::branches::{Branches, Merged};
-use crate::train::{CONTEXT, Forge, Mark, PrMerge};
+use crate::train::{CONTEXT, Forge, Mark, PrMerge, WorkflowRun};
 use crate::undo::Reverts;
 
 use super::faults::{Asked, Call};
@@ -116,6 +116,13 @@ impl Source for Hub {
         })
     }
 
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let id = run.to_string();
+        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
+            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
+        })
+    }
+
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
         self.read(Asked::new(Call::Statuses, repo), &[repo, sha], |w| {
             Ok(w.statuses
@@ -206,6 +213,7 @@ impl Actions for Hub {
         self.read(Asked::new(Call::Job, repo), &[repo, &n], |w| {
             Ok(Some(Job {
                 run_id: job * 10,
+                run_attempt: w.attempt(job),
                 runner_name: Some(
                     w.runners
                         .get(&job)
@@ -409,6 +417,29 @@ impl Reverts for Hub {
 }
 
 impl Forge for Hub {
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<WorkflowRun, ApiError> {
+        let n = run.to_string();
+        self.read(Asked::new(Call::WorkflowRun, repo), &[repo, &n], |w| {
+            Ok(w.workflow_run(run / 10))
+        })
+    }
+
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowRerun, repo),
+            &[repo, &run.to_string()],
+            || {
+                let suite = self
+                    .world
+                    .borrow()
+                    .suite_of(repo, run)
+                    .ok_or_else(|| ApiError::new("Not Found").saying("Not Found"))?;
+                self.run_again(suite);
+                Ok(())
+            },
+        )
+    }
+
     fn mark(
         &self,
         repo: &str,
@@ -490,12 +521,6 @@ impl crate::flow::Read for Hub {
         })
     }
 
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
-        let id = run.to_string();
-        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
-            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
-        })
-    }
     fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
         let n = number.to_string();
         self.read(

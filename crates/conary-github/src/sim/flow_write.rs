@@ -106,25 +106,6 @@ impl Write for Hub {
             || Ok(()),
         )
     }
-    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
-        self.write(
-            Asked::new(Call::FlowRerun, repo),
-            &[repo, &run.to_string()],
-            || {
-                let suite = self.world.borrow().repos.get(repo).and_then(|r| {
-                    r.flow.values().flat_map(|s| &s.suites).find_map(|(id, s)| {
-                        s.workflow
-                            .as_ref()
-                            .is_some_and(|w| w.run == Some(run))
-                            .then_some(*id)
-                    })
-                });
-                let suite = suite.ok_or_else(|| ApiError::new("Not Found").saying("Not Found"))?;
-                self.run_again(suite);
-                Ok(())
-            },
-        )
-    }
     fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
         self.write(
             Asked::new(Call::FlowRerequest, repo),

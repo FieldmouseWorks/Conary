@@ -28,10 +28,13 @@ mod gate;
 mod land;
 mod message;
 mod negative;
+mod release;
+mod retry;
 use gate::{Gate, gate};
 use land::{land_next, open_landing, stopped_landing};
 pub use message::{Message, messages};
 pub use negative::{Negatives, verify as verify_negative};
+pub use release::Unread;
 
 /// Where a candidate is built, one merge at a time.
 pub fn build_branch(id: CandidateId) -> String {
@@ -92,6 +95,24 @@ pub trait Forge: Branches + Actions {
     /// commits.
     fn land(&self, repo: &str, pr: u64, head: &str, message: &Message)
     -> Result<PrMerge, ApiError>;
+    /// Where GitHub Actions workflow run `run` is.
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<WorkflowRun, ApiError>;
+    /// Runs all of workflow run `run` again, as its next attempt.
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError>;
+}
+
+/// A workflow run as GitHub shows it: its latest attempt, and where that is.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WorkflowRun {
+    pub run_attempt: u64,
+    pub status: String,
+}
+
+impl WorkflowRun {
+    /// Its first attempt is over and it has had no other.
+    fn first_finished(&self) -> bool {
+        self.run_attempt == 1 && self.status == "completed"
+    }
 }
 
 #[derive(Debug)]
@@ -607,6 +628,11 @@ pub struct Stepped {
     /// longer says they're settled, or settled them without a label that
     /// raises them.
     pub unready: Vec<u64>,
+    /// The PRs that may join again, each red alone in a candidate whose
+    /// gate has passed since.
+    pub released: Vec<u64>,
+    /// The PRs red alone it couldn't read for that, left held.
+    pub unread: Vec<Unread>,
     /// The PRs it put back in alone, classed R2 after they joined.
     pub reseated: Vec<u64>,
     /// Candidates whose landings all came through, with the tree trunk
@@ -618,8 +644,9 @@ pub struct Stepped {
 /// One step of a repo's train, the whole of what it does on an event. It
 /// finishes the candidates whose landings all came through, builds the next
 /// candidate when none is in flight, reads the gate of the one gating and
-/// says its verdict once its checks have, lands a green one's changes in
-/// order, and deletes the branches of every candidate that isn't in flight.
+/// says its verdict once its checks have (a failure's, after its second
+/// try), lands a green one's changes in order, lets a change red alone whose
+/// gate passed since join again, and deletes the branches of every candidate that isn't in flight.
 /// It goes on until the train waits on something: a gate still running, a
 /// merge GitHub hasn't shown yet, or nothing to do. It holds the ledger's
 /// lock throughout, so two steps never build or land at once. Trunk is the
@@ -637,6 +664,7 @@ pub fn step(
     if settings.require.is_empty() {
         return Err(TrainError::NothingRequired);
     }
+    let (released, unread) = release::release(store, forge, source, config, settings, repo)?;
     let mut stepped = Stepped {
         conflicts: Vec::new(),
         empty: Vec::new(),
@@ -645,6 +673,8 @@ pub fn step(
         landed: Vec::new(),
         refused: Vec::new(),
         unready: Vec::new(),
+        released,
+        unread,
         reseated: Vec::new(),
         finished: Vec::new(),
         now: Now::Idle,
@@ -675,7 +705,11 @@ pub fn step(
                 if forge.branch(&full, &branch)?.is_none() {
                     forge.create_branch(&full, &branch, c.commit.as_str())?;
                 }
-                match gate(store, forge, source, config, settings, &c)? {
+                let said = match gate(store, forge, source, config, settings, &c)? {
+                    Gate::Red(failures) => retry::second_try(forge, source, repo, failures)?,
+                    said => said,
+                };
+                match said {
                     Gate::Waiting(waiting) => {
                         break Now::Gating {
                             candidate: id,
@@ -692,7 +726,8 @@ pub fn step(
                         })?;
                         stepped.verdicts.push((id, Verdict::Green));
                     }
-                    Gate::Red(failed) => {
+                    Gate::Red(failures) => {
+                        let failed = failures.into_iter().map(|f| f.failed).collect();
                         // The PR red alone is told first: once the verdict
                         // is in, no step comes back to the candidate.
                         if let [alone] = c.changes.as_slice() {

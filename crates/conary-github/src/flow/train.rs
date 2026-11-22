@@ -105,10 +105,11 @@ pub(super) fn apply(f: &Facts, decision: Decision) -> Decision {
 /// and the way the steward takes it: not while the repository is paused, and
 /// not when the decision of a PR in the train failed this pass, as it may not
 /// be settled any more. A train with nothing in it or in flight, whose last
-/// candidate finished, has nothing to step.
+/// candidate finished, has nothing to step, unless it holds a PR out as red
+/// alone: only a step sees that PR's gate pass since.
 ///
-/// What a step changes under a PR (it landed, went red, was refused or taken
-/// out) books that PR's next pass at once, since the train's own statuses
+/// What a step changes under a PR (it landed, went red, was released,
+/// refused or taken out) books that PR's next pass at once, since the train's own statuses
 /// start none. A step that fails is said on the reports of the PRs in the
 /// train, which books each again; with none to say it on, the pass fails.
 pub(super) fn step<G: Write>(
@@ -127,7 +128,11 @@ pub(super) fn step<G: Write>(
             .candidate(*id)
             .is_some_and(|c| matches!(c.state, State::Finished { .. }))
     });
-    if train.joined().is_empty() && train.in_flight().is_none() && finished {
+    if train.joined().is_empty()
+        && train.in_flight().is_none()
+        && finished
+        && ledger.red_alone(repo).is_empty()
+    {
         return Ok(());
     }
     let seated: Vec<u64> = train
@@ -167,10 +172,19 @@ pub(super) fn step<G: Write>(
                 .chain(stepped.landed.iter().copied())
                 .chain(stepped.unready.iter().copied())
                 .chain(stepped.reseated.iter().copied())
+                .chain(stepped.released.iter().copied())
                 .collect();
             for report in reports.iter_mut().filter(|r| touched.contains(&r.pr)) {
                 if let Some(next) = &mut report.next {
                     next.wait_until = Some(pass.now.saturating_add(1));
+                }
+            }
+            for left in &stepped.unread {
+                if let Some(report) = reports.iter_mut().find(|r| r.pr == left.pr) {
+                    report.error = Some(format!(
+                        "reading whether the gate it was red alone in passed since: {}",
+                        left.why
+                    ));
                 }
             }
             Ok(())

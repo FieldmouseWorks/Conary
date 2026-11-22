@@ -212,6 +212,8 @@ pub enum Invalid {
     NotGating,
     /// Not every change in the candidate has landed through it.
     NotLanded,
+    /// That candidate isn't holding a change out as red alone.
+    NotHolding,
     /// The change left its train and can't join again as it is.
     Held(Held),
     /// An undo that reverts nothing.
@@ -269,6 +271,9 @@ impl std::fmt::Display for Invalid {
             Self::NotGating => f.write_str("that candidate's gate already ended"),
             Self::NotLanded => {
                 f.write_str("not every change in that candidate has landed through it")
+            }
+            Self::NotHolding => {
+                f.write_str("that candidate isn't holding a change out as red alone")
             }
             Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
             Self::NothingToUndo => f.write_str("the undo reverts nothing"),
@@ -525,6 +530,7 @@ impl Ledger {
                 attest.as_ref(),
             )?,
             Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
+            Body::Release { candidate } => self.check_release(*candidate)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
             Body::Undo {
                 change,
@@ -721,6 +727,7 @@ impl Ledger {
             | Body::Candidate { .. }
             | Body::CandidateEvidence { .. }
             | Body::Verdict { .. }
+            | Body::Release { .. }
             | Body::Finish { .. } => unreachable!("apply_train applies the train's ops"),
             Body::Undo { .. } => unreachable!("apply_undo applies undo"),
         }

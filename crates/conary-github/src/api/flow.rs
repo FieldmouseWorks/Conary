@@ -207,8 +207,8 @@ struct Flow {
     name: String,
 }
 #[derive(Deserialize)]
-struct Annotation {
-    message: String,
+pub(super) struct Annotation {
+    pub(super) message: String,
 }
 
 impl Api {
@@ -432,10 +432,5 @@ impl Read for Api {
             suites,
             checks_complete,
         })
-    }
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
-        let all: Vec<Annotation> =
-            self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;
-        Ok(all.into_iter().map(|a| a.message).collect())
     }
 }
