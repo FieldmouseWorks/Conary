@@ -99,7 +99,8 @@ impl Candidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Held {
-    /// It was red alone in a candidate: until its PR has a new head.
+    /// It was red alone in a candidate: until its PR has a new head, or
+    /// that candidate's gate passes ([`Body::Release`]).
     Red,
     /// Its head wouldn't merge onto trunk and the changes ahead of it: until
     /// it has a new head, trunk moves, or one of those changes leaves (for
@@ -116,7 +117,7 @@ pub enum Held {
 impl std::fmt::Display for Held {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Red => "it was red alone, until its head moves",
+            Self::Red => "it was red alone, until its head moves or that gate passes",
             Self::Conflict => {
                 "its head wouldn't merge, until its head or trunk moves or a change it was after leaves"
             }
@@ -299,6 +300,36 @@ impl Ledger {
                 .collect(),
         };
         (!changes.is_empty()).then_some(Plan { changes, of: None })
+    }
+
+    /// The candidates holding a change out of `repo`'s train as red alone:
+    /// for each open change held so at its head now, the last candidate it
+    /// was red alone in there. A gate of one that passes since releases it.
+    pub fn red_alone(&self, repo: &Repo) -> Vec<CandidateId> {
+        let Some(train) = self.trains.get(repo) else {
+            return Vec::new();
+        };
+        train
+            .held
+            .iter()
+            .filter_map(|(&change, hold)| {
+                let c = &self.changes[&change];
+                if hold.why != Held::Red
+                    || c.status() != Status::Open
+                    || c.current != Some(hold.revision)
+                {
+                    return None;
+                }
+                let member = Member {
+                    change,
+                    revision: hold.revision,
+                };
+                train.candidates.iter().rev().copied().find(|id| {
+                    let red = &self.candidates[id];
+                    red.state == State::Red && red.changes.as_slice() == [member.clone()]
+                })
+            })
+            .collect()
     }
 
     fn train_of(&self, change: ChangeId) -> Option<&Train> {
@@ -502,6 +533,15 @@ impl Ledger {
         }
     }
 
+    pub(super) fn check_release(&self, candidate: CandidateId) -> Result<(), Invalid> {
+        let c = self.existing_candidate(candidate)?;
+        if self.red_alone(&c.repo).contains(&candidate) {
+            Ok(())
+        } else {
+            Err(Invalid::NotHolding)
+        }
+    }
+
     pub(super) fn check_finish(&self, candidate: CandidateId) -> Result<(), Invalid> {
         match self.existing_candidate(candidate)?.state {
             State::Landed => Ok(()),
@@ -632,6 +672,14 @@ impl Ledger {
                     at,
                 }),
             Body::Verdict { candidate, verdict } => self.verdict(*candidate, *verdict),
+            Body::Release { candidate } => {
+                let c = &self.candidates[candidate];
+                self.trains
+                    .get_mut(&c.repo)
+                    .expect("a candidate is in its repo's train")
+                    .held
+                    .remove(&c.changes[0].change);
+            }
             Body::Finish { candidate, tree } => {
                 self.candidates
                     .get_mut(candidate)

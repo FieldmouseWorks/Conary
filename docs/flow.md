@@ -94,10 +94,16 @@ producer gets the same digest from `flow::read_judging_context` over its own
 read of the PR. Resolving a thread doesn't change it. An approval's body doesn't
 count: it's a person's permission, and counting it would make the owner's
 release of an owner verdict ask for another judgment. A plugin speaking an older contract gets none of these fields.
-Engine trailers across the PR history supply its author engine. Unreadable
-or mixed-engine histories wait rather than infer independence. Session
-trailers are untrusted: only a completed fix's validated producer establishes
-a known session for its reported push.
+Engine trailers across the PR history supply its author engine, read once
+with the PR (`flow::history::author`). A history no trailer names is the
+account that opened the PR, a person or an App: a judge is independent by
+its fresh session on any engine ([plugins.md](plugins.md#independence-and-execution-failures)),
+so a workers App's PR is judged all the same. A history that didn't read in
+full, or names more than one engine, waits for its judge, its status saying
+which, until its history, or a fix's validated push, names one author. Session trailers are untrusted: only a completed fix's validated
+producer establishes a known session for its reported push. A step that
+fails is retried with what its effect said in its status and in the PR's
+record (`failed_why`), never dropped.
 
 GitHub authentication uses `GH_TOKEN`, `GITHUB_TOKEN`, or
 `--token-command` (`CONARY_TOKEN_COMMAND`), as other cn commands do.
@@ -609,8 +615,9 @@ counted as `evidence` says, and its candidates hold at most
 step fails and nothing lands. It isn't taken in a dry run, in a pass of one
 PR, while the repository is paused, or when the decision of a PR in the
 train failed in this pass, as it may not be settled any more; nor
-when the train has nothing in it or in flight. A step that changed what a PR
-is (landed, red, refused, out) books that PR's next pass at once, since the
+when the train has nothing in it or in flight and its last candidate
+finished, unless it holds a PR out as red alone, which only a step releases.
+A step that changed what a PR is (landed, red, released, refused, out) books that PR's next pass at once, since the
 train's own statuses start none; a step that failed says so on each PR in
 the train, which books it again. conaryd's passes are always of the whole
 repo, and the events that move a train kick one: a check suite or workflow

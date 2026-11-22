@@ -21,20 +21,26 @@ pub(super) enum Gate {
     /// (and why): none named when no check has reported at all.
     Waiting(Vec<String>),
     Green,
-    Red(Vec<Failed>),
+    Red(Vec<Failure>),
+}
+
+/// A failed check, and the run that failed unless it's a status.
+pub(super) struct Failure {
+    pub(super) failed: Failed,
+    pub(super) run: Option<CheckRun>,
 }
 
 /// A check's latest word on a commit.
 enum Said<'a> {
     Pass(Option<&'a CheckRun>),
     Pending,
-    Fail(Option<String>),
+    Fail(Option<&'a CheckRun>, Option<String>),
 }
 
 /// Records the CI results on the candidate's commit, as ingest records a
 /// PR's, and says what they add up to. Red once any check's latest result
-/// is a failure: a failed test has had its second try inside its run
-/// (`docs/DESIGN.md` section 4.7). Green once every check has passed, the
+/// is a failure, which a gating candidate's verdict is only once it has had
+/// its second try ([`super::retry`]). Green once every check has passed, the
 /// required ones among them, each required one's latest run a success its
 /// producer attests. A required status can't be: no status carries an
 /// attestation. A required CI result that skipped checks counts only once
@@ -74,7 +80,7 @@ pub(super) fn gate(
         .map(|run| {
             let s = match (run.status.as_str(), run.conclusion.as_deref()) {
                 ("completed", Some("success" | "neutral" | "skipped")) => Said::Pass(Some(run)),
-                ("completed", _) => Said::Fail(run.html_url.clone()),
+                ("completed", _) => Said::Fail(Some(run), run.html_url.clone()),
                 _ => Said::Pending,
             };
             (run.name.as_str(), s)
@@ -87,17 +93,20 @@ pub(super) fn gate(
             let s = match status.state.as_str() {
                 "success" => Said::Pass(None),
                 "pending" => Said::Pending,
-                _ => Said::Fail(status.target_url.clone()),
+                _ => Said::Fail(None, status.target_url.clone()),
             };
             said.push((&status.context, s));
         }
     }
-    let failed: Vec<Failed> = said
+    let failed: Vec<Failure> = said
         .iter()
         .filter_map(|(check, s)| match s {
-            Said::Fail(url) => Some(Failed {
-                check: (*check).to_owned(),
-                url: url.clone(),
+            Said::Fail(run, url) => Some(Failure {
+                failed: Failed {
+                    check: (*check).to_owned(),
+                    url: url.clone(),
+                },
+                run: run.cloned(),
             }),
             _ => None,
         })

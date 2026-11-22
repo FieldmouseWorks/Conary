@@ -74,8 +74,9 @@ pub fn drop_candidate(
 /// One step of a repo's train, the whole of what it does on an event. It
 /// finishes the candidates whose landings all came through, builds the next
 /// candidate when none is in flight, reads the gate of the one gating and
-/// says its verdict once its checks have, lands a green one's changes in
-/// order, and deletes the branches of every candidate that isn't in flight.
+/// says its verdict once its checks have (a failure's, after its second
+/// try), lands a green one's changes in order, lets a change red alone whose
+/// gate passed since join again, and deletes the branches of every candidate that isn't in flight.
 /// It goes on until the train waits on something: a gate still running, a
 /// merge GitHub hasn't shown yet, or nothing to do. It holds the ledger's
 /// lock throughout, so two steps never build or land at once. Trunk is the

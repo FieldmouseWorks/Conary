@@ -58,6 +58,17 @@ fn hydrate_with(
             }
             read => read?,
         };
+        // A fix's validated answer names the session that pushed the head,
+        // which no trailer can.
+        if let Some(Ok(response)) = &completion.result
+            && let plugin::Answer::Fix {
+                result: plugin::FixResult::Pushed { head },
+                ..
+            } = &response.answer
+            && head == &f.revision.head
+        {
+            f.author = Ok(response.by.clone());
+        }
         let mut job = work.job.clone();
         // Stopped work, obsolete, paused or held, is neither an answer nor
         // a failure: it's retired, and its request starts again if it's

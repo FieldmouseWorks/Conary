@@ -286,6 +286,7 @@ impl Pass<'_> {
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
                     record.failed = Some(Failure::Status);
+                    record.failed_why = Some(error.clone());
                     report.error = Some(error.clone());
                 }
                 super::ledger::raised(
@@ -345,6 +346,7 @@ impl Pass<'_> {
                 }
                 super::observe::issuances(&mut facts, &record.memory);
                 facts.failed = record.failed.take();
+                facts.failed_why = record.failed_why.take();
                 facts.succeeded = std::mem::take(&mut record.succeeded);
                 let approved = facts.owner_approved;
                 facts.judge_reason =
@@ -435,6 +437,11 @@ impl Pass<'_> {
                 {
                     super::recover::unhanded(&mut next, why);
                 }
+                if let Step::Judge(_) = next.step
+                    && let Err(why) = &facts.author
+                {
+                    super::recover::unhanded(&mut next, why.clone());
+                }
                 if let Some(kind) = plugin_kind(&next.step)
                     && self.path(kind).is_none()
                 {
@@ -473,6 +480,7 @@ impl Pass<'_> {
                         // saved waits on it, naming it.
                         Err((kind, error)) => {
                             record.failed = Some(kind);
+                            record.failed_why = Some(error.to_string());
                             report.error = Some(error.to_string());
                             if let Some(withdrawn) =
                                 error.downcast_ref::<super::degraded::Withdrawn>()

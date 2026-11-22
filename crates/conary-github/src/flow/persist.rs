@@ -52,6 +52,9 @@ pub struct Record {
     pub decision: Option<Next>,
     pub jobs: Vec<super::jobs::Work>,
     pub failed: Option<Failure>,
+    /// What the failed effect said: the status of its retry shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_why: Option<String>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
 }
@@ -75,6 +78,7 @@ impl Record {
             }
             if self.failed == Some(Failure::Stop) {
                 self.failed = None;
+                self.failed_why = None;
             }
         }
     }

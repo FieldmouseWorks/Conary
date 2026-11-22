@@ -127,7 +127,8 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
                 base: plan.base,
                 head: head.clone(),
                 gate: GateArgs {
-                    result,
+                    result: result.word().to_owned(),
+                    error: None,
                     tree,
                     skipped: vec![],
                 },
@@ -138,7 +139,8 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
         AttestCommand::Commit {
             commit: args.commit.clone(),
             gate: GateArgs {
-                result,
+                result: result.word().to_owned(),
+                error: None,
                 tree,
                 skipped: vec![],
             },

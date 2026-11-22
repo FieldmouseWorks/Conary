@@ -423,11 +423,9 @@ pub(super) fn checks(
             }
             Ci::Pending
         } else if cancelled(run) {
-            if reads
-                .ask(Reading::Cancelled, source.annotations(repo, run.id))?
-                .iter()
-                .any(|m| m.contains("has exceeded the maximum execution time"))
-            {
+            if crate::api::overran(
+                &reads.ask(Reading::Cancelled, source.annotations(repo, run.id))?,
+            ) {
                 if let Some(way) = rerun(run, suites) {
                     timed_out.entry(way).or_default().push(run.name.clone());
                 }

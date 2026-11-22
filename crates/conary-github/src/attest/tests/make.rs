@@ -213,14 +213,19 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
         none.contains(r#""result":"none""#) && none.contains(r#""tree":null"#),
         "{none}"
     );
-    // The results a job names them by, and nothing else.
-    for (word, gate) in [
-        ("pass", Some(Gate::Pass)),
-        ("fail", Some(Gate::Fail)),
-        ("Pass", None),
-        ("none", None),
+    // The results a job names them by, and nothing else. Why it broke is
+    // an error's alone, and no error is without it.
+    for (word, why, gate) in [
+        ("pass", None, Some(Gate::Pass)),
+        ("fail", None, Some(Gate::Fail)),
+        ("error", Some("full"), Some(Gate::Error("full".into()))),
+        ("error", None, None),
+        ("pass", Some("full"), None),
+        ("fail", Some("full"), None),
+        ("Pass", None, None),
+        ("none", None, None),
     ] {
-        assert_eq!(word.parse::<Gate>().ok(), gate, "{word}");
+        assert_eq!(Gate::named(word, why).ok(), gate, "{word} {why:?}");
     }
     for (word, result) in [
         ("fail", Some(Negative::Fail)),
@@ -230,6 +235,46 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
         ("", None),
     ] {
         assert_eq!(word.parse::<Negative>().ok(), result, "{word}");
+    }
+}
+
+#[test]
+fn a_gate_that_broke_is_made_with_why_on_one_line_and_never_counts() {
+    let why = "couldn't write its log: No space left on device (os error 28)";
+    let commit = |why: &str| Claim::Commit {
+        commit: COMMIT.into(),
+        result: Gate::Error(why.into()),
+        tree: TREE.into(),
+        skipped: Vec::new(),
+        log: log(),
+    };
+    let revision = |why: &str| Claim::Revision {
+        base: BASE.into(),
+        head: COMMIT.into(),
+        result: Gate::Error(why.into()),
+        tree: TREE.into(),
+        skipped: Vec::new(),
+        log: log(),
+    };
+    let subject = Subject::Gate {
+        commit: COMMIT,
+        tree: TREE,
+    };
+    for claim in [commit(why), revision(why)] {
+        let made = statement(&claim).unwrap().predicate;
+        // burrow's bytes: `error` is after the log.
+        assert!(
+            made.ends_with(&format!(r#""artifact":"gate-log-1"}},"error":"{why}"}}"#)),
+            "{made}"
+        );
+        let refused = made_and_checked(&claim, subject, "success").unwrap_err();
+        assert!(refused.contains("says error"), "{refused}");
+    }
+    for bad in ["", "  ", "full\nagain", "full\r"] {
+        for claim in [commit(bad), revision(bad)] {
+            let refused = statement(&claim).unwrap_err();
+            assert!(refused.contains("one line"), "{bad:?}: {refused}");
+        }
     }
 }
 

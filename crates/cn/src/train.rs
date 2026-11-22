@@ -377,6 +377,17 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             checks.join(", ")
         ));
     }
+    for pr in &s.released {
+        lines.push(format!(
+            "{repo}#{pr}: the gate it was red alone in passed since, free to join again"
+        ));
+    }
+    for left in &s.unread {
+        lines.push(format!(
+            "{repo}#{}: still held red alone, its gate unread ({})",
+            left.pr, left.why
+        ));
+    }
     for pr in &s.landed {
         lines.push(format!("{repo}#{pr}: merged"));
     }
@@ -460,7 +471,7 @@ fn candidate(ledger: &Ledger, c: &Candidate) -> Value {
 
 fn show(ledger: &Ledger, repo: &Repo) -> Value {
     let Some(t) = ledger.train(repo) else {
-        return json!({"joined": [], "in_flight": null, "candidates": []});
+        return json!({"joined": [], "in_flight": null, "red_alone": [], "candidates": []});
     };
     json!({
         "joined": t.joined().iter().map(|m| json!({
@@ -470,6 +481,11 @@ fn show(ledger: &Ledger, repo: &Repo) -> Value {
             "alone": t.alone(m.change),
         })).collect::<Vec<_>>(),
         "in_flight": t.in_flight().map(|id| id.to_string()),
+        // A train with any of these has a step to take however idle it is.
+        "red_alone": ledger.red_alone(repo).iter()
+            .filter_map(|id| ledger.candidate(*id))
+            .map(|c| pr_of(ledger, c.changes[0].change))
+            .collect::<Vec<_>>(),
         "candidates": t.candidates().iter()
             .filter_map(|id| ledger.candidate(*id))
             .map(|c| candidate(ledger, c))

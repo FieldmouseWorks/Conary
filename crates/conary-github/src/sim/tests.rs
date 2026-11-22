@@ -406,6 +406,8 @@ mod flow_pass_r5;
 
 mod flow_pass_v4;
 
+mod flow_pass_author;
+
 mod flow_pass_threads;
 
 mod flow_doors;

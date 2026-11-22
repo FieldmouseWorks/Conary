@@ -3,7 +3,7 @@ use super::jobs::{self, Purpose};
 use super::persist::{Error, Result};
 use super::*;
 use conary_core::Store;
-use conary_core::plugin::{self, Task};
+use conary_core::plugin::Task;
 
 type Effect = std::result::Result<Vec<Failure>, (Failure, Error)>;
 pub(crate) fn act<G: Write>(
@@ -133,7 +133,8 @@ pub(crate) fn act<G: Write>(
                 )?;
             }
             Step::Judge(decided) => {
-                let author = author(github, f, record)?;
+                // The pass waits, saying why, on a head with no one author.
+                let author = f.author.clone()?;
                 pass.start(
                     f,
                     Purpose::Judge,
@@ -440,58 +441,6 @@ fn failure(step: &Step) -> Failure {
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,
     }
-}
-fn author<G: Read>(github: &G, f: &Facts, record: &Record) -> Result<plugin::Identity> {
-    for work in record.jobs.iter().rev() {
-        if let Some(Ok(response)) = jobs::completion(work, jobs::now())?.result
-            && let plugin::Answer::Fix {
-                result: plugin::FixResult::Pushed { head },
-                ..
-            } = &response.answer
-            && head == &f.revision.head
-        {
-            return Ok(response.by);
-        }
-    }
-    let history = github.compare_commits(
-        &f.repo.to_string(),
-        f.base_tip.as_deref().ok_or("author base unknown")?,
-        &f.revision.head,
-    )?;
-    if !history.complete {
-        return Err("head author history is incomplete".into());
-    }
-    let mut engines = std::collections::BTreeSet::new();
-    for commit in history.commits {
-        let message = commit
-            .commit
-            .and_then(|c| c.message)
-            .ok_or("head authorship unknown")?;
-        let trailers = super::history::trailers(&message).ok_or("head trailers unreadable")?;
-        engines.extend(
-            trailers
-                .into_iter()
-                .filter(|(k, _)| k.eq_ignore_ascii_case("Engine"))
-                .map(|(_, v)| v),
-        );
-    }
-    let engine = match engines.len() {
-        0 => {
-            let pull = github.pull(&f.repo.to_string(), f.number)?;
-            if pull.user.kind != "User" {
-                return Err("automated head has no author engine".into());
-            }
-            pull.user.login
-        }
-        1 => engines.into_iter().next().ok_or("author engine missing")?,
-        _ => return Err("v1 cannot establish independence from multiple author engines".into()),
-    };
-    // Session trailers are author-controlled text. Only a locally validated
-    // producer response above can establish a known author session.
-    Ok(plugin::Identity {
-        engine,
-        session: None,
-    })
 }
 
 /// The ledger as it stands now, for a permission's look: the store caught up

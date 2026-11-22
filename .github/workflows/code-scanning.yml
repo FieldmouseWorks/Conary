@@ -20,7 +20,7 @@ permissions:
 jobs:
   codeql:
     if: github.event.action != 'edited' || github.event.changes.base
-    uses: FieldmouseWorks/burrow/.github/workflows/codeql.yml@18976c2adc38f19315d91b9f0113b35eecd9c075 # main
+    uses: FieldmouseWorks/burrow/.github/workflows/codeql.yml@cf2f2f56376ad18abc642dee846128f2e3dff344 # main
     permissions:
       contents: read
       actions: read
