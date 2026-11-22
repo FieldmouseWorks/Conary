@@ -15,4 +15,4 @@ jobs:
       pull-requests: read
       statuses: write
     steps:
-      - uses: FieldmouseWorks/burrow/.github/actions/house@cf2f2f56376ad18abc642dee846128f2e3dff344 # main
+      - uses: FieldmouseWorks/burrow/.github/actions/house@892b5ed2dae73ab3478da0df26e12ec964c6d294 # main

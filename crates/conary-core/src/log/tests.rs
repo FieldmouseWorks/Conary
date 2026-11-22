@@ -2,6 +2,10 @@ use super::*;
 use crate::id::ChangeId;
 use std::cell::RefCell;
 
+// Declared here, where the code before the mark already compiles it, so a
+// negative run (docs/ci-attestation.md) has these tests to fail.
+pub(super) mod marks;
+
 thread_local! {
     /// Every directory this thread synced, in order.
     static SYNCED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };

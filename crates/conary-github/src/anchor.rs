@@ -18,6 +18,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 
 use conary_core::Store;
 use conary_core::log::{self, Anchor, Lock, LogError};
+use conary_core::op::Op;
 use conary_core::store::StoreError;
 
 use crate::api::ApiError;
@@ -234,17 +235,11 @@ fn checkpoints(
     }
 }
 
-/// Reads the log at `dir`, checked against the ref's `tip` and the
-/// `checkpoints` before it.
-fn read_holding(
-    dir: &Path,
-    key: &VerifyingKey,
-    tip: Option<Anchor>,
-    checkpoints: &[Anchor],
-) -> Result<(), AnchorError> {
-    let ops = log::read(dir, key, tip)?;
+/// Refuses `ops`, a whole log, unless it holds every one of the ref's
+/// `checkpoints`.
+fn check_held(ops: &[Op], checkpoints: &[Anchor]) -> Result<(), AnchorError> {
     for a in checkpoints {
-        a.check(&ops)?;
+        a.check(ops)?;
     }
     Ok(())
 }
@@ -276,7 +271,7 @@ pub fn init(
             // Setting up again is how a ledger is recovered, so it takes
             // nothing from the box but the log and checks every move.
             let held = checkpoints(anchors, repo, &tip, &remote, None)?;
-            read_holding(dir, &remote.key, remote.anchor, &held)?;
+            check_held(&log::read(dir, &remote.key, remote.anchor)?, &held)?;
             (remote, tip.commit)
         }
         None => {
@@ -319,7 +314,7 @@ pub fn open(
     let held = checkpoints(anchors, repo, &kept, &remote, checked.at.as_deref())?;
     // The store checks the tip's when it opens.
     if !held.is_empty() {
-        read_holding(dir, &remote.key, None, &held)?;
+        check_held(&log::read_marked(dir, &remote.key, None)?, &held)?;
     }
     let store = Store::open(lock, key, remote.anchor)?;
     Ok(Anchored {
@@ -377,7 +372,7 @@ pub fn verify(
     let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
     let held = checkpoints(anchors, repo, &tip, &remote, None)?;
-    read_holding(dir, key, remote.anchor, &held)?;
+    check_held(&log::read(dir, key, remote.anchor)?, &held)?;
     Ok(remote.anchor)
 }
 
