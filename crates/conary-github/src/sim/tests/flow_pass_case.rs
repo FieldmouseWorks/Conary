@@ -9,6 +9,9 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+#[path = "../../../../conary-core/tests/support/nested_cargo.rs"]
+mod nested_cargo;
+
 pub(super) const REPO: &str = "conary-test/flow-simulation";
 pub(super) struct Deferred(pub(super) RefCell<Vec<PathBuf>>);
 impl flow::jobs::Launch for Deferred {
@@ -36,15 +39,17 @@ pub(super) fn example() -> PathBuf {
     static EXECUTABLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     EXECUTABLE
         .get_or_init(|| {
-            const FIXTURE: &str = "conary-flow-test-plugin";
-            // Cargo's intermediate layout is private. Its artifact messages
-            // locate the normal fixture build for any target directory/profile.
-            let output = std::process::Command::new(env!("CARGO"))
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
+            const FIXTURE: &str = "plugin";
+            // The example from its own package, so without this one's
+            // dependencies. Cargo's intermediate layout is private: its
+            // artifact messages locate the build.
+            let output = nested_cargo::cargo()
                 .args([
                     "build",
                     "--locked",
-                    "--bin",
+                    "-p",
+                    "conary-core",
+                    "--example",
                     FIXTURE,
                     "--message-format=json",
                 ])

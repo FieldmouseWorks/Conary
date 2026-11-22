@@ -4,6 +4,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
+#[path = "../../conary-core/tests/support/nested_cargo.rs"]
+mod nested_cargo;
+
 fn check(path: &Path, deadline: &str, cap: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cn"))
         .args(["plugin", "check"])
@@ -170,8 +173,7 @@ fn plugin_rejects_nested_finding_path_escape() {
 }
 #[test]
 fn plugin_cli_preserves_default_cargo_run() {
-    let out = Command::new(env!("CARGO"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+    let out = nested_cargo::cargo()
         .args([
             "run",
             "--quiet",
