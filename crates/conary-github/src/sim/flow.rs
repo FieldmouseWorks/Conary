@@ -410,3 +410,21 @@ impl Hub {
             );
     }
 }
+
+/// `comment`, whose author the world keeps by REST's login, as a snapshot
+/// reads it: answered in GraphQL's form (an App by its slug alone, typed a
+/// `Bot`) and read by the API's own reader.
+pub(super) fn read_back(comment: &crate::flow::ThreadComment) -> crate::flow::ThreadComment {
+    let author = comment.author.as_deref().map(|login| {
+        let (kind, login) = login
+            .strip_suffix("[bot]")
+            .map_or(("User", login), |slug| ("Bot", slug));
+        json!({"__typename": kind, "login": login})
+    });
+    let node: crate::api::ThreadNode = parse(&json!({
+        "author": author,
+        "body": comment.body,
+        "pullRequestReview": null,
+    }));
+    node.into()
+}

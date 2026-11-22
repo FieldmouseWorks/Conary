@@ -683,7 +683,11 @@ their observed check or exact base commit.
 A v4 fix's answers are posted on the head it left, pushed or `unchanged`,
 and never on a head that moved past it. Each answer's `reply` goes up as a
 reply on the thread it was handed, as the flow's own account
-(`settings.flow_authors`), and the thread is then resolved. A thread that's
+(`settings.flow_authors`), and the thread is then resolved. Accounts in the
+settings, and everywhere the flow reads one, go by the login REST gives
+(`NAME[bot]` for an App): GraphQL names an App by `NAME` alone, so its reader
+adds the suffix from the account's type, and a user called `NAME` is never
+the App. A thread that's
 gone gets no reply. A lost write is reconciled by its exact body
 before it's posted again: every write is saved in the job's record before
 it's sent, and sent only while GitHub doesn't show it; one whose answer was
