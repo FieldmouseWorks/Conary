@@ -5,7 +5,8 @@
 //!
 //! A line is `{"id":…,"sig":…,"op":{…}}`. The id is the hash of the `op`
 //! bytes exactly as written, so verifying a line never depends on how a
-//! later build would serialize it.
+//! later build would serialize it. A signature is checked once for the
+//! same bytes: `verified` says how a later read knows.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -18,6 +19,9 @@ use serde_json::value::RawValue;
 
 use crate::id::OpId;
 use crate::op::{Body, Op, Unsigned};
+
+mod verified;
+use verified::Mark;
 
 const LOG_FILE: &str = "ops.jsonl";
 const LOCK_FILE: &str = "lock";
@@ -296,8 +300,15 @@ enum Tail {
     Torn { at: usize },
 }
 
-/// Verifies one line, the `n`th, as the op after `ops`.
-fn verify_line(n: usize, raw: &[u8], ops: &[Op], key: &VerifyingKey) -> Result<Op, LogError> {
+/// Verifies one line, the `n`th, as the op after `ops`: all of it, but for
+/// the signature of one that's `marked` ([`Mark`]).
+fn verify_line(
+    n: usize,
+    raw: &[u8],
+    ops: &[Op],
+    key: &VerifyingKey,
+    marked: bool,
+) -> Result<Op, LogError> {
     let corrupt = |reason: &str| LogError::Corrupt {
         line: n,
         reason: reason.to_owned(),
@@ -308,8 +319,12 @@ fn verify_line(n: usize, raw: &[u8], ops: &[Op], key: &VerifyingKey) -> Result<O
         return Err(corrupt("id doesn't match the op"));
     }
     let sig = parse_sig(line.sig).ok_or_else(|| corrupt("signature isn't 64 hex bytes"))?;
-    key.verify_strict(line.id.as_bytes(), &sig)
-        .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
+    if !marked {
+        #[cfg(test)]
+        tests::marks::checked();
+        key.verify_strict(line.id.as_bytes(), &sig)
+            .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
+    }
     let op: Unsigned = serde_json::from_str(line.op.get()).map_err(|e| corrupt(&e.to_string()))?;
     if op.parent != ops.last().map(|o| o.id) {
         return Err(corrupt("parent isn't the op before it"));
@@ -317,14 +332,22 @@ fn verify_line(n: usize, raw: &[u8], ops: &[Op], key: &VerifyingKey) -> Result<O
     Ok(Op { id: line.id, op })
 }
 
-/// Every op in the log's bytes, verified against `key` and its chain.
-fn verify(bytes: &[u8], key: &VerifyingKey) -> Result<(Vec<Op>, Tail), LogError> {
+/// Every op in the log's bytes, verified against `key` and its chain: each
+/// signature, but for those of the bytes `mark` vouches for.
+fn verify(
+    bytes: &[u8],
+    key: &VerifyingKey,
+    mark: Option<&Mark>,
+) -> Result<(Vec<Op>, Tail), LogError> {
+    let marked = mark.map_or(0, |m| m.covers(bytes, key));
     let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let (whole, rest) = bytes.split_at(end);
     let mut ops: Vec<Op> = Vec::new();
     let lines = whole.strip_suffix(b"\n").map(|w| w.split(|&b| b == b'\n'));
+    let mut line_end = 0;
     for (i, raw) in lines.into_iter().flatten().enumerate() {
-        let op = verify_line(i + 1, raw, &ops, key)?;
+        line_end += raw.len() + 1;
+        let op = verify_line(i + 1, raw, &ops, key, line_end <= marked)?;
         ops.push(op);
     }
     if rest.is_empty() {
@@ -334,7 +357,7 @@ fn verify(bytes: &[u8], key: &VerifyingKey) -> Result<(Vec<Op>, Tail), LogError>
         return Ok((ops, Tail::Torn { at: end }));
     }
     // Complete, so it verifies like any other line or the log is refused.
-    let op = verify_line(ops.len() + 1, rest, &ops, key)?;
+    let op = verify_line(ops.len() + 1, rest, &ops, key, false)?;
     ops.push(op);
     Ok((ops, Tail::Unterminated))
 }
@@ -370,13 +393,34 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Every op in the log at `dir`, verified against the ledger's public key
-/// and, when there is one, the newest anchor its caller holds. A reader
-/// takes no lock: a write still in progress is only a torn last line, which
-/// it leaves out.
+/// Every op in the log at `dir`, each signature verified against the
+/// ledger's public key, and the log against the newest anchor its caller
+/// holds, when there is one. It trusts nothing beside the log: it's the read
+/// for setting a ledger up and for auditing one. A reader takes no lock: a
+/// write still in progress is only a torn last line, which it leaves out.
 pub fn read(dir: &Path, key: &VerifyingKey, anchor: Option<Anchor>) -> Result<Vec<Op>, LogError> {
+    read_past(dir, key, anchor, None)
+}
+
+/// The same ops, for everyday use: a signature a writer already verified,
+/// in bytes unchanged since, isn't verified again.
+pub fn read_marked(
+    dir: &Path,
+    key: &VerifyingKey,
+    anchor: Option<Anchor>,
+) -> Result<Vec<Op>, LogError> {
+    let mark = Mark::load(dir);
+    read_past(dir, key, anchor, mark.as_ref())
+}
+
+fn read_past(
+    dir: &Path,
+    key: &VerifyingKey,
+    anchor: Option<Anchor>,
+    mark: Option<&Mark>,
+) -> Result<Vec<Op>, LogError> {
     let ops = match fs::read(dir.join(LOG_FILE)) {
-        Ok(bytes) => verify(&bytes, key)?.0,
+        Ok(bytes) => verify(&bytes, key, mark)?.0,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
@@ -479,7 +523,7 @@ pub fn has_anchor(dir: &Path) -> bool {
 /// Every op in the log at `dir`, checked against the anchor kept beside it.
 pub fn read_anchored(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError> {
     let anchor = load_anchor(dir)?;
-    read(dir, key, anchor)
+    read_marked(dir, key, anchor)
 }
 
 /// The ledger's writer lock, on the lock file in its directory: one writer
@@ -526,7 +570,8 @@ impl OpLog {
     /// Opens (or starts) the log in `lock`'s directory, verifies every op in
     /// it against `key` and, when there is one, the newest anchor its caller
     /// holds, and returns them with the log ready to append after them.
-    /// Nothing in the file changes until it has verified.
+    /// Nothing in the file changes until it has verified. What verified is
+    /// marked, so the next open checks only the signatures after it.
     pub fn open(
         lock: Lock,
         key: SigningKey,
@@ -544,8 +589,10 @@ impl OpLog {
         sync_dir(&dir)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        let (ops, tail) = verify(&bytes, &key.verifying_key())?;
+        let mark = Mark::load(&dir);
+        let (ops, tail) = verify(&bytes, &key.verifying_key(), mark.as_ref())?;
         anchor.map_or(Ok(()), |a| a.check(&ops))?;
+        verified::keep(&dir, &bytes, &key, mark)?;
         match tail {
             Tail::Whole => {}
             Tail::Unterminated => {
