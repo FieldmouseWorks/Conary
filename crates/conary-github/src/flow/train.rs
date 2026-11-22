@@ -119,6 +119,19 @@ pub(super) fn step<G: Write>(
     store: &mut Store,
     reports: &mut [Report],
 ) -> Result<()> {
+    // Who's seated, and so whose failed decision keeps it from stepping, is
+    // read under the lock the step lands under.
+    store.holding(|store| held(pass, github, repo, store, reports))?
+}
+
+/// [`step`], under the ledger's lock.
+fn held<G: Write>(
+    pass: &Pass<'_>,
+    github: &G,
+    repo: &Repo,
+    store: &mut Store,
+    reports: &mut [Report],
+) -> Result<()> {
     let ledger = store.ledger();
     let Some(train) = ledger.train(repo) else {
         return Ok(());

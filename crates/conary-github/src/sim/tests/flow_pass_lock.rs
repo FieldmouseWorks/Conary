@@ -167,12 +167,12 @@ fn pr_3(dir: &Path) -> (Vec<String>, String) {
 }
 
 /// Another writer, ingesting the case's PR 3 into the ledger at `dir` just
-/// before the pass's next read of it: the ops it recorded, once it has.
-fn race_pull_of_3(c: &Case, dir: &Path) -> Rc<Cell<Option<usize>>> {
+/// before the pass's next `call`: the ops it recorded, once it has.
+fn race_pull_of_3(c: &Case, dir: &Path, call: crate::sim::On) -> Rc<Cell<Option<usize>>> {
     let wrote: Rc<Cell<Option<usize>>> = Rc::default();
     let (theirs, at) = (Rc::clone(&wrote), dir.to_owned());
     let settings = c.config.settings.clone();
-    c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
+    c.hub.race(call, move |hub| {
         let key = log::load_signing_key(&log::key_path(&at)).unwrap();
         let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
         let config = crate::Config {
@@ -198,7 +198,8 @@ fn pushed(race: bool) -> (Vec<Option<String>>, (Vec<String>, String)) {
     c.hub.push(REPO, 3, &super::head(4));
     c.hub.refresh_flow(REPO, 3);
     c.good_ci(&super::head(4));
-    let wrote = race.then(|| race_pull_of_3(&c, ledger.path()));
+    let wrote =
+        race.then(|| race_pull_of_3(&c, ledger.path(), Call::FlowSnapshot.repo(REPO).pr(3)));
     errors.push(pass(&c, &mut a));
     if let Some(wrote) = wrote {
         assert!(wrote.get().is_some_and(|n| n > 0), "{:?}", wrote.get());
@@ -233,7 +234,8 @@ fn a_pass_whose_pr_another_writer_recorded_meanwhile_records_nothing_twice() {
 
         let c = Case::new();
         let (raced, mut a) = anchored(&c);
-        let wrote = race_pull_of_3(&c, raced.path());
+        // Between the pass's read of the PR and its recording of it.
+        let wrote = race_pull_of_3(&c, raced.path(), Call::MergeBase.repo(REPO));
         let refused = pass(&c, &mut a).expect("the pass's own op was refused");
         assert!(refused.contains("already in the ledger"), "{refused}");
         assert!(wrote.get().is_some_and(|n| n > 0), "{:?}", wrote.get());
@@ -246,15 +248,21 @@ fn a_pass_whose_pr_another_writer_recorded_meanwhile_records_nothing_twice() {
 }
 
 /// Another writer raising the case's PR 3 to R2 in the ledger at `dir`, as
-/// `cn class` records a raise, just before the pass's first `call` once
-/// the pass has classified PR 3.
-fn race_raise_of_3(c: &Case, dir: &Path, call: Call) -> Rc<Cell<bool>> {
+/// `cn class` records a raise (or a policy's R2, with no label), just before
+/// the pass's first `call` once the pass has classified PR 3.
+fn race_raise_of_3(c: &Case, dir: &Path, call: Call, label: bool) -> Rc<Cell<bool>> {
     let raised: Rc<Cell<bool>> = Rc::default();
-    arm_raise(&c.hub, dir.to_owned(), call, Rc::clone(&raised));
+    arm_raise(&c.hub, dir.to_owned(), call, label, Rc::clone(&raised));
     raised
 }
 
-fn arm_raise(hub: &crate::sim::Hub, at: std::path::PathBuf, call: Call, raised: Rc<Cell<bool>>) {
+fn arm_raise(
+    hub: &crate::sim::Hub,
+    at: std::path::PathBuf,
+    call: Call,
+    label: bool,
+    raised: Rc<Cell<bool>>,
+) {
     hub.race(call.repo(REPO), move |hub| {
         let public = log::load_public_key(&log::public_path(&log::key_path(&at))).unwrap();
         let classified = conary_core::reader::read(&at, &public)
@@ -262,7 +270,7 @@ fn arm_raise(hub: &crate::sim::Hub, at: std::path::PathBuf, call: Call, raised: 
             .by_pr(&REPO.parse().unwrap(), 3)
             .is_some_and(|c| !c.classes.is_empty());
         if !classified {
-            return arm_raise(hub, at, call, raised);
+            return arm_raise(hub, at, call, label, raised);
         }
         let key = log::load_signing_key(&log::key_path(&at)).unwrap();
         let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
@@ -276,10 +284,14 @@ fn arm_raise(hub: &crate::sim::Hub, at: std::path::PathBuf, call: Call, raised: 
             change: change.id,
             revision: said.revision,
             class: conary_core::Class::R2,
-            because: Some("labelled r2".into()),
+            because: Some("it's R2".into()),
             docs: false,
             policy: said.policy,
-            raised: vec![conary_core::policy::R2_LABEL.into()],
+            raised: if label {
+                vec![conary_core::policy::R2_LABEL.into()]
+            } else {
+                vec![]
+            },
         };
         other.store.record(body).unwrap();
         other.publish(hub).unwrap();
@@ -296,11 +308,16 @@ fn a_pass_never_merges_a_pr_another_writer_raised_meanwhile() {
     unblocked(120, || {
         // Raised before the permission's last look, or after it and before
         // the merge.
-        for call in [Call::Statuses, Call::CompareCommits] {
+        for (call, label) in [
+            (Call::Statuses, true),
+            (Call::CompareCommits, true),
+            // R2 by a policy, so no label's raise says it.
+            (Call::CompareCommits, false),
+        ] {
             let c = Case::new();
             c.clean_review();
             let (ledger, mut a) = anchored(&c);
-            let raised = race_raise_of_3(&c, ledger.path(), call);
+            let raised = race_raise_of_3(&c, ledger.path(), call, label);
             let error = pass(&c, &mut a);
             assert!(raised.get(), "{call:?}");
             assert!(error.is_some(), "{call:?}");
@@ -314,5 +331,125 @@ fn a_pass_never_merges_a_pr_another_writer_raised_meanwhile() {
                 .unwrap();
             assert_ne!(settled.state, "success", "{call:?}");
         }
+    });
+}
+
+/// The case's PR 3 pushed to head 4, and recorded so by another writer into
+/// the ledger at `at`.
+fn push_recorded_by_another(hub: &crate::sim::Hub, at: &Path, settings: &crate::flow::Settings) {
+    hub.push(REPO, 3, &super::head(4));
+    let key = log::load_signing_key(&log::key_path(at)).unwrap();
+    let mut other = anchor::open(at, key, hub, ANCHOR).unwrap();
+    let config = crate::Config {
+        reviewers: settings.flow_authors.iter().cloned().collect(),
+        review_authors: settings.review_authors.iter().cloned().collect(),
+        own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
+    };
+    crate::ingest::pull(&mut other.store, hub, &config, &REPO.parse().unwrap(), 3).unwrap();
+    other.publish(hub).unwrap();
+}
+
+/// The heads the ledger at `dir` recorded of any PR, in order.
+fn heads(dir: &Path) -> Vec<String> {
+    let public = log::load_public_key(&log::public_path(&log::key_path(dir))).unwrap();
+    log::read(dir, &public, None)
+        .unwrap()
+        .iter()
+        .filter_map(|o| match &o.op.body {
+            Body::Revision { head, .. } => Some(head.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+// A pass read PR 3 at head 3 to record it; while it reads the rest, the PR
+// is pushed to and another writer records head 4. Head 3 is never recorded
+// after it: the pass's op is refused and the next pass reads again.
+#[test]
+fn a_pass_never_records_a_pr_as_it_was_before_what_another_writer_recorded() {
+    unblocked(120, || {
+        // The first of the reads between the PR's and its recording, a middle
+        // one, and one after that.
+        for calls in [
+            &[Call::MergeBase][..],
+            &[Call::Timeline],
+            &[Call::Timeline, Call::Reviews],
+        ] {
+            let c = Case::new();
+            let (ledger, mut a) = anchored(&c);
+            assert_eq!(pass(&c, &mut a), None);
+            let raced: Rc<Cell<bool>> = Rc::default();
+            let (theirs, at) = (Rc::clone(&raced), ledger.path().to_owned());
+            let settings = c.config.settings.clone();
+            let record = move |hub: &crate::sim::Hub| {
+                push_recorded_by_another(hub, &at, &settings);
+                theirs.set(true);
+            };
+            match *calls {
+                [call] => c.hub.race(call.repo(REPO), record),
+                [first, then] => c.hub.race(first.repo(REPO), move |hub| {
+                    hub.race(then.repo(REPO), record)
+                }),
+                _ => unreachable!("one read, or one after another"),
+            }
+            let error = pass(&c, &mut a);
+            assert!(raced.get(), "{calls:?}");
+            let both = [super::head(3), super::head(4)];
+            assert_eq!(heads(ledger.path()), both, "{calls:?}");
+            let error = error.expect("the pass's older op was refused");
+            assert!(error.contains("read it again"), "{calls:?}: {error}");
+            c.hub.refresh_flow(REPO, 3);
+            c.good_ci(&super::head(4));
+            assert_eq!(pass(&c, &mut a), None, "{calls:?}");
+            assert_eq!(heads(ledger.path()), both, "{calls:?}");
+        }
+    });
+}
+
+// Another writer seats the pass's PR after the pass's last write: the step at
+// the pass's end reads the train as it stands under the lock it lands under,
+// so who's seated, and whose failed decision keeps it from stepping, is
+// never read from before.
+#[test]
+fn a_passs_step_reads_the_train_as_it_stands() {
+    unblocked(120, || {
+        let mut c = Case::new();
+        c.config.settings.train = true;
+        let (ledger, mut a) = anchored(&c);
+        let at = ledger.path().to_owned();
+        let settings = c.config.settings.clone();
+        // The pass waits for a review: the read in its scope's look after it
+        // staged the PR follows the store's last catch-up, and nothing is
+        // recorded after it.
+        let seat = move |hub: &crate::sim::Hub| {
+            let key = log::load_signing_key(&log::key_path(&at)).unwrap();
+            let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
+            let config = crate::Config {
+                reviewers: settings.flow_authors.iter().cloned().collect(),
+                review_authors: settings.review_authors.iter().cloned().collect(),
+                own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
+            };
+            let joined = crate::train::join(
+                &mut other.store,
+                hub,
+                hub,
+                &config,
+                &REPO.parse().unwrap(),
+                3,
+                &super::head(3),
+                &[],
+                &conary_core::Policy::parse(b"{}").unwrap(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(joined, crate::train::Joined::Joined);
+            other.publish(hub).unwrap();
+        };
+        c.hub.race(Call::FlowStage.repo(REPO), move |hub| {
+            hub.race(Call::FlowSnapshot.repo(REPO), seat)
+        });
+        assert_eq!(pass(&c, &mut a), None);
+        let train = a.store.ledger().train(&REPO.parse().unwrap()).unwrap();
+        assert!(train.in_flight().is_some(), "the step missed the PR seated");
     });
 }

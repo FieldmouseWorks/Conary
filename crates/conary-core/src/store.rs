@@ -2,14 +2,15 @@
 //! kept in step. Every write is checked against the ledger before it's
 //! appended, so the log only ever holds ops that apply.
 
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
 
-use crate::id::OpId;
+use crate::id::{ChangeId, CommitId, OpId};
 use crate::ledger::{Invalid, Ledger};
 use crate::log::{self, Anchor, Lock, LogError, OpLog};
-use crate::op::Body;
+use crate::op::{Body, Repo};
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -18,6 +19,10 @@ pub enum StoreError {
     Invalid(Invalid),
     /// The log verifies but holds an op that doesn't apply.
     Replay(OpId, Invalid),
+    /// Another writer recorded about what the op is about since it was read
+    /// ([`Store::reading`]), so the op may say it as it was before that;
+    /// nothing was written.
+    Overtaken,
 }
 
 impl std::fmt::Display for StoreError {
@@ -26,6 +31,9 @@ impl std::fmt::Display for StoreError {
             Self::Log(e) => e.fmt(f),
             Self::Invalid(e) => e.fmt(f),
             Self::Replay(id, e) => write!(f, "op {id} in the log doesn't apply: {e}"),
+            Self::Overtaken => {
+                f.write_str("another writer recorded about it since it was read: read it again")
+            }
         }
     }
 }
@@ -41,13 +49,36 @@ impl From<LogError> for StoreError {
 /// The ledger open for writing. It holds the writer lock only while it
 /// writes: each op, or each batch under one [`Store::writer`], takes it, and
 /// first reads what other writers appended since, so every op is admitted
-/// against the ledger as the log holds it then.
+/// against the ledger as the log holds it then. That alone would let a
+/// writer record something as it was before what another recorded while it
+/// read, so an op written without a hold ([`Store::hold`]) is refused once
+/// another writer recorded about the same thing since [`Store::reading`].
 pub struct Store {
     log: OpLog,
     ledger: Ledger,
     /// An op another writer appended that doesn't apply: the log and the
     /// ledger no longer agree, so nothing more is written.
     broken: Option<(OpId, Invalid)>,
+    /// What other writers recorded about since [`Store::reading`].
+    overtaken: HashSet<About>,
+}
+
+/// What an op says something of, as far as another's can make it out of
+/// date. A train's own ops are none's: they're written only under a hold.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum About {
+    Change(ChangeId),
+    /// A commit trunk moved to outside a landing.
+    Trunk(Repo, CommitId),
+}
+
+impl About {
+    fn of(body: &Body) -> Option<Self> {
+        match body {
+            Body::Outside { repo, after, .. } => Some(Self::Trunk(repo.clone(), after.clone())),
+            _ => body.change().map(Self::Change),
+        }
+    }
 }
 
 impl Store {
@@ -62,6 +93,7 @@ impl Store {
             log,
             ledger,
             broken: None,
+            overtaken: HashSet::new(),
         })
     }
 
@@ -86,10 +118,16 @@ impl Store {
     pub fn writer(&mut self) -> Result<Writer<'_>, StoreError> {
         self.whole()?;
         let (log, ops) = self.log.writer()?;
-        Self::catch_up(&mut self.ledger, &mut self.broken, &ops)?;
+        Self::catch_up(
+            &mut self.ledger,
+            &mut self.broken,
+            &mut self.overtaken,
+            &ops,
+        )?;
         Ok(Writer {
             log,
             ledger: &mut self.ledger,
+            overtaken: &self.overtaken,
         })
     }
 
@@ -101,6 +139,22 @@ impl Store {
         Ok(&self.ledger)
     }
 
+    /// Starts a read that writes are to be decided from, and returns the
+    /// ledger as it stands then. Call it before reading GitHub: what another
+    /// writer records from here on refuses an op of this store's about the
+    /// same change or trunk commit ([`StoreError::Overtaken`]).
+    pub fn reading(&mut self) -> Result<&Ledger, StoreError> {
+        self.refresh()?;
+        self.overtaken.clear();
+        Ok(&self.ledger)
+    }
+
+    /// Whether another writer recorded about `change` since
+    /// [`Store::reading`], as far as this store has caught up.
+    pub fn overtaken(&self, change: ChangeId) -> bool {
+        self.overtaken.contains(&About::Change(change))
+    }
+
     /// Takes the writer lock, applies what other writers appended, and
     /// holds it, every write after included, until the store is dropped:
     /// for a writer whose reads, of the ledger and GitHub, must still hold
@@ -108,7 +162,12 @@ impl Store {
     pub fn hold(&mut self) -> Result<(), StoreError> {
         self.whole()?;
         let ops = self.log.hold()?;
-        let caught = Self::catch_up(&mut self.ledger, &mut self.broken, &ops);
+        let caught = Self::catch_up(
+            &mut self.ledger,
+            &mut self.broken,
+            &mut self.overtaken,
+            &ops,
+        );
         if caught.is_err() {
             self.log.release();
         }
@@ -139,6 +198,7 @@ impl Store {
     fn catch_up(
         ledger: &mut Ledger,
         broken: &mut Option<(OpId, Invalid)>,
+        overtaken: &mut HashSet<About>,
         ops: &[crate::op::Op],
     ) -> Result<(), StoreError> {
         for op in ops {
@@ -147,6 +207,7 @@ impl Store {
                 return Err(StoreError::Replay(op.id, e));
             }
             ledger.apply(op);
+            overtaken.extend(About::of(&op.op.body));
         }
         Ok(())
     }
@@ -166,6 +227,7 @@ impl Store {
 pub struct Writer<'a> {
     log: log::Writer<'a>,
     ledger: &'a mut Ledger,
+    overtaken: &'a HashSet<About>,
 }
 
 impl Writer<'_> {
@@ -195,6 +257,12 @@ impl Writer<'_> {
 
     pub fn record_at(&mut self, body: Body, at: i64) -> Result<OpId, StoreError> {
         self.ledger.admit(&body).map_err(StoreError::Invalid)?;
+        // Checked after admission, so an op that says only what another
+        // writer already said is the duplicate it always was. Under a hold
+        // what's written was read under it.
+        if !self.log.held() && About::of(&body).is_some_and(|a| self.overtaken.contains(&a)) {
+            return Err(StoreError::Overtaken);
+        }
         let op = self.log.append(body, at)?;
         self.ledger.apply(&op);
         Ok(op.id)
@@ -247,6 +315,55 @@ mod tests {
             })
             .unwrap();
         change
+    }
+
+    /// What a writer read before another recorded about it is refused, not
+    /// appended after it as the newer word; what both say is only said once.
+    #[test]
+    fn an_op_decided_before_anothers_about_the_same_thing_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let mut a = open();
+        let (change, other) = (observe(&mut a, 1), observe(&mut a, 2));
+        let revision = |change, head| Body::Revision {
+            change,
+            base: commit('a'),
+            head: commit(head),
+        };
+        let outside = || Body::Outside {
+            repo: repo(),
+            before: None,
+            after: commit('f'),
+        };
+        let mut b = open();
+        a.reading().unwrap();
+        b.record(revision(change, 'c')).unwrap();
+        b.record(outside()).unwrap();
+
+        assert!(matches!(
+            a.record(revision(change, 'b')),
+            Err(StoreError::Overtaken)
+        ));
+        assert!(matches!(a.record(outside()), Err(StoreError::Overtaken)));
+        assert!(matches!(
+            a.record(revision(change, 'c')),
+            Err(StoreError::Invalid(Invalid::Duplicate))
+        ));
+        assert!(a.overtaken(change));
+        // What the other didn't touch is recorded.
+        a.record(revision(other, 'b')).unwrap();
+        // Catching up alone doesn't make an earlier read current.
+        a.refresh().unwrap();
+        assert!(matches!(
+            a.record(revision(change, 'b')),
+            Err(StoreError::Overtaken)
+        ));
+        // Reading again does, and so does reading under a hold.
+        a.reading().unwrap();
+        a.record(revision(change, 'd')).unwrap();
+        b.holding(|b| b.record(revision(change, 'e')))
+            .unwrap()
+            .unwrap();
     }
 
     /// Each degraded path is written as the op log spells it, and a replay

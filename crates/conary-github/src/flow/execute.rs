@@ -283,10 +283,11 @@ pub(crate) fn act<G: Write>(
                 let ledger = store
                     .as_deref_mut()
                     .ok_or("landing needs an anchored ledger")?;
-                // From the class's last look to the merge, the ledger's lock
-                // is held, so no other writer raises the PR in between.
+                // From the ledger's last look to the merge its lock is held,
+                // so nothing another writer records (a raise, a class, a new
+                // head) comes between.
                 let merged = ledger.holding(|ledger| -> Result<_> {
-                    if !super::ledger::unraised(f, record, ledger.ledger()) {
+                    if !super::ledger::unchanged(f, ledger) {
                         return Ok(None);
                     }
                     // The last look before the merge's intent is saved.
@@ -316,7 +317,7 @@ pub(crate) fn act<G: Write>(
                 })??;
                 let Some(merged) = merged else {
                     github.status(&repo, &f.revision.head, false, WITHDRAWN)?;
-                    return Err("the ledger raised the PR's class before its merge".into());
+                    return Err("another writer recorded about the PR before its merge".into());
                 };
                 match merged {
                     crate::train::PrMerge::Merged => {

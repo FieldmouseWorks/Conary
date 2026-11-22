@@ -219,6 +219,10 @@ label, once for each request ([Asking the owner](#asking-the-owner)); a
 digest notice keeps the PR moving. Composite map keys are
 stored as ordered pairs. Atomic rename, file and directory sync protect each
 record. A repository file lock serializes mutating passes and kicks.
+The ledger's writer lock is another: a pass takes it only for each write,
+so its reads of GitHub hold up no other writer. An op the pass decided from
+a read is refused once another writer recorded about the same change since
+that read began, and that PR is read again by the next pass.
 
 The pass imports every raise from the append-only ledger before deciding and
 appends any raise remembered locally before acting. Removing a label, resetting
@@ -576,6 +580,8 @@ It validates the current head, target branch and tip, description, draft state,
 review threads, blocking labels and policy raises before granting permission.
 It repeats scope and producer-evidence checks immediately before an expected-head
 merge. Same-head edits invalidate permission too.
+The merge itself holds the ledger's lock, and isn't made once another writer
+recorded about the PR's change since the decision read it.
 Branch updates pin their expected head; conflict requests carry the resolved
 base commit, never a branch name.
 
@@ -609,7 +615,8 @@ of the whole repo with `settings.train` on ends with one step of its train
 (`train::step`, the one `cn train step` runs), after every open PR's
 decision, so the PRs it joined are in it, and still under the repository's
 lock, so no two passes step at once and a quiet lock means no step is under
-way. The step's `--require` is `evidence.require`, its attestations are
+way. The step, and the look at who's seated before it, hold the ledger's
+lock, as a join and a departure do. The step's `--require` is `evidence.require`, its attestations are
 counted as `evidence` says, and its candidates hold at most
 `settings.train_size` changes. With no `evidence`, or nothing required, the
 step fails and nothing lands. It isn't taken in a dry run, in a pass of one

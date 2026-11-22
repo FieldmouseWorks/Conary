@@ -737,6 +737,12 @@ impl Writer<'_> {
         self.log.head()
     }
 
+    /// Whether its log holds the lock across writes ([`OpLog::hold`]),
+    /// rather than this writer for its own.
+    pub fn held(&self) -> bool {
+        self.lock.is_none()
+    }
+
     /// Whether the log holds `anchor`, as it stands under this lock.
     pub fn check(&self, anchor: Anchor) -> Result<(), LogError> {
         anchor.found(
