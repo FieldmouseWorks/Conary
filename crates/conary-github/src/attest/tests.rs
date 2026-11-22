@@ -262,6 +262,52 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_and_names_what_it_s
 }
 
 #[test]
+fn a_gate_that_broke_never_counts_as_a_pass() {
+    // As burrow's flake-check signs one: why after the log, then the gate.
+    let signed = |subject: &str, revision: &str| {
+        format!(
+            r#"{subject}{{"result":"error","revision":{revision},"tree":"{TREE}","skipped":[],"log":{{"sha256":"{}","artifact":"flake-log-1"}},"error":"couldn't write its log: No space left on device (os error 28)","gate":{{"workflow":"w"}}}}
+"#,
+            "0".repeat(64)
+        )
+    };
+    let push = signed(&format!("conary commit v1\n{COMMIT}\n"), "null");
+    let revision = signed(
+        &format!("conary revision v1\n{BASE}\n{COMMIT}\n"),
+        &format!(r#"{{"base":"{BASE}","head":"{COMMIT}"}}"#),
+    );
+    let gate = Subject::Gate {
+        commit: COMMIT,
+        tree: TREE,
+    };
+    for (broke, subject) in [(&push, PUSH), (&push, gate), (&revision, gate)] {
+        let counted = |s: &str, conclusion: &str| {
+            let c = claims("FieldmouseWorks/remi", COMMIT, RUN, s);
+            check(
+                file(s, &token(&c)).as_bytes(),
+                &[key()],
+                &repo(),
+                subject,
+                &run(conclusion),
+                &signer(),
+            )
+        };
+        // Refused for what it says, whatever its check run concluded.
+        for conclusion in ["success", "failure"] {
+            let why = counted(broke, conclusion).unwrap_err();
+            assert!(
+                why.contains("says error"),
+                "{subject:?} {conclusion}: {why}"
+            );
+        }
+        // Nothing else in it is refused: saying pass, the same one counts.
+        let passed = broke.replace(r#""result":"error""#, r#""result":"pass""#);
+        let claimed = counted(&passed, "success").unwrap();
+        assert_eq!(claimed.attested.result, Outcome::Pass);
+    }
+}
+
+#[test]
 fn a_file_is_its_statement_and_then_its_token() {
     let (s, c) = honest();
     let t = token(&c);

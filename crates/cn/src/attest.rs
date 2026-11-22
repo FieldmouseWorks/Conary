@@ -145,9 +145,13 @@ impl std::error::Error for Refused {}
 
 #[derive(clap::Args)]
 pub struct GateArgs {
-    /// pass when the gate succeeded, otherwise fail.
-    #[arg(long)]
-    result: Gate,
+    /// pass when the gate succeeded; fail when a check failed; error when
+    /// the gate itself broke, which --error says why.
+    #[arg(long, value_parser = ["pass", "fail", "error"])]
+    result: String,
+    /// Why the gate broke, on one line: with --result error, and only then.
+    #[arg(long, value_name = "WHY")]
+    error: Option<String>,
     /// The tree the gate ran on: for a PR, the head merged onto the base
     /// branch's tip.
     #[arg(long)]
@@ -155,6 +159,12 @@ pub struct GateArgs {
     /// Each check the gate evaluated but didn't build.
     #[arg(long = "skipped", value_name = "CHECK")]
     skipped: Vec<String>,
+}
+
+impl GateArgs {
+    fn result(&self) -> Result<Gate> {
+        Ok(Gate::named(&self.result, self.error.as_deref())?)
+    }
 }
 
 #[derive(clap::Args)]
@@ -243,7 +253,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         AttestCommand::Commit { commit, gate, out } => (
             Claim::Commit {
                 commit: commit.clone(),
-                result: gate.result,
+                result: gate.result()?,
                 tree: gate.tree.clone(),
                 skipped: gate.skipped.clone(),
                 log: log(out)?,
@@ -259,7 +269,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
             Claim::Revision {
                 base: base.clone(),
                 head: head.clone(),
-                result: gate.result,
+                result: gate.result()?,
                 tree: gate.tree.clone(),
                 skipped: gate.skipped.clone(),
                 log: log(out)?,

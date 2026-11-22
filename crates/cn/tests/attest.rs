@@ -169,6 +169,42 @@ fn attest_writes_the_statement_a_token_signs_and_the_token_last() {
     assert!(!Path::new(unsigned).join("conary-attestation").exists());
 }
 
+#[test]
+fn attest_says_why_a_gate_broke_and_only_of_one_that_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("flake.log");
+    std::fs::write(&log, "").unwrap();
+    for (n, subject) in [&["commit", COMMIT][..], &["revision", BASE, HEAD][..]]
+        .into_iter()
+        .enumerate()
+    {
+        let out = dir.path().join(format!("out-{n}"));
+        let gate = |said: &[&str]| {
+            let mut args = subject.to_vec();
+            args.extend_from_slice(&["--tree", TREE, "--log", log.to_str().unwrap()]);
+            args.extend_from_slice(&["--log-artifact", "flake-log-3"]);
+            args.extend_from_slice(&["--out", out.to_str().unwrap()]);
+            args.extend_from_slice(said);
+            attest(&args, None)
+        };
+        for refused in [
+            &["--result", "error"][..],
+            &["--result", "pass", "--error", "full"],
+            &["--result", "fail", "--error", "full"],
+            &["--result", "error", "--error", "full\nagain"],
+        ] {
+            assert!(!gate(refused).status.success(), "{refused:?}");
+            assert!(!out.exists(), "{refused:?}");
+        }
+        let run = gate(&["--result", "error", "--error", "the disk is full"]);
+        assert!(run.status.success(), "{run:?}");
+        let made: Value = serde_json::from_slice(&run.stdout).unwrap();
+        let predicate: Value = serde_json::from_str(&read(&made["predicate"])).unwrap();
+        assert_eq!(predicate["result"], json!("error"));
+        assert_eq!(predicate["error"], json!("the disk is full"));
+    }
+}
+
 // A token GitHub refuses, or one the job can't ask for, leaves nothing
 // behind for a later step to upload, and never shows the bearer.
 #[test]
