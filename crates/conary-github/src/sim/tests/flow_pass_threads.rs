@@ -260,6 +260,49 @@ fn the_connectors_findings_go_through_a_fix_to_another_look() {
     assert_eq!(c.record().memory.asked.map(|(h, _)| h), Some(head(3)));
 }
 
+/// GraphQL names the flow's App by its slug alone, typed a `Bot`
+/// (as the sim reads it back): its reply still completes the fix, and
+/// a user who took that name and said the same is no answer of its.
+#[test]
+fn a_fixs_reply_read_back_as_graphql_gives_it_completes_the_step() {
+    let slug = STEWARD.strip_suffix("[bot]").unwrap();
+    for spoofed in [false, true] {
+        let c = Case::new();
+        let now = flow::jobs::now();
+        let ids = reviewed(&c, now);
+        assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Findings));
+        let id = last_fix(&c).job.id;
+        unchanged(&c, now + 1, "kept because");
+        if spoofed {
+            c.hub.edit_flow(REPO, 3, |s| {
+                for (i, thread) in ids.iter().enumerate() {
+                    let comments = &mut s.threads.get_mut(thread).unwrap().comments;
+                    comments.push(ThreadComment {
+                        author: Some(slug.into()),
+                        body: format!("kept because {i}"),
+                    });
+                }
+            });
+        }
+        let posted = report(&c, now + 2);
+        assert_eq!(posted.error, None, "spoofed: {spoofed}");
+        assert_eq!(posted.next.unwrap().step, Step::PostFix(id.clone()));
+        // Sent whatever the user said, and only once.
+        until_review(&c, now, &mut 2);
+        assert_eq!(
+            c.hub.count(Call::FlowReply),
+            ids.len(),
+            "spoofed: {spoofed}"
+        );
+        assert!(c.record().memory.answered_jobs.contains(&id));
+        let read = threads(&c);
+        for thread in &ids {
+            let last = read[thread].comments.last().unwrap();
+            assert_eq!(last.author.as_deref(), Some(STEWARD));
+        }
+    }
+}
+
 #[test]
 fn a_second_review_on_the_same_head_is_handed_only_its_own_findings() {
     let c = Case::new();

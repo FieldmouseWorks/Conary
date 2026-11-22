@@ -12,7 +12,7 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
   headRefOid baseRefName title body isDraft mergeStateStatus updatedAt lastEditedAt
   labels(first:100) { pageInfo { hasNextPage } }
-  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved path line originalLine comments(first:100) { pageInfo { hasNextPage } nodes { author { login } body pullRequestReview { databaseId } } } } }
+  reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved path line originalLine comments(first:100) { pageInfo { hasNextPage } nodes { author { __typename login } body pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   retargets: timelineItems(last:1,itemTypes:[BASE_REF_CHANGED_EVENT]) { nodes { ... on BaseRefChangedEvent { createdAt } } }
@@ -137,14 +137,38 @@ struct ThreadComments {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ThreadNode {
-    author: Option<Login>,
+pub(crate) struct ThreadNode {
+    author: Option<Account>,
     body: String,
     pull_request_review: Option<ReviewId>,
 }
+impl From<ThreadNode> for ThreadComment {
+    fn from(node: ThreadNode) -> Self {
+        Self {
+            author: node.author.map(Account::into_login),
+            body: node.body,
+        }
+    }
+}
+/// An account as GraphQL answers one. It names an App by its slug alone,
+/// which a user's login can be too, so the login says whose it is only
+/// beside the type: one without the type doesn't parse.
 #[derive(Deserialize)]
-struct Login {
+struct Account {
+    #[serde(rename = "__typename")]
+    kind: String,
     login: String,
+}
+impl Account {
+    /// The account's login as REST spells it, which is the one the settings
+    /// name and everything past this reader compares.
+    fn into_login(self) -> String {
+        if self.kind == "Bot" {
+            format!("{}[bot]", self.login)
+        } else {
+            self.login
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -397,10 +421,7 @@ impl Read for Api {
                             .comments
                             .nodes
                             .into_iter()
-                            .map(|c| ThreadComment {
-                                author: c.author.map(|a| a.login),
-                                body: c.body,
-                            })
+                            .map(ThreadComment::from)
                             .collect(),
                     };
                     (t.id, thread)

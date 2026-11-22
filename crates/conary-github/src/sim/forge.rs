@@ -532,6 +532,11 @@ impl crate::flow::Read for Hub {
                     .get(&number)
                     .cloned()
                     .ok_or_else(|| not_found(format!("flow #{number}")))?;
+                for thread in snapshot.threads.values_mut() {
+                    for comment in &mut thread.comments {
+                        *comment = super::flow::read_back(comment);
+                    }
+                }
                 if snapshot.default_branch.is_none() {
                     snapshot.default_branch = w.base_observation(repo);
                 }

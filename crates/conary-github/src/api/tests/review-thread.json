@@ -1,0 +1,34 @@
+{
+  "id": "PRRT_kwDOVS7vt866U8s3",
+  "isResolved": true,
+  "path": "crates/conary-github/src/flow/recover.rs",
+  "line": null,
+  "originalLine": 110,
+  "comments": {
+    "pageInfo": {
+      "hasNextPage": false
+    },
+    "nodes": [
+      {
+        "author": {
+          "__typename": "Bot",
+          "login": "chatgpt-codex-connector"
+        },
+        "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Preserve refused recovery details while a fix remains unavailable**",
+        "pullRequestReview": {
+          "databaseId": 6004545081
+        }
+      },
+      {
+        "author": {
+          "__typename": "Bot",
+          "login": "fieldmouseworks-steward"
+        },
+        "body": "**Claude job** · fixed in 7dc70179fb370c64af9f84e956c3e86f6560a038",
+        "pullRequestReview": {
+          "databaseId": 6004701591
+        }
+      }
+    ]
+  }
+}

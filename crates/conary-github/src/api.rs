@@ -768,6 +768,8 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
 
 mod actions;
 mod flow;
+#[cfg(test)]
+pub(crate) use flow::ThreadNode;
 mod flow_write;
 mod history;
 pub use history::History;

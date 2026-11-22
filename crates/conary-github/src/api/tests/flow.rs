@@ -19,7 +19,7 @@ fn snapshot() -> Value {
         "labels":{"pageInfo":{"hasNextPage":false}},
         "reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[
             {"id":"open","isResolved":false,"path":"src/lib.rs","line":186,"originalLine":153,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[
-                {"author":{"login":"person"},"body":"a finding","pullRequestReview":{"databaseId":5}},
+                {"author":{"__typename":"User","login":"person"},"body":"a finding","pullRequestReview":{"databaseId":5}},
                 {"author":null,"body":"an answer","pullRequestReview":null}]}},
             {"id":"resolved","isResolved":true,"path":"src/old.rs","line":null,"originalLine":266,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}},
             {"id":"file","isResolved":false,"path":"src/gone.rs","line":null,"originalLine":null,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]},
@@ -129,6 +129,61 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
     assert_eq!(
         body["variables"],
         json!({"owner":"o","name":"r","number":7})
+    );
+}
+/// Conary#536's thread as GraphQL gave it, each body cut to its first line:
+/// an App is its slug alone there, which a user's login can be too.
+#[test]
+fn a_bots_login_is_the_one_rest_gives_and_a_user_of_its_name_keeps_theirs() {
+    let mut thread: Value = serde_json::from_str(include_str!("review-thread.json")).unwrap();
+    thread["comments"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "author": {"__typename": "User", "login": "fieldmouseworks-steward"},
+            "body": "by a user of the App's name",
+            "pullRequestReview": null,
+        }));
+    let id = thread["id"].as_str().unwrap().to_owned();
+    let mut v = snapshot();
+    v["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] = json!([thread]);
+    let (base, requests) = github(vec![answer(v)]);
+    let s = Api::new(&base, Tokens::given("t"))
+        .snapshot("o/r", 7)
+        .unwrap();
+    let authors: Vec<_> = s.threads[&id]
+        .comments
+        .iter()
+        .map(|c| c.author.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        authors,
+        [
+            "chatgpt-codex-connector[bot]",
+            "fieldmouseworks-steward[bot]",
+            "fieldmouseworks-steward",
+        ]
+    );
+    // A login says whose it is only beside its type, so none is asked for alone.
+    let request = requests.recv().unwrap();
+    let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+    let query = body["query"].as_str().unwrap();
+    assert_eq!(
+        query.matches("login").count(),
+        query.matches("__typename login").count()
+    );
+}
+/// An account whose type GitHub didn't give is nobody's to guess.
+#[test]
+fn an_author_without_a_type_is_refused() {
+    let mut v = snapshot();
+    v["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"][0]["comments"]["nodes"][0]["author"] =
+        json!({"login": "fieldmouseworks-steward"});
+    let (base, _requests) = github(vec![answer(v)]);
+    assert!(
+        Api::new(&base, Tokens::given("t"))
+            .snapshot("o/r", 7)
+            .is_err()
     );
 }
 #[test]
