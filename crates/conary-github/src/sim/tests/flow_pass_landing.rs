@@ -320,11 +320,12 @@ fn before_comparison(hub: &crate::sim::Hub, k: usize, then: fn(&crate::sim::Hub)
 
 #[test]
 fn a_merge_whose_trailers_cant_all_be_read_isnt_made() {
-    // The merge's own read of the PR's commits is a clean pass's last.
+    // The merge's own read of the PR's commits is made before it takes the
+    // ledger's lock: only its last look's two reads of the scope come after.
     let clean = Case::new();
     clean.clean_review();
     clean.pass(jobs::now(), false);
-    let last = clean.hub.count(Call::CompareCommits);
+    let own = clean.hub.count(Call::CompareCommits) - 2;
     assert_eq!(clean.hub.count(Call::Land), 1);
     let cut: fn(&crate::sim::Hub) = |h| h.short_history(TRUNK, &head(3), 0);
     let bare: fn(&crate::sim::Hub) = |h| h.commit_details(&head(3), None, None, None);
@@ -340,9 +341,9 @@ fn a_merge_whose_trailers_cant_all_be_read_isnt_made() {
     ] {
         let c = Case::new();
         c.clean_review();
-        before_comparison(&c.hub, last, then);
+        before_comparison(&c.hub, own, then);
         let reports = c.pass(jobs::now(), false);
-        assert_eq!(c.hub.count(Call::CompareCommits), last);
+        assert_eq!(c.hub.count(Call::CompareCommits), own);
         assert_eq!(reports[0].error.as_deref(), Some(why));
         assert_eq!(c.hub.count(Call::Land), 0);
         assert!(c.record().landing.is_none());

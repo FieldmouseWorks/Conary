@@ -257,21 +257,10 @@ pub(crate) fn act<G: Write>(
                 }
             }
             Step::Merge => {
-                // Read back the permission; a refused or lost status write must never merge.
-                let statuses = github.statuses(&repo, &f.revision.head)?;
-                let status = statuses.iter().find(|s| s.context == SETTLED);
-                if !status.is_some_and(|s| {
-                    s.state == "success"
-                        && s.creator
-                            .as_ref()
-                            .is_some_and(|u| f.settings.flow_authors.contains(&u.login))
-                }) {
-                    return Err("review-settled permission was not observed".into());
-                }
-                permission(pass, github, f, &next.step, record, &mut store)?;
                 // The commits its merge squashes, whose trailers its landing
-                // commit says, read before the intent is saved. One whose
-                // trailers can't all be read isn't merged without them.
+                // commit says, read before the hold: the merge pins them by
+                // the head. One whose trailers can't all be read isn't merged
+                // without them.
                 let base = f.base_tip.as_deref().unwrap_or(&f.revision.base);
                 let commits = github.compare_commits(&repo, base, &f.revision.head)?;
                 let message = crate::train::Message::new(
@@ -279,19 +268,30 @@ pub(crate) fn act<G: Write>(
                     f.number,
                     crate::train::messages(&commits)?.iter().map(String::as_str),
                 );
-                let status = status.expect("permission checked above");
                 let ledger = store
                     .as_deref_mut()
                     .ok_or("landing needs an anchored ledger")?;
-                // From the ledger's last look to the merge its lock is held,
-                // so nothing another writer records (a raise, a class, a new
-                // head) comes between.
+                // The hold comes before the last look, at GitHub and at the
+                // ledger: waiting for it, however long another writer holds
+                // it, is over before anything the merge rests on is read.
                 let merged = ledger.holding(|ledger| -> Result<_> {
                     if !super::ledger::unchanged(f, ledger) {
                         return Ok(None);
                     }
+                    // Read back the permission; a refused or lost status write must never merge.
+                    let statuses = github.statuses(&repo, &f.revision.head)?;
+                    let status = statuses
+                        .iter()
+                        .find(|s| s.context == SETTLED)
+                        .filter(|s| {
+                            s.state == "success"
+                                && s.creator
+                                    .as_ref()
+                                    .is_some_and(|u| f.settings.flow_authors.contains(&u.login))
+                        })
+                        .ok_or("review-settled permission was not observed")?;
                     // The last look before the merge's intent is saved.
-                    super::pause::effect(pass.root, &f.repo, f.number)?;
+                    permission(pass, github, f, &next.step, record, &mut Some(&mut *ledger))?;
                     super::ledger::begin(f, record)?;
                     record.landing.as_mut().expect("saved intent").permission =
                         Some(crate::ingest::Permission {
@@ -343,31 +343,33 @@ pub(crate) fn act<G: Write>(
                 )?;
             }
             Step::JoinTrain => {
-                permission(pass, github, f, &next.step, record, &mut store)?;
                 let store = store
                     .as_deref_mut()
                     .ok_or("train needs an anchored ledger")?;
                 let config = super::ledger::config(&f.settings);
-                super::pause::effect(pass.root, &f.repo, f.number)?;
-                let joined = crate::train::join(
-                    store,
-                    github,
-                    github,
-                    &config,
-                    &f.repo,
-                    f.number,
-                    &f.revision.head,
-                    &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
-                    pass.policy,
-                    Some(
-                        &pass
-                            .config
-                            .evidence
-                            .as_ref()
-                            .ok_or("producer verifier missing")?
-                            .negatives()?,
-                    ),
-                )?;
+                // Held from before the last look, as for a merge.
+                let joined = store.holding(|store| -> Result<_> {
+                    permission(pass, github, f, &next.step, record, &mut Some(&mut *store))?;
+                    Ok(crate::train::join(
+                        store,
+                        github,
+                        github,
+                        &config,
+                        &f.repo,
+                        f.number,
+                        &f.revision.head,
+                        &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
+                        pass.policy,
+                        Some(
+                            &pass
+                                .config
+                                .evidence
+                                .as_ref()
+                                .ok_or("producer verifier missing")?
+                                .negatives()?,
+                        ),
+                    )?)
+                })??;
                 if !matches!(
                     joined,
                     crate::train::Joined::Joined | crate::train::Joined::Already
@@ -459,7 +461,12 @@ fn now<'a>(
 /// What a withdrawn permission's status says.
 const WITHDRAWN: &str = "Permission inputs changed; read the PR again";
 
-fn permission<G: Write>(
+/// Every look at what `step` is permitted on, which withdraws the permission
+/// if one fails. No wait for the ledger's lock may come between these looks
+/// and the effect they permit: an effect that needs the lock takes its hold
+/// first and looks under it, and here the last wait for it comes before the
+/// evidence, the scope, the approval and the pause are last read.
+pub(super) fn permission<G: Write>(
     pass: &Pass<'_>,
     github: &G,
     f: &Facts,
@@ -467,22 +474,21 @@ fn permission<G: Write>(
     record: &Record,
     store: &mut Option<&mut Store>,
 ) -> Result<()> {
-    let result = super::scope::current(pass, github, f, record, now(store, pass.ledger)?)
-        .and_then(|()| {
-            // Read again only to act on: what it can't tell was recorded
-            // when the decision was made, and fails the effect here.
-            super::evidence::authorize(pass, github, f, step, &mut Default::default())
-        })
-        .and_then(|()| super::scope::current(pass, github, f, record, now(store, pass.ledger)?))
-        .and_then(|()| {
-            if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
-                return Err("An authorized person's scoped approval was withdrawn".into());
-            }
-            Ok(())
-        })
+    let mut look = || -> Result<()> {
+        super::scope::current(pass, github, f, record, now(store, pass.ledger)?)?;
+        let ledger = now(store, pass.ledger)?;
+        // Read again only to act on: what it can't tell was recorded
+        // when the decision was made, and fails the effect here.
+        super::evidence::authorize(pass, github, f, step, &mut Default::default())?;
+        super::scope::current(pass, github, f, record, ledger)?;
+        if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
+            return Err("An authorized person's scoped approval was withdrawn".into());
+        }
         // Read last: the scope, evidence and approval reads above can all
         // race a pause. This also validates a status just published.
-        .and_then(|()| super::pause::effect(pass.root, &f.repo, f.number));
+        super::pause::effect(pass.root, &f.repo, f.number)
+    };
+    let result = look();
     if result.is_err() {
         github.status(&f.repo.to_string(), &f.revision.head, false, WITHDRAWN)?;
     }

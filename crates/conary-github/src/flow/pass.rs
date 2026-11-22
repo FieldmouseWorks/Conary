@@ -202,6 +202,8 @@ impl Pass<'_> {
             }
         }
         let mut reports = Vec::new();
+        let stepping = self.config.settings.train && only.is_none();
+        let mut granted = Vec::new();
         for pull in pulls
             .into_iter()
             .filter(|p| only.is_none_or(|n| n == p.number))
@@ -526,6 +528,12 @@ impl Pass<'_> {
                     data.save(pr, &record)?;
                 }
                 occupancy.observed(self.root, &facts, &next, self.now, self.dry_run)?;
+                if stepping && report.error.is_none() && grants(&next, &facts) {
+                    granted.push(super::train::Granted {
+                        facts,
+                        step: next.step,
+                    });
+                }
                 Ok(())
             })();
             if let Err(error) = result {
@@ -547,12 +555,11 @@ impl Pass<'_> {
         }
         // Once every open PR was seen to, the train steps, still under the
         // repository's lock.
-        if self.config.settings.train
-            && only.is_none()
-            && data.is_some()
+        if stepping
+            && let Some(data) = &data
             && let Some(store) = store
         {
-            super::train::step(self, github, repo, store, &mut reports)?;
+            super::train::step(self, github, repo, data, &granted, store, &mut reports)?;
         }
         reports.sort_by_key(|r| r.pr);
         Ok(reports)
