@@ -153,8 +153,8 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
     that can tell says `fail` only where its gate said so and `error` of
     anything else, since a gate that broke can't be counted on to say it
     did. Which is which is the signer's to say: for burrow's workflow,
-    [its README](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md)
-    does ("A gate that breaks").
+    ["A gate that breaks"](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md#a-gate-that-breaks)
+    does.
 
   Only `pass` counts. The train's second try doesn't read the other two
   apart ([DESIGN section 4.7](DESIGN.md#47-the-train), Red).
