@@ -49,8 +49,8 @@ fn appended_ops_replay_in_order_and_chain() {
     let dir = tempfile::tempdir().unwrap();
     let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert!(ops.is_empty());
-    let a = log.append(close(), 1).unwrap();
-    let b = log.append(close(), 2).unwrap();
+    let a = log.writer().unwrap().0.append(close(), 1).unwrap();
+    let b = log.writer().unwrap().0.append(close(), 2).unwrap();
     drop(log);
     let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
     assert_eq!(ops, vec![a.clone(), b.clone()]);
@@ -68,9 +68,75 @@ fn tamper(dir: &Path, edit: impl Fn(String) -> String) -> LogError {
 fn two_ops() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
-    log.append(close(), 1).unwrap();
-    log.append(close(), 2).unwrap();
+    log.writer().unwrap().0.append(close(), 1).unwrap();
+    log.writer().unwrap().0.append(close(), 2).unwrap();
     dir
+}
+
+// Two writers open on one log: each reads only what the other appended
+// since it last held the lock, chained on its own head, and writes after it.
+#[test]
+fn a_writer_reads_what_another_appended_and_writes_after_it() {
+    let dir = two_ops();
+    let open = || {
+        OpLog::open(Lock::take(dir.path()).unwrap(), key(), None)
+            .unwrap()
+            .0
+    };
+    let (mut a, mut b) = (open(), open());
+    let (mut w, caught) = a.writer().unwrap();
+    assert!(caught.is_empty());
+    let third = w.append(close(), 3).unwrap();
+    drop(w);
+    let (mut w, caught) = b.writer().unwrap();
+    assert_eq!(caught.iter().map(|o| o.id).collect::<Vec<_>>(), [third.id]);
+    let fourth = w.append(close(), 4).unwrap();
+    assert_eq!(fourth.op.parent, Some(third.id));
+    drop(w);
+    assert_eq!(a.writer().unwrap().1.len(), 1);
+    assert_eq!(a.head(), b.head());
+    assert_eq!(a.head().unwrap().seq, 4);
+    let ops = read(dir.path(), &key().verifying_key(), a.head()).unwrap();
+    assert_eq!(ops.len(), 4);
+}
+
+// What another writer left torn is cut as opening cuts it; a log cut
+// shorter than this writer read, or with a line after it that isn't the
+// next op, is refused.
+#[test]
+fn a_writer_cuts_a_torn_op_and_refuses_a_log_cut_or_rewritten_behind_it() {
+    let dir = two_ops();
+    let path = dir.path().join(LOG_FILE);
+    let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+    let len = fs::metadata(&path).unwrap().len();
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(b"{\"id\":\"").unwrap();
+    let (mut w, caught) = log.writer().unwrap();
+    assert!(caught.is_empty());
+    assert_eq!(fs::metadata(&path).unwrap().len(), len);
+    w.append(close(), 3).unwrap();
+    drop(w);
+
+    let whole = fs::read(&path).unwrap();
+    let first = whole.iter().position(|&b| b == b'\n').unwrap() + 1;
+    // An op that doesn't chain on this writer's head: the log's first.
+    file.write_all(&whole[..first]).unwrap();
+    assert!(matches!(
+        log.writer(),
+        Err(LogError::Corrupt { line: 4, .. })
+    ));
+    let (mut log, _) = {
+        fs::write(&path, &whole).unwrap();
+        OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap()
+    };
+    let head = log.head().unwrap();
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(first as u64)
+        .unwrap();
+    assert!(matches!(log.writer(), Err(LogError::Unanchored(a)) if a == head));
 }
 
 #[test]
@@ -119,7 +185,7 @@ fn a_torn_last_line_is_left_out_then_cut_by_the_writer() {
     );
     let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
-    log.append(close(), 3).unwrap();
+    log.writer().unwrap().0.append(close(), 3).unwrap();
     drop(log);
     assert_eq!(
         read(dir.path(), &key().verifying_key(), None)
@@ -144,7 +210,7 @@ fn a_write_torn_inside_a_character_is_left_out_then_cut() {
     let path = dir.path().join(LOG_FILE);
     let whole = fs::read(&path).unwrap();
     let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
-    log.append(intent("café"), 3).unwrap();
+    log.writer().unwrap().0.append(intent("café"), 3).unwrap();
     drop(log);
     let full = fs::read(&path).unwrap();
     let e = full[whole.len()..]
@@ -163,7 +229,7 @@ fn a_write_torn_inside_a_character_is_left_out_then_cut() {
     );
     let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
-    log.append(close(), 4).unwrap();
+    log.writer().unwrap().0.append(close(), 4).unwrap();
     drop(log);
     assert_eq!(
         read(dir.path(), &key().verifying_key(), None)
@@ -206,7 +272,7 @@ fn a_last_op_missing_only_its_newline_is_kept() {
     );
     let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(ops.len(), 2);
-    log.append(close(), 3).unwrap();
+    log.writer().unwrap().0.append(close(), 3).unwrap();
     drop(log);
     assert_eq!(
         read(dir.path(), &key().verifying_key(), None)
@@ -217,22 +283,33 @@ fn a_last_op_missing_only_its_newline_is_kept() {
 }
 
 #[test]
-fn a_failed_append_stops_the_writer_until_the_log_is_reopened() {
+fn a_failed_append_stops_the_writer_until_it_takes_the_lock_again() {
     let dir = two_ops();
     let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     log.fail_next_write = true;
-    assert!(matches!(log.append(close(), 3), Err(LogError::Io(_))));
-    assert!(matches!(log.append(close(), 4), Err(LogError::Poisoned)));
-    drop(log);
-    // Reopening cuts the half line, and the next op chains onto the last
-    // one that was written whole.
-    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
-    assert_eq!(ops.len(), 2);
-    log.append(close(), 5).unwrap();
-    drop(log);
+    let (mut writer, _) = log.writer().unwrap();
+    assert!(matches!(writer.append(close(), 3), Err(LogError::Io(_))));
+    assert!(matches!(writer.append(close(), 4), Err(LogError::Poisoned)));
+    drop(writer);
+    // Taking the lock again cuts the half line, and the next op chains onto
+    // the last one that was written whole.
+    let (mut writer, caught) = log.writer().unwrap();
+    assert!(caught.is_empty());
+    writer.append(close(), 5).unwrap();
+    drop(writer);
     let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
     assert_eq!(ops.len(), 3);
     assert_eq!(ops[2].op.at, 5);
+    // So does opening it again.
+    log.fail_next_write = true;
+    assert!(log.writer().unwrap().0.append(close(), 6).is_err());
+    drop(log);
+    let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+    assert_eq!(ops.len(), 3);
+    log.writer().unwrap().0.append(close(), 7).unwrap();
+    let ops = read(dir.path(), &key().verifying_key(), None).unwrap();
+    assert_eq!(ops.len(), 4);
+    assert_eq!(ops[3].op.at, 7);
 }
 
 #[test]
@@ -318,7 +395,7 @@ fn an_unterminated_first_op_under_another_key_is_refused_not_cut() {
         None,
     )
     .unwrap();
-    log.append(close(), 1).unwrap();
+    log.writer().unwrap().0.append(close(), 1).unwrap();
     drop(log);
     unterminate(dir.path());
     let err = assert_refused(dir.path(), None);
@@ -383,9 +460,9 @@ fn anchored_two_ops() -> (tempfile::TempDir, Anchor) {
     let dir = tempfile::tempdir().unwrap();
     let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
     assert_eq!(log.head(), None);
-    let a = log.append(close(), 1).unwrap();
+    let a = log.writer().unwrap().0.append(close(), 1).unwrap();
     assert_eq!(log.head(), Some(Anchor { seq: 1, op: a.id }));
-    let b = log.append(close(), 2).unwrap();
+    let b = log.writer().unwrap().0.append(close(), 2).unwrap();
     let head = log.head().unwrap();
     assert_eq!(head, Anchor { seq: 2, op: b.id });
     drop(log);
@@ -468,7 +545,7 @@ fn a_log_grown_past_its_anchor_opens_and_a_torn_tail_is_still_cut() {
     }
     let (mut log, ops) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), Some(anchor)).unwrap();
     assert_eq!(ops.len(), 2);
-    log.append(close(), 3).unwrap();
+    log.writer().unwrap().0.append(close(), 3).unwrap();
     let head = log.head().unwrap();
     drop(log);
     assert_eq!(head.seq, 3);
@@ -537,7 +614,7 @@ fn a_key_and_a_log_in_different_directories_are_both_published() {
     take_synced();
     let key = load_or_create_key(&key_path).unwrap();
     let (mut log, _) = OpLog::open(Lock::take(&log_dir).unwrap(), key, None).unwrap();
-    log.append(close(), 1).unwrap();
+    log.writer().unwrap().0.append(close(), 1).unwrap();
     let synced = take_synced();
     assert_published(&synced, key_path.parent().unwrap());
     assert_published(&synced, &log_dir);
@@ -584,12 +661,12 @@ fn readers_check_the_log_against_the_anchor_kept_beside_it() {
     assert!(read_anchored(dir.path(), &public).unwrap().is_empty());
 
     let (mut log, _) = OpLog::open(lock, key(), None).unwrap();
-    log.append(close(), 1).unwrap();
+    log.writer().unwrap().0.append(close(), 1).unwrap();
     // Ops past the anchor: written since it was kept, which is fine.
     assert_eq!(read_anchored(dir.path(), &public).unwrap().len(), 1);
-    log.append(close(), 2).unwrap();
+    log.writer().unwrap().0.append(close(), 2).unwrap();
     let head = log.head().unwrap();
-    save_anchor(log.lock(), Some(head), "c2").unwrap();
+    save_anchor(log.writer().unwrap().0.lock(), Some(head), "c2").unwrap();
     drop(log);
     assert_eq!(
         load_checked(dir.path()).unwrap(),

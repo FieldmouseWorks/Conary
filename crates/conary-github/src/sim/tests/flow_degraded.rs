@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 /// The op log's ops of kind `op`, as written.
 pub(super) fn ops(c: &Case, op: &str) -> Vec<Value> {
-    let path = conary_core::log::log_path(c.store.borrow().lock().dir());
+    let path = conary_core::log::log_path(c.store.borrow().dir());
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()

@@ -347,7 +347,7 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::Sync { repo, github } | Command::Backfill { repo, github } => {
             let (api, config) = writer(cli, github)?;
-            let (a, got) = if matches!(cli.command, Command::Sync { .. }) {
+            let (mut a, got) = if matches!(cli.command, Command::Sync { .. }) {
                 // Read before the lock, so other writers wait only for
                 // the recording, not the minutes GitHub takes.
                 let gathered = ingest::gather(&api, &config, repo, &cli.ledger)?;
@@ -635,15 +635,13 @@ fn writer(cli: &Cli, github: &GithubArgs) -> Result<(Api, Config)> {
 }
 
 /// The ledger, open for writing: this takes its lock, held until it's
-/// dropped.
+/// dropped. A command's reads under it must still hold when it writes,
+/// unlike a flow pass's, which takes the lock only for each write.
 fn open(cli: &Cli, github: &GithubArgs, api: &Api) -> Result<Anchored> {
     let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
-    Ok(anchor::open(
-        &cli.ledger,
-        key,
-        api,
-        &github.remote.anchor_repo,
-    )?)
+    let mut anchored = anchor::open(&cli.ledger, key, api, &github.remote.anchor_repo)?;
+    anchored.store.hold()?;
+    Ok(anchored)
 }
 
 /// Brings `repo`'s notes up to date with what the ledger now holds.

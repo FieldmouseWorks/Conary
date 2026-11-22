@@ -41,6 +41,7 @@ use conary_core::policy::Touched;
 use crate::attest::testing;
 use crate::train::Mark;
 
+mod anchors;
 mod ci;
 mod faults;
 mod fixtures;
@@ -126,6 +127,10 @@ pub(crate) struct World {
     /// The last commit sha, check run id and PR number given out.
     shas: u64,
     runs: u64,
+    /// Refs outside branches, such as the ledger's anchor, by repo and name.
+    refs: HashMap<(String, String), crate::anchor::Kept>,
+    /// Every commit a ref has been moved to.
+    ref_commits: HashMap<String, crate::anchor::Kept>,
 }
 
 #[derive(Clone, Default)]
@@ -933,6 +938,28 @@ impl World {
             }
         }
         Some(files)
+    }
+}
+
+/// Runs `writers` on a thread of their own and fails when it doesn't finish
+/// within `secs`: a writer waiting on another's ledger lock in the same
+/// process never would, so a test of writers that mustn't wait fails there
+/// rather than hangs.
+pub(crate) fn unblocked(secs: u64, writers: impl FnOnce() + Send + 'static) {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    let (done, finished) = channel();
+    let thread = std::thread::spawn(move || {
+        writers();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(()) => thread.join().unwrap(),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("a writer still waits on the ledger's lock after {secs}s")
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(thread.join().unwrap_err())
+        }
     }
 }
 

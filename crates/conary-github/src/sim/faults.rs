@@ -54,6 +54,9 @@ pub(crate) enum Call {
     MakeCommit,
     OpenPull,
     PullsFrom,
+    Ref,
+    RefCommit,
+    SetRef,
 }
 
 /// Which calls a fault is for: a kind, and if a test narrows it, only in
@@ -141,6 +144,7 @@ impl<'a> Asked<'a> {
 }
 
 type Race = Box<dyn FnOnce(&Hub)>;
+type Watch = Box<dyn Fn(&Hub)>;
 
 #[derive(Default)]
 pub(super) struct Faults {
@@ -154,6 +158,8 @@ pub(super) struct Faults {
     stale: RefCell<Vec<(On, World)>>,
     /// What happens on GitHub just before a call, once.
     races: RefCell<Vec<(On, Race)>>,
+    /// What's run just before every call.
+    watch: RefCell<Option<Watch>>,
 }
 
 impl Hub {
@@ -211,8 +217,20 @@ impl Hub {
             .push((on.into(), Box::new(then)));
     }
 
-    /// Logs a call, runs what races it, and fails it if it's failing.
+    /// Just before every call from now on, `each` sees GitHub and may change
+    /// it. A call `each` makes itself isn't watched.
+    pub(crate) fn watch(&self, each: impl Fn(&Hub) + 'static) {
+        *self.faults.watch.borrow_mut() = Some(Box::new(each));
+    }
+
+    /// Runs what watches, logs a call, runs what races it, and fails it if
+    /// it's failing.
     fn begin(&self, asked: &Asked<'_>, args: &[&str]) -> Result<(), ApiError> {
+        let watch = self.faults.watch.take();
+        if let Some(watch) = watch {
+            watch(self);
+            *self.faults.watch.borrow_mut() = Some(watch);
+        }
         self.log
             .borrow_mut()
             .push((asked.call, args.iter().map(|a| (*a).to_owned()).collect()));

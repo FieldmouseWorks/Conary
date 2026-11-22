@@ -260,3 +260,21 @@ fn a_red_pr_whose_gate_cant_be_read_doesnt_stop_the_train() {
     assert!(stepped.unread[0].why.contains("No commit found"));
     assert_eq!(store.ledger().red_alone(&repo()), [id]);
 }
+
+#[test]
+fn a_release_holds_the_ledgers_lock_as_the_rest_of_its_step_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, hub, _, commit) = red(&dir);
+    hub.rerun_again(&commit, "success");
+    hub.attest_passes(&commit);
+    let lock = dir.path().join("lock");
+    let seen: std::rc::Rc<std::cell::Cell<Option<bool>>> = Default::default();
+    let theirs = std::rc::Rc::clone(&seen);
+    hub.race(Call::Mark, move |_| {
+        let held = std::fs::File::open(&lock).unwrap().try_lock().is_err();
+        theirs.set(Some(held));
+    });
+    let stepped = step_once(&mut store, &hub);
+    assert_eq!(seen.get(), Some(true));
+    assert_eq!(stepped.released, [3]);
+}

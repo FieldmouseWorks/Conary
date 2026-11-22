@@ -394,6 +394,14 @@ mod flow_switches;
 
 mod flow_pass_landing;
 
+mod flow_pass_lock;
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod flow_pass_wait;
+
 mod flow_pass_train;
 
 mod flow_pass_r3;

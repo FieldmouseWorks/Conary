@@ -89,9 +89,12 @@ impl Source for Watch<'_> {
     }
 }
 
+/// The ledger open for writing as `cn` opens it: held until it's dropped.
 fn open_in(dir: &Path) -> Store {
     let lock = conary_core::log::Lock::take(dir).unwrap();
-    Store::open(lock, SigningKey::from_bytes(&[5; 32]), None).unwrap()
+    let mut store = Store::open(lock, SigningKey::from_bytes(&[5; 32]), None).unwrap();
+    store.hold().unwrap();
+    store
 }
 
 // The minutes a sync spends reading each open PR are spent before the

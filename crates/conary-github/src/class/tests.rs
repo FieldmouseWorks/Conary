@@ -77,7 +77,7 @@ fn asked(
     pr: u64,
     head: &str,
 ) -> Result<Asked, ClassError> {
-    let dir = store.lock().dir().to_owned();
+    let dir = store.dir().to_owned();
     let ledger = Arc::new(store.ledger().clone());
     let mut given = Given {
         before: Arc::clone(&ledger),
@@ -95,7 +95,7 @@ fn asked_since(
     policy: &Policy,
     head: &str,
 ) -> Result<Asked, ClassError> {
-    let dir = store.lock().dir().to_owned();
+    let dir = store.dir().to_owned();
     let mut given = Given {
         before,
         now: Arc::new(store.ledger().clone()),

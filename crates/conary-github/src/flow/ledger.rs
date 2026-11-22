@@ -21,6 +21,14 @@ pub(crate) fn raised(f: &mut Facts, memory: &mut Memory, ledger: Option<&Ledger>
         .clone()
         .raise(memory.raised.iter().cloned().collect());
 }
+/// Whether the ledger holds the PR as the decision read it: nobody else
+/// recorded about its change since [`classify`] began reading it.
+pub(crate) fn unchanged(f: &Facts, store: &Store) -> bool {
+    store
+        .ledger()
+        .by_pr(&f.repo, f.number)
+        .is_some_and(|c| !store.overtaken(c.id))
+}
 pub(crate) fn classify<G: Write>(
     pass: &Pass<'_>,
     github: &G,
@@ -28,7 +36,9 @@ pub(crate) fn classify<G: Write>(
     record: &mut Record,
     store: &mut Store,
 ) -> Result<()> {
-    raised(f, &mut record.memory, Some(store.ledger()));
+    // Before GitHub is read, so nothing is recorded as it was before what
+    // another writer records while it's read.
+    raised(f, &mut record.memory, Some(store.reading()?));
     let pull = github.pull(&f.repo.to_string(), f.number)?;
     let receipts = submissions(record);
     let got = crate::ingest::submitted(
@@ -70,6 +80,7 @@ pub(crate) fn reconcile<G: Write>(
     record: &mut Record,
 ) -> Result<()> {
     if record.landing.is_some() || !record.pending.is_empty() {
+        store.reading()?;
         let pull = github.pull(&repo.to_string(), pr)?;
         let receipts = submissions(record);
         crate::ingest::submitted(

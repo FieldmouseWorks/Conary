@@ -241,7 +241,7 @@ pub fn class(
         last,
     } = read;
     let number = pr.number;
-    MergeBases::load(store.lock())
+    MergeBases::load(store.writer().map_err(IngestError::Store)?.lock())
         .and_then(|mut bases| bases.keep(asked))
         .map_err(IngestError::Cache)?;
     let (got, pr) = if store.ledger().by_pr(&repo, number).and_then(Change::last) == last {
@@ -287,7 +287,7 @@ pub(crate) fn at_once(
     pr: u64,
     head: &str,
 ) -> Result<Classes, ClassError> {
-    let dir = store.lock().dir().to_owned();
+    let dir = store.dir().to_owned();
     let ledger = Arc::new(store.ledger().clone());
     let mut given = Given {
         before: Arc::clone(&ledger),

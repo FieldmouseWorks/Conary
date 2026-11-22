@@ -192,7 +192,8 @@ pub fn sync(
     } = gathered;
     config.check()?;
     let full = repo.to_string();
-    let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
+    let mut bases = MergeBases::load(store.writer().map_err(IngestError::Store)?.lock())
+        .map_err(IngestError::Cache)?;
     bases.keep(asked).map_err(IngestError::Cache)?;
     let mut got = Synced::default();
     for pr in source.pulls(&full, Pulls::Open)? {

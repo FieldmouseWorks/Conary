@@ -23,7 +23,8 @@ fn open(dir: &Path, key: SigningKey) -> OpLog {
 fn append(log: &mut OpLog, count: usize) {
     for at in 0..count {
         let change = ChangeId::new().unwrap();
-        log.append(Body::Close { change }, at as i64).unwrap();
+        let (mut writer, _) = log.writer().unwrap();
+        writer.append(Body::Close { change }, at as i64).unwrap();
     }
 }
 
@@ -42,7 +43,7 @@ fn n_syncs_in_one_process_verify_the_log_once() {
         let (mut log, _) = OpLog::open(lock, key(), anchor).unwrap();
         append(&mut log, 1);
         anchor = log.head();
-        save_anchor(log.lock(), anchor, "c1").unwrap();
+        save_anchor(log.writer().unwrap().0.lock(), anchor, "c1").unwrap();
     }
     // The 20 once, and once each op an earlier sync appended.
     assert_eq!(CHECKED.get(), 20 + 4);
@@ -222,4 +223,38 @@ fn a_tail_torn_after_the_mark_is_cut_and_checks_nothing_again() {
     let (log, _) = OpLog::open(lock, key(), Some(head)).unwrap();
     assert_eq!((log.head(), CHECKED.get()), (Some(head), 0));
     assert_eq!(fs::read(&path).unwrap(), whole);
+}
+
+#[test]
+fn a_writer_catching_up_checks_each_appended_signature_and_leaves_the_mark() {
+    let (dir, _) = marked();
+    let (mut behind, mut other) = (open(dir.path(), key()), open(dir.path(), key()));
+    let mark = fs::read(dir.path().join("verified")).unwrap();
+    append(&mut other, 2);
+    CHECKED.set(0);
+    assert_eq!(behind.writer().unwrap().1.len(), 2);
+    // Those two and none before: it read only their bytes, so it can't mark.
+    assert_eq!(CHECKED.get(), 2);
+    assert_eq!(fs::read(dir.path().join("verified")).unwrap(), mark);
+
+    // A mark another writer kept past this one's head doesn't vouch for
+    // bytes read from that head on: it's over the log from its start.
+    append(&mut other, 1);
+    drop(open(dir.path(), key()));
+    CHECKED.set(0);
+    assert_eq!(behind.writer().unwrap().1.len(), 1);
+    assert_eq!(CHECKED.get(), 1);
+
+    // An appended line whose id and parent hold but not its signature.
+    let path = log_path(dir.path());
+    let whole = fs::read_to_string(&path).unwrap();
+    append(&mut other, 1);
+    let line = fs::read_to_string(&path).unwrap().split_off(whole.len());
+    let sig = &line[line.find("\"sig\":\"").unwrap() + 7..][..128];
+    let forged = line.replace(sig, &"0".repeat(128));
+    fs::write(&path, whole + &forged).unwrap();
+    assert!(matches!(
+        behind.writer(),
+        Err(LogError::Corrupt { line: 7, .. })
+    ));
 }
