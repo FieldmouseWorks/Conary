@@ -222,7 +222,8 @@ record. A repository file lock serializes mutating passes and kicks.
 The ledger's writer lock is another: a pass takes it only for each write,
 so its reads of GitHub hold up no other writer. An op the pass decided from
 a read is refused once another writer recorded about the same change since
-that read began, and that PR is read again by the next pass.
+that read began, and that PR is read again by the next pass. So is a `land`
+or an `outside` once another writer recorded either at the same trunk commit.
 
 The pass imports every raise from the append-only ledger before deciding and
 appends any raise remembered locally before acting. Removing a label, resetting

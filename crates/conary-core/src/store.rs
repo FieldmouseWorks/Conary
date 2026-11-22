@@ -68,16 +68,22 @@ pub struct Store {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum About {
     Change(ChangeId),
-    /// A commit trunk moved to outside a landing.
+    /// A commit trunk moved to, by a landing or outside one.
     Trunk(Repo, CommitId),
 }
 
 impl About {
-    fn of(body: &Body) -> Option<Self> {
-        match body {
-            Body::Outside { repo, after, .. } => Some(Self::Trunk(repo.clone(), after.clone())),
-            _ => body.change().map(Self::Change),
-        }
+    /// All `body` is about. A landing is about its change and, in that
+    /// change's repository as `ledger` holds it, the commit it moved trunk
+    /// to: the same commit an outside move there is about.
+    fn of(ledger: &Ledger, body: &Body) -> impl Iterator<Item = Self> {
+        let moved = match body {
+            Body::Land { change, after, .. } => ledger.change(*change).map(|c| (&c.repo, after)),
+            Body::Outside { repo, after, .. } => Some((repo, after)),
+            _ => None,
+        };
+        let trunk = moved.map(|(repo, after)| Self::Trunk(repo.clone(), after.clone()));
+        body.change().map(Self::Change).into_iter().chain(trunk)
     }
 }
 
@@ -142,7 +148,7 @@ impl Store {
     /// Starts a read that writes are to be decided from, and returns the
     /// ledger as it stands then. Call it before reading GitHub: what another
     /// writer records from here on refuses an op of this store's about the
-    /// same change or trunk commit ([`StoreError::Overtaken`]).
+    /// same change, or the same trunk commit's move ([`StoreError::Overtaken`]).
     pub fn reading(&mut self) -> Result<&Ledger, StoreError> {
         self.refresh()?;
         self.overtaken.clear();
@@ -207,7 +213,7 @@ impl Store {
                 return Err(StoreError::Replay(op.id, e));
             }
             ledger.apply(op);
-            overtaken.extend(About::of(&op.op.body));
+            overtaken.extend(About::of(ledger, &op.op.body));
         }
         Ok(())
     }
@@ -260,7 +266,7 @@ impl Writer<'_> {
         // Checked after admission, so an op that says only what another
         // writer already said is the duplicate it always was. Under a hold
         // what's written was read under it.
-        if !self.log.held() && About::of(&body).is_some_and(|a| self.overtaken.contains(&a)) {
+        if !self.log.held() && About::of(self.ledger, &body).any(|a| self.overtaken.contains(&a)) {
             return Err(StoreError::Overtaken);
         }
         let op = self.log.append(body, at)?;
@@ -364,6 +370,58 @@ mod tests {
         b.holding(|b| b.record(revision(change, 'e')))
             .unwrap()
             .unwrap();
+    }
+
+    /// One commit trunk moved to gets one verdict: whichever of a landing
+    /// and an outside move another writer recorded there overtakes the other.
+    #[test]
+    fn a_land_and_an_outside_at_one_trunk_commit_overtake_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let mut a = open();
+        let mut changes = Vec::new();
+        for pr in [1, 2] {
+            let change = observe(&mut a, pr);
+            a.record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+            changes.push(change);
+        }
+        let land = |change, after| Body::Land {
+            change,
+            revision: RevisionId::new(&commit('a'), &commit('b')),
+            before: commit('a'),
+            after: commit(after),
+            by: Authority::Status {
+                login: "steward".into(),
+            },
+        };
+        // GitHub ignores case in a repository's name.
+        let outside = |after| Body::Outside {
+            repo: "fieldmouseworks/Burrow".parse().unwrap(),
+            before: None,
+            after: commit(after),
+        };
+        let mut b = open();
+        a.reading().unwrap();
+        b.record(land(changes[0], 'c')).unwrap();
+        assert!(matches!(a.record(outside('c')), Err(StoreError::Overtaken)));
+        assert!(a.overtaken(changes[0]));
+        // Trunk moved where no landing is stays a violation.
+        a.record(outside('d')).unwrap();
+
+        a.reading().unwrap();
+        b.record(outside('e')).unwrap();
+        assert!(matches!(
+            a.record(land(changes[1], 'e')),
+            Err(StoreError::Overtaken)
+        ));
+        // It overtakes a landing there, not the change, or one elsewhere.
+        assert!(!a.overtaken(changes[1]));
+        a.record(land(changes[1], 'f')).unwrap();
     }
 
     /// Each degraded path is written as the op log spells it, and a replay

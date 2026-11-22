@@ -8,7 +8,7 @@ use crate::sim::{Call, unblocked};
 use conary_core::ChangeId;
 use conary_core::log;
 use conary_core::op::{Actor, ActorKind, Body};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -451,5 +451,111 @@ fn a_passs_step_reads_the_train_as_it_stands() {
         assert_eq!(pass(&c, &mut a), None);
         let train = a.store.ledger().train(&REPO.parse().unwrap()).unwrap();
         assert!(train.in_flight().is_some(), "the step missed the PR seated");
+    });
+}
+
+/// How the ledger at `dir` says trunk moved to `after`, each time it does.
+fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
+    let public = log::load_public_key(&log::public_path(&log::key_path(dir))).unwrap();
+    log::read(dir, &public, None)
+        .unwrap()
+        .iter()
+        .filter_map(|o| match &o.op.body {
+            Body::Land { after: to, .. } if to.to_string() == after => Some("land"),
+            Body::Outside { after: to, .. } if to.to_string() == after => Some("outside"),
+            _ => None,
+        })
+        .collect()
+}
+
+// PR 3, seated in the train, is merged outside it while its older settled
+// success stands, the write to withdraw it having failed. A sync told only
+// the settled context records that as a landing while the pass, which reads
+// the train's newer pending status too, is judging it outside: the landing
+// stands alone.
+#[test]
+fn a_pass_never_records_outside_where_another_writer_recorded_a_land() {
+    unblocked(120, || {
+        let mut c = Case::new();
+        c.config.settings.train = true;
+        c.clean_review();
+        let (ledger, mut a) = anchored(&c);
+        assert_eq!(pass(&c, &mut a), None);
+        let train = a.store.ledger().train(&REPO.parse().unwrap()).unwrap();
+        assert!(!train.joined().is_empty(), "the pass joined PR 3");
+        c.hub.fail(Call::FlowStatus);
+
+        let after: Rc<RefCell<Option<String>>> = Rc::default();
+        let (merged, at) = (Rc::clone(&after), ledger.path().to_owned());
+        let settings = c.config.settings.clone();
+        // Merged before the pass reads it to record it, and synced while the
+        // pass reads the merge's commit.
+        c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
+            hub.race(Call::Pull.repo(REPO).pr(3), move |hub| {
+                let message = crate::train::Message::new("by hand", 3, []);
+                let sha = hub.squash(REPO, 3, &super::head(3), &message).unwrap();
+                *merged.borrow_mut() = Some(sha);
+                hub.race(Call::CommitPulls.repo(REPO), move |hub| {
+                    let key = log::load_signing_key(&log::key_path(&at)).unwrap();
+                    let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
+                    other.store.hold().unwrap();
+                    let config = crate::Config {
+                        reviewers: settings.flow_authors.iter().cloned().collect(),
+                        review_authors: settings.review_authors.iter().cloned().collect(),
+                        own_contexts: vec![crate::flow::SETTLED.into()],
+                    };
+                    let repo = REPO.parse().unwrap();
+                    crate::ingest::pull(&mut other.store, hub, &config, &repo, 3).unwrap();
+                    other.publish(hub).unwrap();
+                });
+            });
+        });
+        let error = pass(&c, &mut a);
+        let after = after.borrow().clone().expect("PR 3 was merged");
+        assert_eq!(moves(ledger.path(), &after), ["land"], "{error:?}");
+        let error = error.expect("the pass's outside was refused");
+        assert!(error.contains("read it again"), "{error}");
+        c.hub.heal(Call::FlowStatus);
+        assert_eq!(pass(&c, &mut a), None);
+        assert_eq!(moves(ledger.path(), &after), ["land"]);
+    });
+}
+
+// The other order: another writer records a merge outside, and stops before
+// it closes the change, while the pass is judging that merge a landing. The
+// violation stands alone.
+#[test]
+fn a_pass_never_records_a_land_where_another_writer_recorded_outside() {
+    unblocked(120, || {
+        let c = Case::new();
+        let (ledger, mut a) = anchored(&c);
+        assert_eq!(pass(&c, &mut a), None);
+
+        let after: Rc<RefCell<Option<String>>> = Rc::default();
+        let (merged, at) = (Rc::clone(&after), ledger.path().to_owned());
+        c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
+            hub.race(Call::Pull.repo(REPO).pr(3), move |hub| {
+                let sha = hub.steward_lands(REPO, 3);
+                *merged.borrow_mut() = Some(sha.clone());
+                hub.race(Call::CommitPulls.repo(REPO), move |hub| {
+                    let key = log::load_signing_key(&log::key_path(&at)).unwrap();
+                    let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
+                    let body = Body::Outside {
+                        repo: REPO.parse().unwrap(),
+                        before: None,
+                        after: sha.parse().unwrap(),
+                    };
+                    other.store.record(body).unwrap();
+                    other.publish(hub).unwrap();
+                });
+            });
+        });
+        let error = pass(&c, &mut a);
+        let after = after.borrow().clone().expect("PR 3 was merged");
+        assert_eq!(moves(ledger.path(), &after), ["outside"], "{error:?}");
+        let error = error.expect("the pass's land was refused");
+        assert!(error.contains("read it again"), "{error}");
+        assert_eq!(pass(&c, &mut a), None);
+        assert_eq!(moves(ledger.path(), &after), ["outside"]);
     });
 }
