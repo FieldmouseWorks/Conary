@@ -572,9 +572,12 @@ so the wait is one run, however many are waiting.
   partway puts the changes after it back in the train, and the refused PR's
   train status becomes an error, so nothing else lands it.
 - **Red.** The failed check gets the one second try every failed test gets,
-  and the train makes it, since a gate that died can't make its own and says
-  what a failing test says. It asks GitHub to run the failure's workflow run
-  again, all of it (a rerun of the failed jobs alone gives the passes copies
+  and the train makes it, since a gate that died can't make its own and
+  concludes as a failing test does. What it attests isn't read for this,
+  an [`error`](ci-attestation.md#predicate) included: a gate that died may
+  sign nothing, and a change that breaks its gate has to go red and be
+  split out like any bad one. It asks GitHub to run the failure's workflow
+  run again, all of it (a rerun of the failed jobs alone gives the passes copies
   their attestations don't name), once that run's first attempt has ended,
   and waits. The run's attempt is the only record of the try. A failure with
   no try to have (a status, another App's run, a rerun GitHub refuses) is

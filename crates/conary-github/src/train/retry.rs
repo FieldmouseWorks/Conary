@@ -1,7 +1,8 @@
 //! A failed gate's second try (`docs/DESIGN.md` section 4.7). A gate that
-//! died says what a failing test says (a full disk is an exit of 1 too), so
-//! no failure is red on its first try. GitHub's run attempt is the only
-//! record of the try, so a step run again asks for nothing twice.
+//! died concludes as a failing test does (a full disk is an exit of 1 too),
+//! and what it attests isn't read here, so no failure is red on its first
+//! try. GitHub's run attempt is the only record of the try, so a step run
+//! again asks for nothing twice.
 
 use std::collections::BTreeMap;
 

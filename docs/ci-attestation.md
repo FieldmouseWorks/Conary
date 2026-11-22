@@ -68,11 +68,12 @@ model. A signer cannot infer the meaning or coverage of arbitrary test code.
 The required checks are `attest / gate` and, for PRs using negatives,
 `attest / negative` (replace `attest` with the caller job's name). The gate
 passes only when every supplied job concludes `success`; skipped and failed
-jobs give a failing statement, and cancelled, empty or malformed results
-produce no statement. The statement's hashed log artifact contains the
-supplied job names and conclusions, excluding arbitrary job outputs. This
-retains the v1 predicate and lets a single required gate explain which jobs it
-summarised.
+jobs give a failing statement, never an `error` (a job's conclusion can't
+tell a test that failed from a job that broke), and cancelled, empty or
+malformed results produce no statement. The statement's hashed log artifact
+contains the supplied job names and conclusions, excluding arbitrary job
+outputs. This retains the v1 predicate and lets a single required gate explain
+which jobs it summarised.
 
 On same-repository PRs, `negative-run` constructs base code with head tests
 using `cn attest prepare-negative`, then runs `negative-command` in that tree
@@ -144,8 +145,19 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
 }
 ```
 
-- `result`: `pass` when the gate succeeded, otherwise `fail`. A cancelled run
-  attests nothing.
+- `result`: `pass` when the gate succeeded, and otherwise `fail` or `error`.
+  A cancelled run attests nothing.
+  - `fail`: a check, or what's being checked, failed. A signer that can't
+    tell that from a gate that broke says `fail` of both.
+  - `error`: the gate broke, so it says nothing about the change. A signer
+    that can tell says `fail` only where its gate said so and `error` of
+    anything else, since a gate that broke can't be counted on to say it
+    did. Which is which is the signer's to say: for burrow's workflow,
+    ["A gate that breaks"](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md#a-gate-that-breaks)
+    does.
+
+  Only `pass` counts. The train's second try doesn't read the other two
+  apart ([DESIGN section 4.7](DESIGN.md#47-the-train), Red).
 - `revision`: the subject's revision, or `null` for a push.
 - `tree`: the tree the gate ran on. For a PR that is the head merged onto the
   base branch's tip as the job found it (the workflow's merge step), never
@@ -156,6 +168,9 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
   wherever the caller says they do run.
 - `log`: the SHA-256 of the gate's output, and the name of the run's
   artifact that keeps it, its own for each job.
+- `error`: with the result `error`, why the gate broke, as one line of
+  text, after `log`; left out otherwise. `cn attest commit` and
+  `cn attest revision` take it as `--error`.
 - `gate`: which gate ran, as burrow's workflow names it with `gate-reuse`
   on, after the fields above; left out otherwise. Only the
   [gate-reuse lookup](gate-reuse.md) reads it.
@@ -254,7 +269,8 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
   tests weren't built (`build-skip`) or some new tests none of them runs
   (`unrun`), so where they'd fail is for wherever those are built or run;
   `none` when the PR needs no negative (`tree` is then `null`, and the
-  lists empty).
+  lists empty). There's no `error`: a negative run that broke attests
+  nothing.
 - `tests`: the test files the PR changes.
 - `checks`: the checks it built (or that didn't evaluate), those whose
   derivation differs from the base's.
