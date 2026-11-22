@@ -20,6 +20,7 @@ pub(super) struct Case {
     /// for cases about what follows it.
     pub readiness: Option<Readiness>,
     pub failed: Option<Failure>,
+    pub failed_why: Option<String>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub base_held: bool,
     pub train: TrainState,
@@ -42,6 +43,7 @@ impl Case {
             proof_data: ProofData::default(),
             readiness: None,
             failed: None,
+            failed_why: None,
             succeeded: Default::default(),
             base_held: false,
             train: TrainState::default(),
@@ -212,6 +214,7 @@ impl Case {
             f.proof = p.clone();
         }
         f.failed = self.failed;
+        f.failed_why = self.failed_why.clone();
         f.succeeded = self.succeeded.clone();
         f.base_held |= self.base_held;
         f.train = self.train.clone();

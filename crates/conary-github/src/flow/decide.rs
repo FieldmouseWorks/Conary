@@ -38,17 +38,25 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         return decision;
     }
     if let Some(kind) = f.failed {
-        return failed(m, kind, now, "The step failed; trying again later");
+        let decision = failed(
+            m,
+            kind,
+            now,
+            &said("The step failed; trying again later", &f.failed_why),
+        );
+        m.retry_why = f.failed_why.clone();
+        return decision;
     }
     if let Some((kind, due)) = m.retry {
         if now < due {
             return at(
                 failure_stage(kind),
                 Step::Retry { kind, at: due },
-                "Waiting to try the failed step again",
+                &said("Waiting to try the failed step again", &m.retry_why),
             );
         }
         m.retry = None;
+        m.retry_why = None;
     }
     if let Some(id) = m.stopping.first() {
         return at(
@@ -664,7 +672,16 @@ fn failed(m: &mut Memory, kind: Failure, now: u64, why: &str) -> Decision {
     *times = times.saturating_add(1);
     let due = now.saturating_add((1u64 << (*times - 1).min(6)).min(60) * 60);
     m.retry = Some((kind, due));
+    m.retry_why = None;
     at(failure_stage(kind), Step::Retry { kind, at: due }, why)
+}
+
+/// A failed step's status, and what its effect said when it said anything.
+fn said(status: &str, why: &Option<String>) -> String {
+    match why {
+        Some(why) => format!("{status}: {why}"),
+        None => status.to_owned(),
+    }
 }
 
 fn failure_stage(kind: Failure) -> Stage {

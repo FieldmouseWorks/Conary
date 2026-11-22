@@ -71,17 +71,20 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
     let record = c.record();
     let findings = [finding()];
     let mut answered = vec![];
+    let mut fixed_by = None;
     for work in &record.jobs {
         let completion = flow::jobs::inspect(work, now + 6).unwrap();
         if let (
             Task::Fix { pr, problems, .. },
             Some(Ok(conary_core::plugin::Response {
                 answer: Answer::Fix { answers, .. },
+                by,
                 ..
             })),
         ) = (invocation(work).task, completion.result)
         {
             assert_eq!(pr, 3);
+            fixed_by = Some(by);
             // The example speaks v4: one answer for its one finding.
             let answers = answers.unwrap();
             assert_eq!(answers.len(), 1);
@@ -101,12 +104,21 @@ fn a_judge_after_a_fix_carries_its_pr_reasons_and_the_answered_finding() {
         .find(|w| matches!(w.purpose, flow::jobs::Purpose::Judge))
         .unwrap();
     let Task::Judge {
-        pr, why, context, ..
+        pr,
+        why,
+        context,
+        author,
+        ..
     } = invocation(judge).task
     else {
         panic!("not a judge");
     };
     assert_eq!(pr, 3);
+    // The fix pushed the head: its validated answer names who wrote it,
+    // session and all, so the fix's session can't judge its own push.
+    let fixed_by = fixed_by.unwrap();
+    assert!(fixed_by.session.is_some());
+    assert_eq!(author, fixed_by);
     assert_eq!(why, [Trigger::AuthorEngine]);
     // What GitHub shows, read afresh: the review's finding and the fix's
     // answer to it are both there.
