@@ -26,6 +26,8 @@ pub use proofs::{
     Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Reached, Readiness,
 };
 mod review;
+#[cfg(test)]
+pub(crate) use review::QUIET;
 pub(crate) mod reviews;
 mod train;
 mod types;

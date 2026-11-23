@@ -263,13 +263,21 @@ impl Hub {
 }
 
 impl Hub {
-    pub(crate) fn pushed_by(&self, repo: &str, branch: &str, head: &str, who: &str) {
+    /// `head` was put on `branch` by `who`, an account of GitHub's type
+    /// `kind` (`User`, or `Bot` for an App).
+    pub(crate) fn pushed_by(&self, repo: &str, branch: &str, head: &str, who: &str, kind: &str) {
         self.world
             .borrow_mut()
             .pushes
             .entry((repo.into(), branch.into()))
             .or_default()
-            .insert(head.into(), who.into());
+            .insert(
+                head.into(),
+                crate::api::User {
+                    login: who.into(),
+                    kind: kind.into(),
+                },
+            );
     }
     pub(crate) fn flow_thread(&self, repo: &str, pr: u64, id: &str, resolved: bool) {
         self.edit_flow(repo, pr, |s| {

@@ -42,7 +42,12 @@ pub struct Snapshot {
 }
 
 pub trait Read: Source + crate::branches::Branches {
-    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError>;
+    /// Who put each head on `branch`, by its head commit, newest first.
+    fn pushes(
+        &self,
+        repo: &str,
+        branch: &str,
+    ) -> Result<BTreeMap<String, crate::api::User>, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
 }
 
@@ -130,7 +135,7 @@ fn gather(
         open: pull.state == "open",
         draft: extra.draft,
         trusted: trusted_authors.contains(&pull.user.login),
-        by_app: pull.user.kind == "Bot",
+        head_by_app: false,
         complete: extra.complete,
         labels,
         labelled_by: None,
@@ -259,9 +264,15 @@ fn gather(
         &facts.settings,
         reads,
     )?;
-    if facts.settings.job_login.is_some() {
-        facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
-    }
+    // A fix job's claim can't be read without its branch's pushers; the
+    // reviewer's ask goes on past them, as if the head had no push on record.
+    let pushes = source.pushes(&repository, &pull.head.name);
+    facts.pushes = if facts.settings.job_login.is_some() {
+        reads.ask(Reading::Pushes, pushes)?
+    } else {
+        reads.take(Reading::Pushes, pushes).unwrap_or_default()
+    };
+    facts.head_by_app = super::review::by_app(&pull.user, facts.pushes.get(&pull.head.sha));
     let records = reads.ask(Reading::Reviews, source.reviews(&repository, pr))?;
     let comments = reads.ask(Reading::Reviews, source.comments(&repository, pr))?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);

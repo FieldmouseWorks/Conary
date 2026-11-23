@@ -319,10 +319,11 @@ impl Api {
 }
 
 impl Read for Api {
-    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError> {
+    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, User>, ApiError> {
         #[derive(Deserialize)]
         struct Push {
             after: String,
+            activity_type: String,
             actor: Option<User>,
         }
         let encoded: String = branch
@@ -335,13 +336,21 @@ impl Read for Api {
                 }
             })
             .collect();
+        // Every kind of record that puts a head on the branch: a force push
+        // or the branch's creation is no `push` record.
         let records: Vec<Push> = self.pages(&format!(
-            "/repos/{repo}/activity?activity_type=push&ref=refs%2Fheads%2F{encoded}"
+            "/repos/{repo}/activity?ref=refs%2Fheads%2F{encoded}"
         ))?;
         let mut result = BTreeMap::new();
         for p in records {
+            if !matches!(
+                p.activity_type.as_str(),
+                "push" | "force_push" | "branch_creation"
+            ) {
+                continue;
+            }
             if let Some(actor) = p.actor {
-                result.entry(p.after).or_insert(actor.login);
+                result.entry(p.after).or_insert(actor);
             }
         }
         Ok(result)

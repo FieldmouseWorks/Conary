@@ -89,7 +89,7 @@ fn quiet_head_gets_one_review_intention() {
     // review_step.py: ask once the head has gone quiet, then wait on that ask.
     let mut c = Case::new();
     c.hub.remove_flow_reviews(REMI, 3);
-    assert_eq!(c.view(1).step, Step::Wait { until: Some(1800) });
+    assert_eq!(c.view(1).step, Step::Wait { until: Some(QUIET) });
     assert!(matches!(c.view(4000).step, Step::AskReview(_)));
     c.memory.asked = Some((head(3), 4000));
     assert_eq!(c.view(4000).step, Step::Wait { until: Some(7600) });
@@ -142,7 +142,7 @@ fn stale_head_verdict_cannot_land() {
         (
             Stage::Review,
             Step::Wait {
-                until: Some(4000 + 1800)
+                until: Some(4000 + QUIET)
             }
         )
     );

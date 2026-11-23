@@ -595,9 +595,10 @@ pub struct Facts {
     pub open: bool,
     pub draft: bool,
     pub trusted: bool,
-    /// Opened by an App (a `Bot` account): the review connector reviews no
-    /// head of such a PR unasked, so the flow asks at once.
-    pub by_app: bool,
+    /// Its head was put there by an App ([`super::review::by_app`]): the
+    /// review connector reviews no such head unasked, so the flow asks at
+    /// once.
+    pub head_by_app: bool,
     pub complete: bool,
     pub labels: BTreeSet<String>,
     /// Who put the owner label on, by its newest `labeled` event: read
@@ -640,7 +641,9 @@ pub struct Facts {
     /// The repository's pause, when one covers this PR, read right before
     /// this decision.
     pub paused: Option<super::pause::Pause>,
-    pub pushes: BTreeMap<String, String>,
+    /// Who put each head on the branch, by its head commit, as GitHub's
+    /// activity says ([`super::read::Read::pushes`]).
+    pub pushes: BTreeMap<String, crate::api::User>,
     /// Every review thread on GitHub, by its id.
     pub threads: BTreeMap<String, ReviewThread>,
     /// The review bodies a judge reads ([`super::review_bodies`]), by review id.

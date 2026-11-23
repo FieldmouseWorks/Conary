@@ -1,15 +1,16 @@
 //! The reviewer's part of a PR's step, as burrow's steward takes it
 //! (review_step.py, and the review part of step.py): what the reviewer said
 //! of the head ([`super::reviews`]) and what that leaves the PR waiting on.
-//! The reviewer reviews each push of a person's PR on its own; the flow asks
+//! The reviewer reviews each push a person makes on its own; the flow asks
 //! it to look when a look is owed that no push will bring, and at once for
-//! each head of an App's PR, which it reviews only when asked.
+//! each head an App put there, which it reviews only when asked.
 use super::decide::{self, Decision};
 use super::*;
 
-/// A push to a person's PR the reviewer hasn't begun on after this long is
-/// asked for: it reviews each such push within minutes when its usage lasts.
-pub(super) const QUIET: u64 = 30 * 60;
+/// A person's push the reviewer hasn't begun on after this long is asked
+/// for. It only covers the connector's start: a review that's coming shows
+/// within a minute or two of the push, so past this one has been dropped.
+pub(crate) const QUIET: u64 = 5 * 60;
 /// A head the reviewer has said nothing of this long after it was first
 /// asked for (or, never asked, after the flow first saw it) is the owner's
 /// to hear of.
@@ -117,9 +118,8 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
                 }
                 let description = format!("Waiting for {name}'s review of this commit");
                 let head = head_short(f);
-                if f.by_app {
-                    let why =
-                        format!("{head} was pushed to an App's PR, reviewed only when asked.");
+                if f.head_by_app {
+                    let why = format!("{head} was pushed by an App, reviewed only when asked.");
                     return ask(f, m, now, &why, &description);
                 }
                 if age >= QUIET {
@@ -206,6 +206,16 @@ fn findings(
 
 fn concede(why: &str) -> Look {
     Look::Next(decide::at(Stage::Review, Step::Concede, why))
+}
+
+/// Whether an App put the head on the branch: the account that pushed it,
+/// as GitHub's activity says, or, with no push of it on record (an App's PR
+/// opened on it, or a push the activity hasn't caught up with yet), the
+/// account that opened the PR. Who opened the PR says nothing of a head
+/// someone else pushed since: a fix job's App push to a person's PR is
+/// still reviewed only when asked.
+pub(super) fn by_app(opener: &crate::api::User, pusher: Option<&crate::api::User>) -> bool {
+    pusher.unwrap_or(opener).kind == "Bot"
 }
 
 fn head_short(f: &Facts) -> &str {
