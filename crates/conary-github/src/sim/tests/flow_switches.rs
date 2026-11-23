@@ -340,3 +340,51 @@ fn a_hold_stops_its_work_when_its_read_fails() {
         b"held\n"
     );
 }
+
+/// Each open PR's wait, with its stage, since when and when it's overdue,
+/// and the owner request it's listed for by its subject key, from the data
+/// directory alone: what burrow's stall watchdog and owner issue read.
+#[test]
+fn status_exports_each_prs_overdue_wait_and_owner_listing() {
+    let c = two();
+    // PR 5 is an outside contribution: the owner is listed for it.
+    c.hub
+        .edit_pull(REPO, 5, |p| p["user"]["login"] = json!("stranger"));
+    let start = jobs::now();
+    c.pass(start, false);
+    let due = start + c.config.settings.stall_after.at(Level::Medium);
+    // PR 3 still waits on its judge past its deadline: overdue.
+    let reports = c.pass(due + 60, false);
+    assert_eq!(reports[0].next.as_ref().unwrap().overdue_at, Some(due));
+    let status = read_status(&c);
+    let scope = &reports[1]
+        .next
+        .as_ref()
+        .unwrap()
+        .owner
+        .as_ref()
+        .unwrap()
+        .key
+        .scope;
+    assert_eq!(
+        status["prs"],
+        json!([
+            {"pr": 3, "wait": {"stage": "review", "wait_on": "Steward", "since": start, "due": due}},
+            {"pr": 5, "owner": {
+                "key": {"door": "outside", "repo": REPO, "pr": 5, "scope": scope},
+                "since": start,
+            }},
+        ]),
+        "{status}"
+    );
+    // A held PR's wait is a stall past the hold's deadline: its hold is
+    // what it waits on, with no stage.
+    c.hub.label(REPO, 3, &["hold"]);
+    let now = due + 120;
+    c.pass(now, false);
+    assert_eq!(
+        read_status(&c)["prs"][0],
+        json!({"pr": 3, "wait": {"stage": null, "wait_on": "Hold", "since": now,
+            "due": now + c.config.settings.hold_stall_after}}),
+    );
+}
