@@ -126,6 +126,99 @@ fn test_only_code_only_and_deleted_tests_need_no_negative() {
     assert!(tree(repo, "HEAD", None).is_err());
 }
 
+/// A base where src/a.rs declares `mod tests;` in src/a/tests.rs, with
+/// another test file and a helper beside them; `change` makes the head from
+/// it, after moving the declared module to src/a/checks/tests/unit.rs and
+/// pointing the declaration there.
+fn moved(change: impl FnOnce(&Path)) -> Plan {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run(repo, &["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src/a/checks/tests")).unwrap();
+    std::fs::create_dir(repo.join("tests")).unwrap();
+    std::fs::write(repo.join("src/a.rs"), "mod tests;\n").unwrap();
+    std::fs::write(repo.join("src/a/tests.rs"), "#[test]\nfn a() {}\n").unwrap();
+    std::fs::write(repo.join("src/a/helper.rs"), "fn helper() {}\n").unwrap();
+    std::fs::write(repo.join("tests/other.rs"), "#[test]\nfn other() {}\n").unwrap();
+    let base = commit(repo);
+    std::fs::rename(
+        repo.join("src/a/tests.rs"),
+        repo.join("src/a/checks/tests/unit.rs"),
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src/a.rs"),
+        "#[path = \"a/checks/tests/unit.rs\"]\nmod tests;\n",
+    )
+    .unwrap();
+    change(repo);
+    let head = commit(repo);
+    plan(repo, &base, &head).unwrap()
+}
+
+#[test]
+fn a_test_file_that_only_moved_needs_no_negative() {
+    let plan = moved(|_| {});
+    assert!(plan.tree.is_none());
+    assert!(plan.tests.is_empty());
+}
+
+/// A case's name, what its head changes beside the move, and the tests its
+/// negative lists.
+type Case<'a> = (&'a str, Box<dyn FnOnce(&Path) + 'a>, &'a [&'a str]);
+
+#[test]
+fn a_move_beside_a_new_or_changed_test_still_needs_a_negative() {
+    use std::os::unix::fs::PermissionsExt;
+    let unit = "src/a/checks/tests/unit.rs";
+    let cases: [Case; 6] = [
+        (
+            "a vacuous test added beside the move",
+            Box::new(|r| std::fs::write(r.join("tests/vacuous.rs"), "").unwrap()),
+            &[unit, "tests/vacuous.rs"],
+        ),
+        (
+            "another test changed beside the move",
+            Box::new(|r| std::fs::write(r.join("tests/other.rs"), "// changed\n").unwrap()),
+            &[unit, "tests/other.rs"],
+        ),
+        (
+            "the moved file's content changed",
+            Box::new(|r| std::fs::write(r.join(unit), "#[test]\nfn b() {}\n").unwrap()),
+            &[unit],
+        ),
+        (
+            "the moved file's mode changed",
+            Box::new(|r| {
+                std::fs::set_permissions(r.join(unit), std::fs::Permissions::from_mode(0o755))
+                    .unwrap()
+            }),
+            &[unit],
+        ),
+        (
+            "one deleted file copied to two test paths",
+            Box::new(|r| {
+                std::fs::copy(r.join(unit), r.join("tests/copy.rs"))
+                    .map(drop)
+                    .unwrap()
+            }),
+            &[unit, "tests/copy.rs"],
+        ),
+        (
+            "an identical file moved in from a path that is no test path",
+            Box::new(|r| {
+                std::fs::rename(r.join("src/a/helper.rs"), r.join("tests/helper.rs")).unwrap()
+            }),
+            &["src/a/checks/tests/unit.rs", "tests/helper.rs"],
+        ),
+    ];
+    for (case, change, tests) in cases {
+        let plan = moved(change);
+        assert!(plan.tree.is_some(), "{case}");
+        assert_eq!(plan.tests, tests, "{case}");
+    }
+}
+
 #[test]
 fn candidate_cannot_forge_jobs_change_checkout_or_replace_the_negative_command() {
     let dir = tempfile::tempdir().unwrap();
