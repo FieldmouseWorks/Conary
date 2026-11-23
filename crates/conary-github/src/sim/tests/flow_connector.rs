@@ -21,22 +21,22 @@ fn a_head_with_no_review_waits_then_asks_once_an_hour() {
     let quiet = c.pass(60);
     assert_eq!(
         (quiet.stage, quiet.step),
-        (Stage::Review, Step::Wait { until: Some(1800) })
+        (Stage::Review, Step::Wait { until: Some(QUIET) })
     );
-    // Half an hour on, it's asked for.
-    let asked = c.pass(1800);
+    // Quiet that long, it's asked for.
+    let asked = c.pass(QUIET);
     assert_eq!(asked.stage, Stage::Review);
     assert!(matches!(&asked.step, Step::AskReview(why) if why.contains(&head(3)[..7])));
     // Asked (as the executor records once GitHub took the comment): not
     // again within the hour, then again.
-    c.memory.asked = Some((head(3), 1800));
+    c.memory.asked = Some((head(3), QUIET));
     assert_eq!(
         c.pass(3000).step,
         Step::Wait {
-            until: Some(1800 + 3600)
+            until: Some(QUIET + 3600)
         }
     );
-    assert!(matches!(c.pass(5400).step, Step::AskReview(_)));
+    assert!(matches!(c.pass(QUIET + 3600).step, Step::AskReview(_)));
     // Asked for another head counts for nothing on this one.
     c.memory.asked = Some((head(2), 5400));
     assert!(matches!(c.view(5401).step, Step::AskReview(_)));
@@ -80,7 +80,7 @@ fn an_apps_head_is_asked_for_on_the_pass_that_first_sees_it() {
 #[test]
 fn a_persons_head_still_waits_quiet_before_its_ask() {
     let mut c = unreviewed();
-    assert_eq!(c.pass(60).step, Step::Wait { until: Some(1800) });
+    assert_eq!(c.pass(60).step, Step::Wait { until: Some(QUIET) });
 }
 
 #[test]
@@ -96,14 +96,14 @@ fn the_owner_hears_two_hours_after_the_first_ask_however_often_asked_again() {
         c.pass(60 + 7200).owner_notice,
         Some(OwnerNotice::NoReviewer)
     );
-    // A person's head asked for after its quiet half hour: from that ask.
+    // A person's head asked for after its quiet: from that ask.
     let mut c = unreviewed();
     c.pass(0);
-    c.memory.asked = Some((head(3), 1800));
-    c.memory.first_asked = Some((head(3), 1800));
+    c.memory.asked = Some((head(3), QUIET));
+    c.memory.first_asked = Some((head(3), QUIET));
     assert_eq!(c.pass(7200).owner_notice, None);
     assert_eq!(
-        c.pass(1800 + 7200).owner_notice,
+        c.pass(QUIET + 7200).owner_notice,
         Some(OwnerNotice::NoReviewer)
     );
     // An ask of another head doesn't hold this one's clock.
@@ -129,8 +129,8 @@ fn a_review_under_way_is_waited_for() {
 fn a_review_ended_with_no_word_on_findings_is_asked_for_again() {
     let mut c = unreviewed();
     c.hub.flow_summary(REMI, 3, "completed", None, 100);
-    assert_eq!(c.pass(600).step, Step::Wait { until: Some(1800) });
-    let asked = c.pass(1800);
+    assert_eq!(c.pass(200).step, Step::Wait { until: Some(QUIET) });
+    let asked = c.pass(QUIET);
     assert_eq!(asked.stage, Stage::Review);
     assert!(matches!(&asked.step, Step::AskReview(_)));
     assert!(!asked.description.contains("is reviewing this commit"));
@@ -159,7 +159,7 @@ fn a_clean_review_of_another_commit_says_nothing_of_the_head() {
         (
             Stage::Review,
             Step::Wait {
-                until: Some(4000 + 1800)
+                until: Some(4000 + QUIET)
             }
         )
     );

@@ -513,7 +513,7 @@ impl crate::flow::Read for Hub {
         &self,
         repo: &str,
         branch: &str,
-    ) -> Result<std::collections::BTreeMap<String, String>, ApiError> {
+    ) -> Result<std::collections::BTreeMap<String, crate::api::User>, ApiError> {
         self.read(Asked::new(Call::Pushes, repo), &[repo, branch], |w| {
             Ok(w.pushes
                 .get(&(repo.into(), branch.into()))

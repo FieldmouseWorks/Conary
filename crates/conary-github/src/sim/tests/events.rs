@@ -257,10 +257,10 @@ fn signed_pull_event_runs_flow_against_hub() {
                     assert_eq!(
                         next.step,
                         Step::Wait {
-                            until: Some(now + 1800)
+                            until: Some(now + crate::flow::QUIET)
                         }
                     );
-                    assert_eq!(next.wait_until, Some(now + 1800));
+                    assert_eq!(next.wait_until, Some(now + crate::flow::QUIET));
                     assert_eq!(c.record().memory.seen, now, "the pass kept what it saw");
                     // It wrote the PR's stage and status on the hub.
                     assert_eq!(

@@ -89,7 +89,7 @@ fn quiet_head_gets_one_review_intention() {
     // review_step.py: ask once the head has gone quiet, then wait on that ask.
     let mut c = Case::new();
     c.hub.remove_flow_reviews(REMI, 3);
-    assert_eq!(c.view(1).step, Step::Wait { until: Some(1800) });
+    assert_eq!(c.view(1).step, Step::Wait { until: Some(QUIET) });
     assert!(matches!(c.view(4000).step, Step::AskReview(_)));
     c.memory.asked = Some((head(3), 4000));
     assert_eq!(c.view(4000).step, Step::Wait { until: Some(7600) });
@@ -142,7 +142,7 @@ fn stale_head_verdict_cannot_land() {
         (
             Stage::Review,
             Step::Wait {
-                until: Some(4000 + 1800)
+                until: Some(4000 + QUIET)
             }
         )
     );
@@ -326,15 +326,17 @@ fn same_wait_keeps_its_deadline() {
 }
 
 #[test]
-fn empty_change_closes_but_bot_closes_its_own() {
-    // landed.py: the result tree is empty; dependency bots close their own.
+fn empty_change_closes_whatever_its_author() {
+    // Conary#600: the result tree is empty, so it's closed, a dependency
+    // update too: its bot may never run again to close it (burrow#792).
     let c = Case::new();
     let tip = c.hub.add(&head(3), "after");
     c.hub.set_branch(REMI, "main", &tip);
     assert_eq!(c.view(4000).step, Step::CloseAlreadyLanded);
-    c.hub
-        .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("dependabot/pkg"));
-    assert_eq!(c.view(4000).step, Step::Wait { until: None });
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["head"]["ref"] = json!("renovate/dependencies")
+    });
+    assert_eq!(c.view(4000).step, Step::CloseAlreadyLanded);
 }
 
 #[test]

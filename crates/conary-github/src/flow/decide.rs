@@ -492,9 +492,7 @@ fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
                 "What its merge would change is not known",
             );
         }
-        Some(true) if f.dependency.is_some() => {
-            return wait(Stage::Merge, None, "Already landed; its bot closes it");
-        }
+        // A dependency update too: its bot may not run again to close it.
         Some(true) => {
             return at(
                 Stage::Merge,

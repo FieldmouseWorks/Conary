@@ -38,7 +38,7 @@ fn lifecycle(train: bool) {
     assert_eq!(
         run(now)[0].next.as_ref().unwrap().step,
         Step::Wait {
-            until: Some(now + 1800)
+            until: Some(now + flow::QUIET)
         }
     );
     assert_eq!(c.hub.count(Call::FlowComment), 0);
@@ -46,7 +46,7 @@ fn lifecycle(train: bool) {
     // No review came: the flow asks the connector for one on the PR, and
     // remembers it asked only once GitHub took the comment.
     assert!(matches!(
-        run(now + 1800)[0].next.as_ref().unwrap().step,
+        run(now + flow::QUIET)[0].next.as_ref().unwrap().step,
         Step::AskReview(_)
     ));
     let asks: Vec<_> = c
@@ -58,7 +58,7 @@ fn lifecycle(train: bool) {
         .filter(|b| b == "@codex review")
         .collect();
     assert_eq!(asks.len(), 1, "{asks:?}");
-    assert_eq!(c.record().memory.asked, Some((head(3), now + 1800)));
+    assert_eq!(c.record().memory.asked, Some((head(3), now + flow::QUIET)));
     assert_eq!(c.hub.count(Call::Land), 0);
     // The connector reviews the head clean, with its producer's receipt.
     c.clean_review();
@@ -389,7 +389,7 @@ fn pass_releases_the_repository_lock_with_an_inherited_descriptor() {
 #[test]
 fn pass_asks_at_once_for_an_apps_head_and_keeps_the_first_ask() {
     // The connector reviews no head of an App's PR unasked, so waiting out
-    // the quiet half hour would only delay it.
+    // the quiet window would only delay it.
     let c = Case::new();
     c.hub
         .edit_pull(REPO, 3, |p| p["user"]["type"] = json!("Bot"));

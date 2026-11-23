@@ -65,7 +65,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64) -> Option<super::decide:
                         .job_login
                         .as_ref()
                         .zip(f.pushes.get(&f.revision.head))
-                        .is_some_and(|(expected, who)| who != expected))
+                        .is_some_and(|(expected, who)| who.login != *expected))
             {
                 return Some(super::decide::at(
                     Stage::Fix,

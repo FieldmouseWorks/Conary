@@ -666,9 +666,10 @@ whose description was edited at or after its head's push (or at all, when
 GitHub can't say when the head was pushed: the earliest check suite on it)
 goes to a judge with the reason `changed` instead of landing on it.
 
-A head with no word yet waits in `review` for half an hour after the flow
+A head with no word yet waits in `review` for five minutes after the flow
 first saw it, then the flow asks for a look (`AskReview`), at most once an
-hour per head. The connector takes that ask from no App, so a configuration
+hour per head. Five minutes only covers the connector's start: a review
+that's coming shows within a minute or two of a person's push. The connector takes that ask from no App, so a configuration
 can name a door that posts it as someone it does take it from:
 
 ```json
@@ -687,9 +688,14 @@ person is the door's alone: on a burrow-managed host it's
 for the repositories in `autoland.askAsOwner.repos`. In any other repository
 the ask is a PR comment of the flow's own: the bare `@codex review` (the
 connector reads any text after it as a task and posts nothing, so the why
-stays in the flow's record), counted as asked only once GitHub took it. A PR
-an App opened (its author a `Bot` account) is asked for on the pass that first
-sees each head, since the connector reviews none of its heads unasked. Two
+stays in the flow's record), counted as asked only once GitHub took it. A
+head an App put on the branch is asked for on the pass that first sees it,
+since the connector reviews no App's push unasked. Who put it there is the
+account GitHub's activity names for the push (a push, force push or the
+branch's creation) that left that head, a `Bot` account being an App; with
+none on record yet, or the activity unread, it's whoever opened the PR. So a
+fix job's App push to a person's PR is asked for at once, and a person's push
+to an App's PR waits its five minutes. Two
 hours after a head's first ask (or, never asked, after the flow first saw it)
 the owner hears of it; asking again doesn't restart that clock. Findings
 with open threads go to a fix; findings whose every thread is answered on

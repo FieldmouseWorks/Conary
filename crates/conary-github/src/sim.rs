@@ -104,7 +104,7 @@ pub(crate) struct World {
     annotations: HashMap<u64, Vec<String>>,
     /// Dispatched workflow runs by repo, as `dispatch` starts them.
     workflow_runs: HashMap<String, Vec<Value>>,
-    pushes: HashMap<(String, String), BTreeMap<String, String>>,
+    pushes: HashMap<(String, String), BTreeMap<String, crate::api::User>>,
     history_limits: HashMap<(String, String), usize>,
     commit_records: HashMap<String, Value>,
     diffs: HashMap<(String, String), String>,
