@@ -335,8 +335,8 @@ fn concessions(record: &mut Record, _: usize) -> &mut super::jobs::Sent {
 }
 
 /// Answer each thread [`conceding`] names as the flow's account, and
-/// resolve it: complete once every answer and resolution reads back, as a
-/// fix's answers are ([`super::publish`]). Then no review round follows on
+/// resolve it once that answer reads back: complete once every answer and
+/// resolution reads back, as a fix's answers are ([`super::publish`]). Then no review round follows on
 /// the head.
 pub(super) fn concede<G: Write>(
     github: &G,
@@ -377,8 +377,7 @@ pub(super) fn concede<G: Write>(
             })
             .collect()
     };
-    let seen = read()?;
-    for ((thread, body), (shown, resolved)) in planned.iter().zip(seen) {
+    for ((thread, body), (shown, _)) in planned.iter().zip(read()?) {
         if !shown {
             super::publish::send_once(
                 record,
@@ -390,7 +389,12 @@ pub(super) fn concede<G: Write>(
                 || github.reply(&repo, f.number, thread, body),
             )?;
         }
-        if !resolved {
+    }
+    // A thread is resolved only once its answer reads back: resolved, it's
+    // no longer what a later pass concedes, so one resolved before its
+    // answer showed would be left unanswered for good.
+    for ((thread, _), (shown, resolved)) in planned.iter().zip(read()?) {
+        if shown && !resolved {
             github.resolve(&repo, f.number, thread)?;
         }
     }

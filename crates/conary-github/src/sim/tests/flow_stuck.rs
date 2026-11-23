@@ -647,25 +647,57 @@ fn a_stall_on_a_pr_the_flow_doesnt_work_goes_to_no_one() {
     }
 }
 
-#[test]
-fn a_concession_cut_short_still_goes_to_the_judge() {
+/// Through real passes, `disputed_p2` set to `judge`, and an answered P2
+/// raised again, unchanged, on thread T2, the reviewer's findings at `now`.
+fn disputed_pass(now: u64) -> pass::Case {
     let mut c = pass::Case::new();
     c.config.settings.disputed_p2 = Disputed::Judge;
     c.config.plugins.judge = Some(pass::example());
-    let p2 = FINDING;
     c.hub
-        .flow_thread_at(REPO, 3, "T1", ("src/lib.rs", 3), (CONNECTOR, p2));
+        .flow_thread_at(REPO, 3, "T1", ("src/lib.rs", 3), (CONNECTOR, FINDING));
     c.hub.flow_thread_comments(
         REPO,
         3,
         "T1",
-        &[(CONNECTOR, p2), (STEWARD, "Answered: it can't happen.")],
+        &[
+            (CONNECTOR, FINDING),
+            (STEWARD, "Answered: it can't happen."),
+        ],
     );
     c.hub.flow_thread(REPO, 3, "T1", true);
     c.hub
-        .flow_thread_at(REPO, 3, "T2", ("src/lib.rs", 5), (CONNECTOR, p2));
-    let now = flow::jobs::now();
+        .flow_thread_at(REPO, 3, "T2", ("src/lib.rs", 5), (CONNECTOR, FINDING));
     c.hub.flow_review(REPO, 3, Verdict::Findings, now);
+    c
+}
+
+#[test]
+fn a_conceded_thread_is_resolved_only_once_its_answer_shows() {
+    let now = flow::jobs::now();
+    let c = disputed_pass(now);
+    // The answer fails on its way up: it may or may not have gone.
+    c.hub.fail(crate::sim::Call::FlowReply);
+    assert_eq!(report(&c, now + 1).next.unwrap().step, Step::Concede);
+    c.hub.heal(crate::sim::Call::FlowReply);
+    // Every pass after, while the answer isn't there, leaves the thread
+    // open for it; once it's sent again and shows, the thread is resolved.
+    for t in [70, 300, 590, 700, 800, 900, 1000] {
+        report(&c, now + t);
+        let t2 = &pass_threads(&c)["T2"];
+        let answered = t2
+            .comments
+            .iter()
+            .any(|c| c.author.as_deref() == Some(STEWARD));
+        assert!(answered || !t2.resolved, "resolved unanswered at +{t}");
+    }
+    let t2 = &pass_threads(&c)["T2"];
+    assert!(t2.resolved && t2.comments.len() == 2, "{t2:?}");
+}
+
+#[test]
+fn a_concession_cut_short_still_goes_to_the_judge() {
+    let now = flow::jobs::now();
+    let c = disputed_pass(now);
     // Its answer goes up, and resolving it fails: the head already owes a
     // judge.
     c.hub.fail(crate::sim::Call::FlowResolve);
