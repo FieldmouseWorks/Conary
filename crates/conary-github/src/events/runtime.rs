@@ -160,8 +160,10 @@ impl Live {
         }
         runtime.pass(ledger, work, queue)
     }
-    /// The worker: a failed pass books its repository's recovery and the
-    /// rest go on. Only the mailbox's own errors stop it. The log names the
+    /// The worker: each repository's pass runs as it comes due, beside the
+    /// other repositories' and never beside another of its own. A failed
+    /// pass books its repository's recovery and the rest go on. Only the
+    /// mailbox's own errors stop it. The log names the
     /// repository and its retry, never an error's text, which no webhook
     /// reaches but a token command's output might.
     pub fn run(
@@ -190,6 +192,17 @@ impl Runtime {
         work: &Work,
         queue: &std::sync::Arc<Queue>,
     ) -> Result<Vec<flow::Report>> {
+        let api = Api::new(&self.api, Tokens::command(&self.token_command)?);
+        self.pass_through(api, ledger, work, queue)
+    }
+    /// [`Self::pass`], asking GitHub through `api`.
+    pub(crate) fn pass_through(
+        &self,
+        api: Api,
+        ledger: &std::path::Path,
+        work: &Work,
+        queue: &std::sync::Arc<Queue>,
+    ) -> Result<Vec<flow::Report>> {
         let repo = self
             .repos
             .iter()
@@ -197,8 +210,7 @@ impl Runtime {
             .ok_or("unlisted repository")?;
         let config = flow::Config::load(self.flow_config.of(repo)?)?;
         let policy = Policy::load(&self.policy)?;
-        let api = Api::new(&self.api, Tokens::command(&self.token_command)?)
-            .with_event_queue(std::sync::Arc::clone(queue));
+        let api = api.with_event_queue(std::sync::Arc::clone(queue));
         let needs_ledger =
             config.settings.train || config.evidence.is_some() || self.anchor_repo.is_some();
         let mut anchored = if needs_ledger {

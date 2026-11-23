@@ -15,7 +15,7 @@ fn kick(queue: &Queue, repo: &str) {
         })
         .unwrap();
 }
-fn booked(at: u64) -> Report {
+pub(super) fn booked(at: u64) -> Report {
     Report {
         repo: "o/r".parse().unwrap(),
         pr: 3,
@@ -313,8 +313,10 @@ fn the_worker_books_a_failed_pass_and_goes_on_serving() {
         })
     };
     let next = || rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(next(), "failed a/x");
-    assert_eq!(next(), "passed o/r");
+    // The two repos' passes run at once, in either order.
+    let mut first = [next(), next()];
+    first.sort();
+    assert_eq!(first, ["failed a/x", "passed o/r"]);
     assert!(queue.recovery("a/x").is_some(), "a/x's recovery is booked");
     kick(&queue, "a/x");
     kick(&queue, "o/r");
