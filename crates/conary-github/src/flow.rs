@@ -74,7 +74,7 @@ pub use pause::{Pause, Scope};
 pub(crate) mod switches;
 pub use switches::{DegradedPr, Held, Holding, InEffect, Status, Switch, status};
 
-mod ledger;
+pub(crate) mod ledger;
 
 mod approval;
 pub use approval::{Door, Labeller, Request, Subject, owner_approval};
