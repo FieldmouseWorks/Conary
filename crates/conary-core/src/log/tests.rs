@@ -100,6 +100,19 @@ fn a_writer_reads_what_another_appended_and_writes_after_it() {
     assert_eq!(ops.len(), 4);
 }
 
+// A copy of the lock's file, as a child forked by another thread holds until
+// it execs, doesn't keep the lock past the writer's end.
+#[test]
+fn a_dropped_lock_is_free_while_a_copy_of_its_file_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let lock = Lock::take(dir.path()).unwrap();
+    let copy = lock.file.try_clone().unwrap();
+    drop(lock);
+    let other = File::open(dir.path().join(LOCK_FILE)).unwrap();
+    assert!(other.try_lock().is_ok(), "the lock outlived its writer");
+    drop(copy);
+}
+
 // What another writer left torn is cut as opening cuts it; a log cut
 // shorter than this writer read, or with a line after it that isn't the
 // next op, is refused.

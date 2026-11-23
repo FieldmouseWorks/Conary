@@ -157,8 +157,12 @@ fn free(effect: Effect) -> Vec<usize> {
     c.hub.watch(move |hub| {
         let call = calls.replace(calls.get() + 1);
         let lock = std::fs::File::open(at.join("lock")).unwrap();
-        if lock.try_lock().is_ok() && !done(effect, hub, &at) {
-            seen.borrow_mut().push(call);
+        if lock.try_lock().is_ok() {
+            if !done(effect, hub, &at) {
+                seen.borrow_mut().push(call);
+            }
+            // Now, not when a child another test forks closes its copy.
+            let _ = lock.unlock();
         }
     });
     c.pass(jobs::now(), false);
@@ -217,7 +221,7 @@ fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
                     }
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                drop(lock);
+                let _ = lock.unlock();
             });
         }
         if wait.load(SeqCst) && !changed.replace(true) && !done(effect, hub, &ledger) {
@@ -338,9 +342,11 @@ fn no_wait_of_a_pass_comes_between_a_look_and_what_it_permits() {
                 let mut waits = 0;
                 let mut at = free[0];
                 while let Some(&next) = free.iter().find(|&&call| call >= at) {
-                    let Some(got) = waited(effect, change, next) else {
-                        break;
-                    };
+                    // Each call left alone found the lock free, so the
+                    // pass waits at every one: none is skipped unseen.
+                    let got = waited(effect, change, next).unwrap_or_else(|| {
+                        panic!("{effect:?}, {change:?}: the pass didn't wait at call {next}")
+                    });
                     waits += 1;
                     if got.acted || got.granted {
                         wrong.push(format!("{effect:?}, {change:?}, at {next}: {got:?}"));
