@@ -256,8 +256,8 @@ pub(crate) fn act<G: Write>(
             Step::StartDeferred(names) => {
                 super::deferred::begin(pass, github, f, names, record, data)?
             }
-            Step::CancelDeferred(nonce) => {
-                super::deferred::cancel(github, f, nonce, pass.now, record, data)?
+            Step::CancelDeferred(dispatch_id) => {
+                super::deferred::cancel(github, f, dispatch_id, pass.now, record, data)?
             }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Recover(recovery) => {

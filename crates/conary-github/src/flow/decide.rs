@@ -58,10 +58,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         m.retry = None;
         m.retry_why = None;
     }
-    if let Some(nonce) = f.deferred_stale.first() {
+    if let Some(dispatch_id) = f.deferred_stale.first() {
         return at(
             Stage::Ci,
-            Step::CancelDeferred(nonce.clone()),
+            Step::CancelDeferred(dispatch_id.clone()),
             "Cancel a deferred check that is obsolete or lost",
         );
     }
@@ -264,10 +264,10 @@ fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
     }
     // Owned deferred runs stop too: whatever was already due to stop first,
     // then what is still running for this head.
-    if let Some(nonce) = f.deferred_stale.first().or(f.deferred_running.first()) {
+    if let Some(dispatch_id) = f.deferred_stale.first().or(f.deferred_running.first()) {
         return Some(at(
             Stage::None,
-            Step::CancelDeferred(nonce.clone()),
+            Step::CancelDeferred(dispatch_id.clone()),
             "Paused or on hold: stopping its deferred checks",
         ));
     }

@@ -12,10 +12,10 @@ impl Write for Hub {
         git_ref: &str,
         inputs: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), ApiError> {
-        let nonce = inputs.get("nonce").cloned().unwrap_or_default();
+        let dispatch_id = inputs.get("dispatch_id").cloned().unwrap_or_default();
         self.write(
             Asked::new(Call::Dispatch, repo),
-            &[repo, workflow, git_ref, &nonce],
+            &[repo, workflow, git_ref, &dispatch_id],
             || {
                 // A run's one job is the check run numbered a tenth of it.
                 let id = self.run_id() * 10;
@@ -27,7 +27,7 @@ impl Write for Hub {
                     .unwrap_or_default();
                 world.workflow_runs.entry(repo.into()).or_default().insert(
                     0,
-                    json!({"id":id,"display_title":format!("conary {nonce}"),
+                    json!({"id":id,"display_title":format!("conary {dispatch_id}"),
                             "status":"queued","conclusion":null,"head_sha":tip,
                             "workflow":workflow,"ref":git_ref,"inputs":inputs}),
                 );

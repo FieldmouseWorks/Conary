@@ -333,7 +333,7 @@ pub(crate) fn authorize<G: Write>(
     Ok(())
 }
 /// One deferred check's evidence: the check run of the owned dispatch's own
-/// workflow run, attested for this head, tree and nonce.
+/// workflow run, attested for this head, tree and dispatch id.
 pub(crate) fn deferred<G: Write>(
     github: &G,
     f: &Facts,
@@ -369,7 +369,7 @@ pub(crate) fn deferred<G: Write>(
         Subject::Deferred {
             commit: head,
             tree: &tree,
-            nonce: &proof.nonce,
+            dispatch_id: &proof.dispatch_id,
         },
         &run,
         trust,

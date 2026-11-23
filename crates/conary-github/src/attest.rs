@@ -178,14 +178,14 @@ pub enum Subject<'a> {
     /// base `base`.
     Negative { base: &'a str, head: &'a str },
     /// A deferred check's gate, run by a dispatched workflow for the
-    /// dispatch `nonce`, on `commit` (whose tree is `tree`). A dispatch runs
+    /// dispatch `dispatch_id`, on `commit` (whose tree is `tree`). A dispatch runs
     /// on the ref it was sent to, so its token's `sha` is not the commit; the
-    /// signed statement names the commit and the nonce instead, and the token
+    /// signed statement names the commit and the dispatch id instead, and the token
     /// still has to be this check run's own job's.
     Deferred {
         commit: &'a str,
         tree: &'a str,
-        nonce: &'a str,
+        dispatch_id: &'a str,
     },
     /// A gate passing on exactly `tree`, by a check run on `commit`, to be
     /// counted for another commit of that tree ([`crate::reuse`]): a push
@@ -549,7 +549,7 @@ fn check(
         Subject::Deferred {
             commit,
             tree,
-            nonce,
+            dispatch_id,
         } => {
             if said("event_name") != "workflow_dispatch" {
                 return Err(format!(
@@ -557,7 +557,7 @@ fn check(
                     said("event_name")
                 ));
             }
-            deferred(&statement, commit, tree, nonce, run)?
+            deferred(&statement, commit, tree, dispatch_id, run)?
         }
     };
     Ok(Claimed {
@@ -711,12 +711,12 @@ fn pass_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
 }
 
 /// A deferred check's statement, as one of `commit`, whose tree is `tree`, for
-/// the dispatch `nonce`, passing as its check run did.
+/// the dispatch `dispatch_id`, passing as its check run did.
 fn deferred(
     statement: &str,
     commit: &str,
     tree: &str,
-    nonce: &str,
+    dispatch_id: &str,
     run: &CheckRun,
 ) -> Result<(Outcome, Option<String>), String> {
     let mut lines = statement.lines();
@@ -727,14 +727,16 @@ fn deferred(
         lines.next(),
         lines.next(),
     ) else {
-        return Err("its statement isn't a deferred run's subject, nonce and predicate".into());
+        return Err(
+            "its statement isn't a deferred run's subject, dispatch id and predicate".into(),
+        );
     };
     if subject != commit {
         return Err(format!("its statement is about {subject}, not {commit}"));
     }
-    if named != nonce {
+    if named != dispatch_id {
         return Err(format!(
-            "its statement is for dispatch {named}, not {nonce}"
+            "its statement is for dispatch {named}, not {dispatch_id}"
         ));
     }
     let predicate: Predicate =

@@ -984,15 +984,15 @@ neutral and startup outcomes remain eligible for recovery at `start_timeout`.
 The permission's attested-evidence rules apply to the check run too.
 
 **The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
-and `nonce`. It must (1) set `run-name: conary ${{ inputs.nonce }}`, so the run
+and `dispatch_id`. It must (1) set `run-name: conary ${{ inputs.dispatch_id }}`, so the run
 can be found, (2) check out `inputs.head` (a dispatch runs on the ref it was
 sent to, never on the PR's head), and (3) in a job named exactly `check` that
 succeeds only if the work passed (GitHub keeps that job's check run on the
 commit the run is on, the dispatched ref's tip, not on the PR's head), sign the result with
-`cn attest deferred HEAD NONCE ...` (the same token, tree and log rules as
+`cn attest deferred HEAD DISPATCH_ID ...` (the same token, tree and log rules as
 `cn attest commit`). The evidence is that job's own check run: the dispatch
 owns it because the job belongs to the run Conary dispatched, and the signed
-statement names the head, its tree and the nonce. The token's `sha` is the
+statement names the head, its tree and the dispatch id. The token's `sha` is the
 dispatched ref's commit and is not held to the head; its `event_name` must be
 `workflow_dispatch` and its check run the job's own. One record has to carry
 all of it: a same-named job of another run, a newer foreign run, or a run on
@@ -1000,12 +1000,12 @@ another head never supplies another dispatch's missing proof, and the
 generic newest-run-by-name rule is not used for these checks.
 
 **Ownership.** Before sending, the dispatch (check, workflow, ref, head,
-nonce, time) is saved in the PR's record, so a restart or a lost response
+dispatch id, time) is saved in the PR's record, so a restart or a lost response
 never causes an immediate duplicate. The workflow and the resolved ref are
 saved with it, so repointing (workflow or ref), or removing the check stops the old run through the same
 stop-and-confirm lifecycle as an obsolete head, and never loses a run that is
 going. Passes read a saved run by its id and look
-for an unseen one by nonce in its workflow's runs created since the earliest
+for an unseen one by dispatch id in its workflow's runs created since the earliest
 such dispatch (every page; a listing GitHub cuts short, or too many pages, is
 an error, never a shorter answer, so absence is never inferred from it). A finished run counts as evidence only once its attestation verifies; until
 then it is only waiting. Missing, invalid, expired or incorrectly scoped

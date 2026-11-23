@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// How one deferred check is started: a `workflow_dispatch` workflow of the
 /// repository, run from `ref` (the default branch if omitted). The workflow
-/// gets the inputs `pr`, `head`, `base`, `check` and `nonce`; see
+/// gets the inputs `pr`, `head`, `base`, `check` and `dispatch_id`; see
 /// docs/flow.md for what it must do with them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -121,7 +121,7 @@ pub struct Dispatch {
     pub head: String,
     /// Unique to this dispatch. The run is titled with it and the signed
     /// evidence of the job names it.
-    pub nonce: String,
+    pub dispatch_id: String,
     pub sent_at: u64,
     /// The workflow run, once seen.
     pub run: Option<u64>,
@@ -162,7 +162,7 @@ pub enum Deferral {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Proof {
     pub name: String,
-    pub nonce: String,
+    pub dispatch_id: String,
     pub run: u64,
     /// The commit the run is on, which hosts its job's check run.
     pub sha: String,
@@ -181,10 +181,10 @@ pub struct DeferredFailure {
 #[derive(Debug, Default)]
 pub(super) struct Observation {
     pub deferrals: BTreeMap<String, Deferral>,
-    /// Nonces of runs to stop: obsolete heads, lost or vacated, and still
+    /// Dispatch ids of runs to stop: obsolete heads, lost or vacated, and still
     /// running.
     pub stale: Vec<String>,
-    /// Nonces of current runs still going and never asked to stop: what a
+    /// Dispatch ids of current runs still going and never asked to stop: what a
     /// pause or a hold asks to stop.
     pub running: Vec<String>,
     /// The earliest moment a dispatch needs another look, whatever else the
@@ -202,21 +202,21 @@ impl Observation {
     pub(super) fn apply(&self, record: &mut Record) -> bool {
         let before = record.dispatches.clone();
         for d in &mut record.dispatches {
-            if let Some((_, run)) = self.adopt.iter().find(|(n, _)| *n == d.nonce) {
+            if let Some((_, run)) = self.adopt.iter().find(|(n, _)| *n == d.dispatch_id) {
                 d.run = Some(*run);
             }
         }
         record
             .dispatches
-            .retain(|d| !self.retire.contains(&d.nonce));
+            .retain(|d| !self.retire.contains(&d.dispatch_id));
         record.dispatches != before
     }
 }
 
-fn titled(run: &crate::api::WorkflowRun, nonce: &str) -> bool {
+fn titled(run: &crate::api::WorkflowRun, dispatch_id: &str) -> bool {
     run.display_title
         .as_deref()
-        .is_some_and(|t| t.split_whitespace().any(|w| w == nonce))
+        .is_some_and(|t| t.split_whitespace().any(|w| w == dispatch_id))
 }
 
 fn lapses(d: &Dispatch, run: Option<&crate::api::WorkflowRun>, c: &DeferredConfig) -> u64 {
@@ -242,7 +242,7 @@ fn failed(run: &crate::api::WorkflowRun) -> bool {
         )
 }
 
-/// Each dispatch's run, by nonce: none while it hasn't been seen. A saved run
+/// Each dispatch's run, by dispatch id: none while it hasn't been seen. A saved run
 /// is read by its id; one not yet seen is looked for in its own workflow's
 /// listing from when the earliest such dispatch was sent.
 fn runs<G: Read + ?Sized>(
@@ -269,10 +269,10 @@ fn runs<G: Read + ?Sized>(
             Some(id) => github.dispatched_run(repo, id)?,
             None => listed
                 .get(d.workflow.as_str())
-                .and_then(|l| l.iter().find(|r| titled(r, &d.nonce)))
+                .and_then(|l| l.iter().find(|r| titled(r, &d.dispatch_id)))
                 .cloned(),
         };
-        run_of.insert(d.nonce.clone(), run);
+        run_of.insert(d.dispatch_id.clone(), run);
     }
     Ok(run_of)
 }
@@ -305,7 +305,7 @@ pub(super) fn hydrate<G: Write>(
 /// Read the dispatches and their evidence. Evidence is a completed, successful
 /// check run that is the job of the owned dispatch's own workflow run, on the
 /// commit the run is on (a dispatch's is its ref's tip, never the PR's head),
-/// that `prove` also accepts as attested for this head, tree and nonce. The
+/// that `prove` also accepts as attested for this head, tree and dispatch id. The
 /// name alone is nothing, a missing run is never a pass, and a candidate
 /// `prove` refuses leaves the dispatch subject to loss and retry.
 pub(super) fn observe<G: Read + Actions + ?Sized>(
@@ -331,29 +331,29 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     let mut unsettled = Vec::new();
     let mut asks: Vec<(Option<u64>, String)> = Vec::new();
     for d in &f.dispatches {
-        let run = run_of[d.nonce.as_str()].as_ref();
+        let run = run_of[d.dispatch_id.as_str()].as_ref();
         if d.run.is_none()
             && let Some(r) = run
         {
-            seen.adopt.push((d.nonce.clone(), r.id));
+            seen.adopt.push((d.dispatch_id.clone(), r.id));
         }
         let lost = now >= lapses(d, run, config);
         let live = run.is_some_and(|r| r.status != "completed");
-        // A complete nonce listing without a match cannot prove that an
+        // A complete dispatch id listing without a match cannot prove that an
         // accepted dispatch will never appear. Only a terminal run or an
         // authoritative lookup of a previously adopted ID settles ownership.
         let settled = !live && (run.is_some() || d.run.is_some());
         let passed = run.is_some_and(|r| r.conclusion.as_deref() == Some("success"));
         if live && (obsolete(d) || lost || d.vacated) && stop_due(d).is_none_or(|t| now >= t) {
-            asks.push((d.cancel_attempted.or(d.cancel_asked), d.nonce.clone()));
+            asks.push((d.cancel_attempted.or(d.cancel_asked), d.dispatch_id.clone()));
         }
         if live && !(obsolete(d) || lost || d.vacated) {
-            seen.running.push(d.nonce.clone());
+            seen.running.push(d.dispatch_id.clone());
         }
         // Unknown obsolete work remains discoverable until its disposition is
         // known. A vacated run is forgotten once stopped, unless it passed.
         if settled && (obsolete(d) || d.vacated && !passed) {
-            seen.retire.insert(d.nonce.clone());
+            seen.retire.insert(d.dispatch_id.clone());
         } else if !settled && (obsolete(d) || live && (lost || d.vacated)) {
             unsettled.push(d);
         }
@@ -365,14 +365,14 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     let here: Vec<&Dispatch> = f
         .dispatches
         .iter()
-        .filter(|d| !obsolete(d) && !seen.retire.contains(&d.nonce))
+        .filter(|d| !obsolete(d) && !seen.retire.contains(&d.dispatch_id))
         .collect();
     for name in config.checks.keys() {
         let owned: Vec<&&Dispatch> = here.iter().filter(|d| &d.check == name).collect();
         let mut proof = None;
         let mut failure = None;
         for d in &owned {
-            let Some(run) = run_of[d.nonce.as_str()].as_ref() else {
+            let Some(run) = run_of[d.dispatch_id.as_str()].as_ref() else {
                 continue;
             };
             if failed(run) {
@@ -404,7 +404,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
                 if github.job(&repo, c.id)?.is_some_and(|j| j.run_id == run.id) {
                     let candidate = Proof {
                         name: name.clone(),
-                        nonce: d.nonce.clone(),
+                        dispatch_id: d.dispatch_id.clone(),
                         run: run.id,
                         sha: run.head_sha.clone(),
                         check_run: c.id,
@@ -443,7 +443,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         } else {
             let wakes: Vec<u64> = owned
                 .iter()
-                .map(|d| lapses(d, run_of[d.nonce.as_str()].as_ref(), config))
+                .map(|d| lapses(d, run_of[d.dispatch_id.as_str()].as_ref(), config))
                 .filter(|t| now < *t)
                 .collect();
             match wakes.into_iter().min() {
@@ -470,16 +470,16 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     let proven = |d: &Dispatch| {
         seen.deferrals.values().any(|s| {
             matches!(s, Deferral::Done { run, .. }
-                if Some(*run) == run_of[d.nonce.as_str()].as_ref().map(|r| r.id))
+                if Some(*run) == run_of[d.dispatch_id.as_str()].as_ref().map(|r| r.id))
         })
     };
     seen.wake = f
         .dispatches
         .iter()
-        .filter(|d| !seen.retire.contains(&d.nonce) && !proven(d))
+        .filter(|d| !seen.retire.contains(&d.dispatch_id) && !proven(d))
         .filter_map(|d| {
-            let run = run_of[d.nonce.as_str()].as_ref();
-            if unsettled.iter().any(|u| u.nonce == d.nonce) {
+            let run = run_of[d.dispatch_id.as_str()].as_ref();
+            if unsettled.iter().any(|u| u.dispatch_id == d.dispatch_id) {
                 // Unknown obsolete work needs discovery; running work needs
                 // independent cancellation recovery, including failed requests.
                 Some(
@@ -508,7 +508,7 @@ pub(super) fn deadline(f: &Facts, dispatches: &[Dispatch], now: u64) -> Option<u
         .filter(|d| {
             !f.dispatches
                 .iter()
-                .any(|o| o.nonce == d.nonce && o.cancel_attempted == d.cancel_attempted)
+                .any(|o| o.dispatch_id == d.dispatch_id && o.cancel_attempted == d.cancel_attempted)
         })
         .flat_map(|d| {
             [
@@ -621,19 +621,19 @@ pub(crate) fn verify<G: Read + Actions + ?Sized>(
         .collect()
 }
 
-fn input(f: &Facts, check: &str, nonce: &str) -> BTreeMap<String, String> {
+fn input(f: &Facts, check: &str, dispatch_id: &str) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("pr".into(), f.number.to_string()),
         ("head".into(), f.revision.head.clone()),
         ("base".into(), f.revision.base.clone()),
         ("check".into(), check.into()),
-        ("nonce".into(), nonce.into()),
+        ("dispatch_id".into(), dispatch_id.into()),
     ])
 }
 
 /// Send the dispatches. Each is saved before it is sent, and a send that fails
 /// leaves it saved: the response may have been lost after GitHub accepted it,
-/// so it is looked for by nonce and only sent again once it has lapsed.
+/// so it is looked for by dispatch id and only sent again once it has lapsed.
 pub(super) fn begin<G: Write>(
     pass: &Pass<'_>,
     github: &G,
@@ -660,7 +660,7 @@ pub(super) fn begin<G: Write>(
             .sequence
             .checked_add(1)
             .ok_or("dispatch sequence exhausted")?;
-        let nonce = format!(
+        let dispatch_id = format!(
             "{}-{}-{}",
             f.number,
             record.sequence,
@@ -674,7 +674,7 @@ pub(super) fn begin<G: Write>(
                 .clone()
                 .unwrap_or_else(|| f.default_branch.clone()),
             head: f.revision.head.clone(),
-            nonce: nonce.clone(),
+            dispatch_id: dispatch_id.clone(),
             sent_at: pass.now,
             run: None,
             cancel_asked: None,
@@ -686,7 +686,7 @@ pub(super) fn begin<G: Write>(
             &f.repo.to_string(),
             &start.workflow,
             &record.dispatches.last().expect("just saved").git_ref,
-            &input(f, name, &nonce),
+            &input(f, name, &dispatch_id),
         )?;
     }
     Ok(())
@@ -699,17 +699,17 @@ pub(super) fn begin<G: Write>(
 pub(super) fn cancel<G: Write>(
     github: &G,
     f: &Facts,
-    nonce: &str,
+    dispatch_id: &str,
     now: u64,
     record: &mut Record,
     data: &Data,
 ) -> Result<()> {
-    let vacated = f.deferred_running.iter().any(|n| n == nonce);
+    let vacated = f.deferred_running.iter().any(|n| n == dispatch_id);
     ask(
         github,
         &f.repo.to_string(),
         f.number,
-        nonce,
+        dispatch_id,
         now,
         vacated,
         record,
@@ -722,7 +722,7 @@ fn ask<G: Write>(
     github: &G,
     repo: &str,
     pr: u64,
-    nonce: &str,
+    dispatch_id: &str,
     now: u64,
     vacated: bool,
     record: &mut Record,
@@ -731,7 +731,7 @@ fn ask<G: Write>(
     let d = record
         .dispatches
         .iter_mut()
-        .find(|d| d.nonce == nonce)
+        .find(|d| d.dispatch_id == dispatch_id)
         .ok_or("dispatch missing")?;
     let run = d.run.ok_or("run not found")?;
     d.cancel_attempted = Some(now);
@@ -741,7 +741,7 @@ fn ask<G: Write>(
     let d = record
         .dispatches
         .iter_mut()
-        .find(|d| d.nonce == nonce)
+        .find(|d| d.dispatch_id == dispatch_id)
         .expect("saved dispatch");
     d.cancel_asked = Some(now);
     data.save(pr, record)?;
@@ -767,27 +767,33 @@ pub(super) fn abandon<G: Write>(
     let run_of = runs(github, repo, &record.dispatches)?;
     let mut finished = BTreeSet::new();
     for d in record.dispatches.clone() {
-        match &run_of[&d.nonce] {
+        match &run_of[&d.dispatch_id] {
             Some(run) if run.status != "completed" => {
-                if let Some(saved) = record.dispatches.iter_mut().find(|o| o.nonce == d.nonce) {
+                if let Some(saved) = record
+                    .dispatches
+                    .iter_mut()
+                    .find(|o| o.dispatch_id == d.dispatch_id)
+                {
                     saved.run = Some(run.id);
                 }
                 if stop_due(&d).is_none_or(|t| now >= t) {
-                    ask(github, repo, pr, &d.nonce, now, true, record, data)?;
+                    ask(github, repo, pr, &d.dispatch_id, now, true, record, data)?;
                 }
             }
             // Finished, or its saved run is gone: settled either way.
             Some(_) => {
-                finished.insert(d.nonce);
+                finished.insert(d.dispatch_id);
             }
             None if d.run.is_some() || now >= d.sent_at.saturating_add(config.start_timeout) => {
-                finished.insert(d.nonce);
+                finished.insert(d.dispatch_id);
             }
             None => {}
         }
     }
     let before = record.dispatches.len();
-    record.dispatches.retain(|d| !finished.contains(&d.nonce));
+    record
+        .dispatches
+        .retain(|d| !finished.contains(&d.dispatch_id));
     if record.dispatches.len() != before {
         data.save(pr, record)?;
     }

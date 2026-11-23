@@ -707,9 +707,9 @@ pub struct Facts {
     pub dispatches: Vec<super::deferred::Dispatch>,
     /// Where each configured deferred check stands for this head.
     pub deferred: BTreeMap<String, super::deferred::Deferral>,
-    /// Nonces of owned runs to cancel.
+    /// Dispatch ids of owned runs to cancel.
     pub deferred_stale: Vec<String>,
-    /// Nonces of owned runs still going that nothing has asked to stop: what
+    /// Dispatch ids of owned runs still going that nothing has asked to stop: what
     /// a pause or a hold stops.
     pub deferred_running: Vec<String>,
     /// Owned current-head failures and their producer diagnostics.
@@ -857,7 +857,7 @@ pub enum Step {
     StopJob(String),
     /// Start these deferred checks, once review is ready.
     StartDeferred(Vec<String>),
-    /// Cancel the owned run with this dispatch nonce.
+    /// Cancel the owned run with this dispatch dispatch id.
     CancelDeferred(String),
     /// Ready a proof's inputs, holding no proof slot.
     Prepare,

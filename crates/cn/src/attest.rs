@@ -51,8 +51,8 @@ pub enum AttestCommand {
     Deferred {
         /// The PR head the dispatch was sent for.
         commit: String,
-        /// The dispatch's nonce, from the workflow's inputs.
-        nonce: String,
+        /// The dispatch id, from the workflow's inputs.
+        dispatch_id: String,
         #[command(flatten)]
         gate: GateArgs,
         #[command(flatten)]
@@ -280,13 +280,13 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
         ),
         AttestCommand::Deferred {
             commit,
-            nonce,
+            dispatch_id,
             gate,
             out,
         } => (
             Claim::Deferred {
                 commit: commit.clone(),
-                nonce: nonce.clone(),
+                dispatch_id: dispatch_id.clone(),
                 result: gate.result()?,
                 tree: gate.tree.clone(),
                 skipped: gate.skipped.clone(),

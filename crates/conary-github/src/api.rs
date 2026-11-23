@@ -114,7 +114,7 @@ pub struct CheckOutput {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowRun {
     pub id: u64,
-    /// The workflow's `run-name`. A dispatched run's carries its nonce.
+    /// The workflow's `run-name`. A dispatched run's carries its dispatch id.
     #[serde(default)]
     pub display_title: Option<String>,
     pub status: String,

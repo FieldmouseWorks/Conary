@@ -58,7 +58,7 @@ fn a_pause_or_hold_stops_a_running_deferred_check() {
         c.clean_review();
         let now = jobs::now();
         assert_eq!(step(&c, now), Step::StartDeferred(vec![HEAVY.into()]));
-        let n = nonce(&c);
+        let n = dispatch_id(&c);
         let run = run_of(&c, &n).unwrap();
         off(&c);
         assert_eq!(quiet_step(&c, now + 1), Step::CancelDeferred(n.clone()));
@@ -98,7 +98,7 @@ fn a_stop_the_pause_asked_for_spends_no_attempt() {
     step(&c, now);
     let lost = now + c.config.settings.deferred.start_timeout + 1;
     c.hub
-        .finish_workflow(REPO, run_of(&c, &nonce(&c)).unwrap(), "cancelled");
+        .finish_workflow(REPO, run_of(&c, &dispatch_id(&c)).unwrap(), "cancelled");
     let next = step(&c, lost);
     assert!(!matches!(next, Step::StartDeferred(_)), "{next:?}");
 }
@@ -109,7 +109,7 @@ fn an_ignored_stop_is_asked_again_while_paused() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let n = nonce(&c);
+    let n = dispatch_id(&c);
     let run = run_of(&c, &n).unwrap();
     c.hub.ignore_cancels(true);
     pause(&c);
@@ -133,7 +133,7 @@ fn a_run_first_seen_during_a_pause_is_stopped() {
     c.hub.cap_run_list(Some(0));
     let now = jobs::now();
     step(&c, now);
-    let n = nonce(&c);
+    let n = dispatch_id(&c);
     pause(&c);
     quiet_step(&c, now + 1);
     assert_eq!(c.hub.count(Call::CancelRun), 0);
@@ -152,7 +152,7 @@ fn an_obsolete_run_is_stopped_while_paused() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let old = nonce(&c);
+    let old = dispatch_id(&c);
     c.hub.push(REPO, 3, &head(4));
     c.hub.refresh_flow(REPO, 3);
     c.good_ci(&head(4));
@@ -168,7 +168,7 @@ fn what_finished_despite_the_stop_is_kept() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let n = nonce(&c);
+    let n = dispatch_id(&c);
     c.hub.ignore_cancels(true);
     pause(&c);
     assert_eq!(quiet_step(&c, now + 1), Step::CancelDeferred(n.clone()));
@@ -180,7 +180,7 @@ fn what_finished_despite_the_stop_is_kept() {
     let next = step(&c, now + 3);
     assert!(!matches!(next, Step::StartDeferred(_)), "{next:?}");
     assert_eq!(c.hub.count(Call::Dispatch), 1);
-    assert!(c.record().dispatches.iter().any(|d| d.nonce == n));
+    assert!(c.record().dispatches.iter().any(|d| d.dispatch_id == n));
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn a_closed_prs_running_check_is_stopped_and_forgotten() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let n = nonce(&c);
+    let n = dispatch_id(&c);
     let run = run_of(&c, &n).unwrap();
     c.hub
         .edit_pull(REPO, 3, |p| p["state"] = serde_json::json!("closed"));
@@ -207,7 +207,7 @@ fn a_rejected_stop_is_asked_again_while_paused() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let n = nonce(&c);
+    let n = dispatch_id(&c);
     let run = run_of(&c, &n).unwrap();
     pause(&c);
     c.hub.fail(Call::CancelRun);

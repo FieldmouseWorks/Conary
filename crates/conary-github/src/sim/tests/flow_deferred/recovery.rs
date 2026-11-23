@@ -8,7 +8,7 @@ fn owned_failures_reach_a_scoped_fix_with_run_diagnostics() {
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        let id = report(&c, &head(3), &nonce(&c), conclusion);
+        let id = report(&c, &head(3), &dispatch_id(&c), conclusion);
         assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Red));
         let paths = c.deferred.0.borrow();
         let invocation: jobs::Invocation =
@@ -42,7 +42,7 @@ fn retryable_terminal_outcomes_wait_until_execution_is_eligible() {
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        let run = run_of(&c, &nonce(&c)).unwrap();
+        let run = run_of(&c, &dispatch_id(&c)).unwrap();
         c.hub.finish_workflow(REPO, run, conclusion);
         let due = now + c.config.settings.deferred.start_timeout;
         let reports = c.pass(now + 1, false);
@@ -69,7 +69,7 @@ fn obsolete_and_foreign_failures_never_reach_a_fix() {
         let now = jobs::now();
         step(&c, now);
         if obsolete {
-            report(&c, &head(3), &nonce(&c), "failure");
+            report(&c, &head(3), &dispatch_id(&c), "failure");
             c.hub.push(REPO, 3, &head(4));
             c.hub.refresh_flow(REPO, 3);
             c.good_ci(&head(4));
@@ -97,7 +97,7 @@ fn proof_read_errors_do_not_spend_another_dispatch_attempt() {
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        report(&c, &head(3), &nonce(&c), "success");
+        report(&c, &head(3), &dispatch_id(&c), "success");
         // Force the signer history lookup, rather than a tip equality shortcut.
         if call == Call::MergeBase {
             // The signer branch's tip may move after the signing job.
@@ -177,7 +177,7 @@ fn unseen_obsolete_dispatches_are_retained_and_late_runs_are_stopped() {
         let now = jobs::now();
         c.hub.cap_run_list(Some(0));
         step(&c, now);
-        let old = nonce(&c);
+        let old = dispatch_id(&c);
         match change {
             "head" => {
                 c.hub.push(REPO, 3, &head(4));
@@ -210,7 +210,7 @@ fn unseen_obsolete_dispatches_are_retained_and_late_runs_are_stopped() {
         let reports = c.pass(late, false);
         assert_eq!(reports[0].error, None, "{change}");
         assert!(
-            c.record().dispatches.iter().any(|d| d.nonce == old),
+            c.record().dispatches.iter().any(|d| d.dispatch_id == old),
             "{change}"
         );
         assert!(
@@ -230,7 +230,7 @@ fn unseen_obsolete_dispatches_are_retained_and_late_runs_are_stopped() {
             "{change}"
         );
         step(&c, late + 61);
-        assert!(!c.record().dispatches.iter().any(|d| d.nonce == old));
+        assert!(!c.record().dispatches.iter().any(|d| d.dispatch_id == old));
     }
 }
 
@@ -241,7 +241,7 @@ fn authorization_preserves_proof_read_errors_for_event_backoff() {
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        report(&c, &head(3), &nonce(&c), "success");
+        report(&c, &head(3), &dispatch_id(&c), "success");
         if after_observation {
             // Observation succeeds; the independent authorization read fails.
             c.hub.race(Call::Artifacts, |h| {
@@ -290,12 +290,19 @@ fn authorization_preserves_proof_read_errors_for_event_backoff() {
 
 #[test]
 fn invalid_missing_expired_and_wrong_scope_proofs_have_bounded_recovery() {
-    for kind in ["missing", "invalid", "expired", "head", "tree", "nonce"] {
+    for kind in [
+        "missing",
+        "invalid",
+        "expired",
+        "head",
+        "tree",
+        "dispatch_id",
+    ] {
         let c = configured();
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        let n = nonce(&c);
+        let n = dispatch_id(&c);
         let id = unsigned(&c, &head(3), &n);
         match kind {
             "missing" => {}
@@ -312,7 +319,7 @@ fn invalid_missing_expired_and_wrong_scope_proofs_have_bounded_recovery() {
                 c.hub
                     .attest(id, &testing::file(&statement, &testing::token(&claims)));
             }
-            "nonce" => sign(&c, &head(3), id, "wrong-nonce"),
+            "dispatch_id" => sign(&c, &head(3), id, "wrong-dispatch_id"),
             "tree" => {
                 let statement = testing::deferred_statement(&head(3), &"0".repeat(40), &n, "pass");
                 let mut claims = testing::claims(REPO, &"9".repeat(40), id, &statement);
@@ -343,8 +350,8 @@ fn a_changed_owned_failure_is_rejected_by_the_scope_reread() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    let run = run_of(&c, &nonce(&c)).unwrap();
-    report(&c, &head(3), &nonce(&c), "failure");
+    let run = run_of(&c, &dispatch_id(&c)).unwrap();
+    report(&c, &head(3), &dispatch_id(&c), "failure");
     c.hub.race(Call::FlowStage, move |h| {
         let mut w = h.world.borrow_mut();
         let r = w
@@ -422,7 +429,7 @@ fn failures_without_a_reviewer_or_a_reported_job_still_reach_repair() {
         }
         let now = jobs::now();
         step(&c, now);
-        let run = run_of(&c, &nonce(&c)).unwrap();
+        let run = run_of(&c, &dispatch_id(&c)).unwrap();
         c.hub.finish_workflow(REPO, run, "failure");
         assert_eq!(step(&c, now + 1), Step::HandFix(Kind::Red));
         let invocation: jobs::Invocation =
@@ -468,7 +475,7 @@ fn deferred_startup_suites_recover_while_ordinary_startup_failures_still_reach_r
         c.clean_review();
         let now = jobs::now();
         step(&c, now);
-        let run = run_of(&c, &nonce(&c)).unwrap();
+        let run = run_of(&c, &dispatch_id(&c)).unwrap();
         c.hub.finish_workflow(REPO, run, "startup_failure");
         c.hub.edit_flow(REPO, 3, |s| {
             s.suites.insert(
@@ -556,7 +563,7 @@ fn proof_read_errors_still_retry_when_the_dispatch_budget_is_exhausted() {
     c.clean_review();
     let now = jobs::now();
     step(&c, now);
-    report(&c, &head(3), &nonce(&c), "success");
+    report(&c, &head(3), &dispatch_id(&c), "success");
     c.hub.fail(Call::Artifacts);
     let late = now + c.config.settings.deferred.start_timeout + 1;
     assert!(c.pass(late, false)[0].error.is_some());
@@ -573,9 +580,9 @@ fn a_failed_attempt_can_be_repaired_while_another_attempt_is_stopping() {
     let now = jobs::now();
     c.hub.cap_run_list(Some(0));
     step(&c, now);
-    let first = nonce(&c);
+    let first = dispatch_id(&c);
     step(&c, now + c.config.settings.deferred.start_timeout);
-    let second = nonce(&c);
+    let second = dispatch_id(&c);
     c.hub.cap_run_list(None);
     report(&c, &head(3), &first, "failure");
     c.hub.ignore_cancels(true);

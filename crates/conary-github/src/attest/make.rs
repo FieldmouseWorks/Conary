@@ -121,11 +121,11 @@ pub enum Claim {
         skipped: Vec<String>,
         log: Log,
     },
-    /// A deferred check's gate for the dispatch `nonce`, on `commit`, run on
+    /// A deferred check's gate for the dispatch `dispatch_id`, on `commit`, run on
     /// `tree`.
     Deferred {
         commit: String,
-        nonce: String,
+        dispatch_id: String,
         result: Gate,
         tree: String,
         skipped: Vec<String>,
@@ -251,15 +251,15 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
         }
         Claim::Deferred {
             commit,
-            nonce,
+            dispatch_id,
             result,
             tree,
             skipped,
             log,
         } => {
             ids(&[commit, tree])?;
-            if nonce.is_empty() || nonce.contains(char::is_whitespace) {
-                return Err(format!("{nonce:?} isn't a dispatch nonce"));
+            if dispatch_id.is_empty() || dispatch_id.contains(char::is_whitespace) {
+                return Err(format!("{dispatch_id:?} isn't a dispatch id"));
             }
             let predicate = GatePredicate {
                 result: result.word(),
@@ -271,7 +271,7 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
             };
             (
                 "conary-deferred",
-                format!("conary deferred v1\n{commit}\n{nonce}\n"),
+                format!("conary deferred v1\n{commit}\n{dispatch_id}\n"),
                 json(&predicate),
                 GATE_TYPE,
             )

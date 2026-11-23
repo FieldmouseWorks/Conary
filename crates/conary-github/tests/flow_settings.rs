@@ -150,6 +150,7 @@ fn every_spender_defaults_off_and_a_new_one_that_starts_on_fails() {
     assert_eq!(
         spenders,
         [
+            "DeferredConfig.checks",
             "Plugins.fix",
             "Plugins.job",
             "Plugins.judge",
