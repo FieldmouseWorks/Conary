@@ -123,7 +123,7 @@ fn open() -> (tempfile::TempDir, Store) {
 /// A sync as `cn sync` runs one, gathered, then recorded, that refused
 /// nothing: what it recorded.
 fn synced(store: &mut Store, f: &Hub) -> Result<Vec<Ingested>, IngestError> {
-    let gathered = gather(f, &config(), &repo(), store.lock().dir())?;
+    let gathered = gather(f, &config(), &repo(), store.dir())?;
     let got = sync(store, f, gathered)?;
     assert_eq!(got.refused, []);
     Ok(got.ingested)
@@ -586,7 +586,7 @@ fn ingest_refuses_to_run_without_the_steward_configured() {
             Err(IngestError::Config(_))
         ));
         assert!(matches!(
-            gather(&f, &config, &repo(), store.lock().dir()),
+            gather(&f, &config, &repo(), store.dir()),
             Err(IngestError::Config(_))
         ));
         assert!(matches!(

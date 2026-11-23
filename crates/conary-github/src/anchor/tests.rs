@@ -156,6 +156,247 @@ fn every_write_checks_the_anchor_on_github_and_moves_it_on() {
     assert_eq!(verify(dir.path(), &made.key, &f, REPO).unwrap(), Some(head));
 }
 
+// Two writers open at once take the lock only for each write and each
+// move: each reads what the other appended, and moves the anchor on from
+// where the other left it, so no op or move is lost.
+#[test]
+fn writers_that_take_turns_keep_every_op_and_the_anchor_at_the_head() {
+    crate::sim::unblocked(60, || {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fake {
+            ledger: RefCell::new(Some(dir.path().to_owned())),
+            ..Fake::default()
+        };
+        let made = init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        let writer = || {
+            let key = log::load_signing_key(&key_path(dir.path())).unwrap();
+            open(dir.path(), key, &f, REPO).unwrap()
+        };
+        let (mut a, mut b) = (writer(), writer());
+        observe(&mut a.store, 1);
+        observe(&mut b.store, 2);
+        a.publish(&f).unwrap();
+        observe(&mut b.store, 3);
+        b.publish(&f).unwrap();
+        observe(&mut a.store, 4);
+        a.publish(&f).unwrap();
+        // Nothing new: the ref already names the head.
+        b.publish(&f).unwrap();
+
+        let ops = log::read(dir.path(), &made.key, None).unwrap();
+        let prs: Vec<u64> = ops
+            .iter()
+            .map(|o| match &o.op.body {
+                Body::Observe { pr, .. } => *pr,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(prs, [1, 2, 3, 4]);
+        let head = Anchor {
+            seq: 4,
+            op: ops[3].id,
+        };
+        assert_eq!(remote(&f).anchor, Some(head));
+        assert_eq!(*f.moves.borrow(), 4);
+        assert_eq!(log::load_anchor(dir.path()).unwrap(), Some(head));
+        for w in [&a, &b] {
+            assert_eq!(w.store.head(), Some(head));
+        }
+        f.ledger.take();
+        assert_eq!(verify(dir.path(), &made.key, &f, REPO).unwrap(), Some(head));
+    });
+}
+
+// A writer open since before another's move checks the ref against the
+// newest check kept beside the log, not its own older one: a ref put back
+// to where it stood when this writer opened is refused, as opening would.
+#[test]
+fn a_ref_put_back_behind_another_writers_move_is_refused() {
+    crate::sim::unblocked(60, || {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fake::default();
+        init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        let opened = f.refs.borrow()[REF].clone();
+        let writer = || {
+            let key = log::load_signing_key(&key_path(dir.path())).unwrap();
+            open(dir.path(), key, &f, REPO).unwrap()
+        };
+        let (mut a, mut b) = (writer(), writer());
+        observe(&mut b.store, 1);
+        b.publish(&f).unwrap();
+        // The ref is put back to where it stood when `a` opened.
+        f.refs.borrow_mut().insert(REF.into(), opened);
+        observe(&mut a.store, 2);
+        assert!(matches!(a.publish(&f), Err(AnchorError::Lost(_))));
+    });
+}
+
+/// A ledger after a publisher moved the ref and stopped before it kept the
+/// copy: `acked` is the move the copy names, the ref is one past it.
+struct Unkept {
+    dir: tempfile::TempDir,
+    f: Fake,
+    acked: Kept,
+    /// A writer open since before that move.
+    earlier: Anchored,
+}
+
+impl Unkept {
+    /// With `ops` published before that move, and with or without the commit
+    /// in the copy (one kept before it was recorded has none).
+    fn new(ops: &[u64], named: bool) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fake::default();
+        init(dir.path(), &key_path(dir.path()), &f, REPO).unwrap();
+        write(dir.path(), &f, ops).unwrap();
+        let acked = f.refs.borrow()[REF].clone();
+        let key = log::load_signing_key(&key_path(dir.path())).unwrap();
+        let earlier = open(dir.path(), key, &f, REPO).unwrap();
+        let mut copy = std::fs::read_to_string(log::anchor_path(dir.path())).unwrap();
+        if !named {
+            copy = format!("{}\n", copy.trim_end().rsplit_once(' ').unwrap().0);
+        }
+        write(dir.path(), &f, &[50]).unwrap();
+        std::fs::write(log::anchor_path(dir.path()), copy).unwrap();
+        Self {
+            dir,
+            f,
+            acked,
+            earlier,
+        }
+    }
+
+    fn open(&self) -> Result<Anchored, AnchorError> {
+        let key = log::load_signing_key(&key_path(self.dir.path())).unwrap();
+        open(self.dir.path(), key, &self.f, REPO)
+    }
+
+    fn put_back(&self) {
+        let acked = self.acked.clone();
+        self.f.refs.borrow_mut().insert(REF.into(), acked);
+    }
+
+    /// Whether `a` refuses to publish, leaving the ref where it was put back.
+    fn refuses(&self, a: &mut Anchored) -> bool {
+        observe(&mut a.store, 51);
+        matches!(a.publish(&self.f), Err(AnchorError::Lost(_)))
+            && self.f.refs.borrow()[REF] == self.acked
+    }
+}
+
+/// The states a move can go unkept from: the ledger just set up or with a
+/// move before it, and the copy naming its commit or not.
+const UNKEPT: [(&[u64], bool); 4] = [(&[], true), (&[1], true), (&[], false), (&[1], false)];
+
+// A move that only GitHub had when a writer opened counts as checked from
+// then on, for that writer and every other: the ref put back behind it is
+// refused.
+#[test]
+fn a_ref_put_back_behind_what_an_open_saw_is_refused_to_the_writer_that_opened() {
+    for (ops, named) in UNKEPT {
+        let u = Unkept::new(ops, named);
+        let mut a = u.open().unwrap();
+        u.put_back();
+        assert!(u.refuses(&mut a), "{ops:?}, named: {named}");
+    }
+}
+
+#[test]
+fn a_ref_put_back_behind_what_an_open_saw_is_refused_to_a_writer_open_before() {
+    for (ops, named) in UNKEPT {
+        let mut u = Unkept::new(ops, named);
+        drop(u.open().unwrap());
+        u.put_back();
+        observe(&mut u.earlier.store, 51);
+        assert!(
+            matches!(u.earlier.publish(&u.f), Err(AnchorError::Lost(_))),
+            "{ops:?}, named: {named}"
+        );
+        assert_eq!(u.f.refs.borrow()[REF], u.acked);
+    }
+}
+
+#[test]
+fn a_ref_put_back_behind_what_an_open_saw_is_refused_to_a_writer_opening_after() {
+    for (ops, named) in UNKEPT {
+        let u = Unkept::new(ops, named);
+        drop(u.open().unwrap());
+        u.put_back();
+        assert!(
+            matches!(u.open(), Err(AnchorError::Lost(_))),
+            "{ops:?}, named: {named}"
+        );
+    }
+}
+
+// What publish checks is kept the same way, before its own move can fail.
+#[test]
+fn a_ref_put_back_behind_what_a_failed_publish_saw_is_refused() {
+    for (ops, named) in UNKEPT {
+        let mut u = Unkept::new(ops, named);
+        observe(&mut u.earlier.store, 51);
+        *u.f.fail.borrow_mut() = true;
+        assert!(matches!(u.earlier.publish(&u.f), Err(AnchorError::Api(_))));
+        u.put_back();
+        assert!(
+            matches!(u.earlier.publish(&u.f), Err(AnchorError::Lost(_))),
+            "{ops:?}, named: {named}"
+        );
+        assert!(
+            matches!(u.open(), Err(AnchorError::Lost(_))),
+            "{ops:?}, named: {named}"
+        );
+        assert_eq!(u.f.refs.borrow()[REF], u.acked);
+    }
+}
+
+#[test]
+fn an_open_keeps_a_move_only_once_the_log_holds_it_and_only_when_its_new() {
+    use std::os::unix::fs::MetadataExt;
+    for (ops, named) in UNKEPT {
+        let u = Unkept::new(ops, named);
+        let path = log::anchor_path(u.dir.path());
+        let log_file = log::log_path(u.dir.path());
+        let whole = std::fs::read_to_string(&log_file).unwrap();
+        let copy = std::fs::read(&path).unwrap();
+        // Without the op the ref names, nothing is kept.
+        let cut: String = whole.split_inclusive('\n').take(ops.len()).collect();
+        std::fs::write(&log_file, cut).unwrap();
+        assert!(matches!(
+            u.open(),
+            Err(AnchorError::Store(StoreError::Log(LogError::Unanchored(_))))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), copy);
+
+        std::fs::write(&log_file, whole).unwrap();
+        drop(u.open().unwrap());
+        let tip = u.f.refs.borrow()[REF].clone();
+        assert_eq!(
+            log::load_checked(u.dir.path()).unwrap(),
+            log::Checked {
+                anchor: parse(&tip).unwrap().anchor,
+                at: Some(tip.commit),
+            }
+        );
+        // Readers watch the file, so it's replaced only when there's news.
+        let kept = std::fs::metadata(&path).unwrap().ino();
+        drop(u.open().unwrap());
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), kept);
+    }
+}
+
+// A copy kept before it named a commit may be past a ref put back, which
+// can't be told: keeping the ref's commit doesn't lower what readers check.
+#[test]
+fn an_open_never_lowers_the_anchor_readers_check() {
+    let u = Unkept::new(&[1], false);
+    let newest = remote(&u.f).anchor.unwrap();
+    std::fs::write(log::anchor_path(u.dir.path()), format!("{newest}\n")).unwrap();
+    u.put_back();
+    drop(u.open().unwrap());
+    assert_eq!(log::load_anchor(u.dir.path()).unwrap(), Some(newest));
+}
+
 #[test]
 fn a_log_that_lost_ops_or_its_anchor_is_refused() {
     let f = Fake::default();

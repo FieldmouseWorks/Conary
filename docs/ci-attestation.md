@@ -228,6 +228,18 @@ flake-specific selection below applies only to burrow's workflow.
   (tests alone, no tests, or test files only deleted) it needs none, and the
   job attests that. A change that tidies tests beside code no test of it
   catches is two changes: the tidy alone needs none.
+  A test file that only moved adds no test. An added test path is a move
+  when the same change deletes a test path with the identical mode and blob
+  ID, one deleted file accounting for one added file at most; git's
+  similarity score never counts, so a file edited as it moved, or moved in
+  from a path that is no test path, is a changed test. A PR whose test
+  changes are only such moves and deletions needs none: moving a declared
+  test module (`mod tests;` to a `#[path]`) means editing the code that
+  declares it, and that edit is code changed with no test. Beside any other
+  added or changed test file, the move is listed and put in the negative
+  tree like the rest. The limit: an identical file can read differently at
+  its new path (`super::`, `include_str!` or a `#[path]` of its own resolve
+  from there), and that isn't seen.
 - **The negative tree.** The merge base's tree with the head's version of
   each test file the PR changes: added, changed, or deleted.
 - **What it builds.** The flake's checks whose derivation on the negative

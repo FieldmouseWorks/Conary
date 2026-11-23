@@ -296,7 +296,7 @@ fn malformed_reasons_are_refused_before_recording_instead_of_becoming_ordinary_p
 
 /// A sync as `cn sync` runs one: gathered, then recorded.
 fn synced(store: &mut Store, hub: &Hub) -> Synced {
-    let dir = store.lock().dir().to_owned();
+    let dir = store.dir().to_owned();
     let gathered = ingest::gather(hub, &config(), &repo(), &dir).unwrap();
     ingest::sync(store, hub, gathered).unwrap()
 }

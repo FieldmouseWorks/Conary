@@ -15,6 +15,10 @@ const RUN: &str = r#"while read -r m; do
 done < mods
 "#;
 const PASSES: &str = "true\n";
+/// A passing test file edited as it moved: a byte-identical move adds no
+/// test and asks for no negative at all (`adds_tests`), so a fixture that
+/// is to reach the judging moves this instead.
+const MOVED: &str = "true # moved\n";
 const CATCHES: &str = "grep -qx new value\n";
 
 struct Repo(tempfile::TempDir);
@@ -158,7 +162,7 @@ fn a_moved_module_that_passes_everywhere_is_never_a_catch() {
     repo.remove("src/a/tests.rs");
     repo.write(&[
         ("mods", "b/tests\n"),
-        ("src/b/tests.rs", PASSES),
+        ("src/b/tests.rs", MOVED),
         ("value", "new\n"),
     ]);
     repo.commit();
@@ -215,7 +219,7 @@ fn a_replaced_file_the_old_code_names_by_path_goes_back_beside_it() {
         repo.remove("src/tests.rs");
         repo.write(&[
             ("mods", "path:src/tests/mod.rs\nother/tests\n"),
-            ("src/tests/mod.rs", PASSES),
+            ("src/tests/mod.rs", MOVED),
             ("src/other/tests.rs", stayed),
             ("value", "new\n"),
         ]);
@@ -227,7 +231,9 @@ fn a_replaced_file_the_old_code_names_by_path_goes_back_beside_it() {
 }
 
 /// `x.rs` made `x/mod.rs` under a plain `mod x;`: the old code finds the
-/// replacement, so the negative tree's failure is the new tests'.
+/// replacement, so the negative tree's failure is the new tests'. Each
+/// runs the removal alone (the old content where it went) before the
+/// negative tree, which holds the edited replacement.
 #[test]
 fn a_replaced_file_the_old_code_finds_is_judged_where_it_went() {
     let split = |content: &str| {
@@ -238,7 +244,7 @@ fn a_replaced_file_the_old_code_finds_is_judged_where_it_went() {
         repo.commit();
         repo.judged(&base)
     };
-    assert_eq!(split(PASSES), (Outcome::Pass, 1));
+    assert_eq!(split(MOVED), (Outcome::Pass, 2));
     assert_eq!(split(CATCHES), (Outcome::Fail, 2));
 }
 
@@ -264,7 +270,7 @@ fn a_run_that_breaks_is_never_a_result() {
     repo.remove("src/a/tests.rs");
     repo.write(&[
         ("mods", "b/tests\n"),
-        ("src/b/tests.rs", PASSES),
+        ("src/b/tests.rs", MOVED),
         ("value", "new\n"),
     ]);
     let head = repo.commit();
@@ -289,7 +295,7 @@ fn a_test_file_made_a_directory_leaves_only_the_directory() {
     let repo = Repo::new(&[("mods", "path:tests/x\n"), ("tests/x", PASSES)]);
     let base = repo.commit();
     repo.remove("tests/x");
-    repo.write(&[("tests/x/y", PASSES), ("value", "new\n")]);
+    repo.write(&[("tests/x/y", MOVED), ("value", "new\n")]);
     let head = repo.commit();
     let plan = plan(repo.path(), &base, &head).unwrap();
     let files = git(

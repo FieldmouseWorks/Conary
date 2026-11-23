@@ -55,45 +55,47 @@ const TESTS: &[&str] = &[
     ":(glob)src/test/**",
 ];
 
-fn paths(
-    repo: &std::path::Path,
-    base: &str,
-    head: &str,
-    tests: bool,
-    filter: &str,
-) -> Result<Vec<String>> {
-    let mut args = vec![
-        "diff-tree",
-        "--no-commit-id",
-        "-r",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--name-only",
-        "-z",
-        filter,
-        base,
-        head,
-        "--",
-    ];
-    if tests {
-        args.extend_from_slice(TESTS);
+/// Whether the test changes add or change a test beyond pure moves. An
+/// added test path is a move only when the same revision deletes a test
+/// path with the identical mode and blob ID, each deletion accounting for
+/// one addition at most. No similarity score: a file edited as it moved,
+/// or moved in from a path that is no test path, still counts.
+fn adds_tests(tests: &[removal::Change]) -> bool {
+    let mut deleted = std::collections::HashMap::<(&str, &str), usize>::new();
+    for change in tests.iter().filter(|c| c.deletes) {
+        *deleted
+            .entry((&change.was_mode, &change.was_id))
+            .or_default() += 1;
     }
-    Ok(git(repo, &args)?
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .collect())
+    tests.iter().any(|change| {
+        if change.deletes {
+            return false;
+        }
+        if !change.added {
+            return true;
+        }
+        match deleted.get_mut(&(change.mode.as_str(), change.id.as_str())) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        }
+    })
 }
 
 pub fn plan(repo: &std::path::Path, base: &str, head: &str) -> Result<Plan> {
     oid(base)?;
     oid(head)?;
     let base = git(repo, &["merge-base", base, head])?.trim().to_owned();
-    let tests = paths(repo, &base, head, true, "--diff-filter=ACMT")?;
-    let changes = removal::changes(repo, &base, head)?;
-    let all = paths(repo, &base, head, false, "--diff-filter=ACDMT")?;
-    if tests.is_empty() || all.iter().all(|p| changes.iter().any(|c| &c.path == p)) {
+    let changes = removal::changes(repo, &base, head, true)?;
+    let tests: Vec<String> = changes
+        .iter()
+        .filter(|c| !c.deletes)
+        .map(|c| c.path.clone())
+        .collect();
+    let all = removal::changes(repo, &base, head, false)?;
+    if !adds_tests(&changes) || all.iter().all(|a| changes.iter().any(|c| c.path == a.path)) {
         return Ok(Plan {
             base,
             tree: None,

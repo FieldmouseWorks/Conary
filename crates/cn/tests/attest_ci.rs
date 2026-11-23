@@ -295,7 +295,9 @@ fn a_moved_test_module_is_judged_by_trees_with_it_put_back() {
         std::fs::write(repo.join("tests/a.sh"), "true\n").unwrap();
         std::fs::write(repo.join("tests/c.sh"), "true\n").unwrap();
         let base = commit(&repo);
-        std::fs::rename(repo.join("tests/a.sh"), repo.join("tests/b.sh")).unwrap();
+        // Edited as it moved: a byte-identical move asks for no negative.
+        std::fs::remove_file(repo.join("tests/a.sh")).unwrap();
+        std::fs::write(repo.join("tests/b.sh"), "true # moved\n").unwrap();
         std::fs::write(repo.join("suite"), "tests/b.sh\ntests/c.sh\n").unwrap();
         std::fs::write(repo.join("code"), "new\n").unwrap();
         std::fs::write(repo.join("tests/c.sh"), stayed).unwrap();

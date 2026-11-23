@@ -287,7 +287,7 @@ fn superseding_an_uncertain_head_does_not_block_the_new_revision() {
 fn dry_run_with_a_writable_store_cannot_append_ledger_operations() {
     let c = Case::new();
     c.clean_review();
-    let path = conary_core::log::log_path(c.store.borrow().lock().dir());
+    let path = conary_core::log::log_path(c.store.borrow().dir());
     let before = std::fs::read(&path).unwrap_or_default();
     let anchor = c.store.borrow().head();
     let reports = run(&c, None, true);

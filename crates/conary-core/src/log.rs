@@ -44,7 +44,7 @@ pub enum LogError {
     /// were cut from its end, or it was removed or replaced.
     Unanchored(Anchor),
     /// An earlier append failed partway, so the file may not end where this
-    /// writer thinks it does. Reopening reconciles it.
+    /// writer thinks it does. Taking the lock again reconciles it.
     Poisoned,
     /// No anchor beside the log says which of its ops were written: the
     /// ledger was never set up, or the anchor file was removed or isn't one.
@@ -61,7 +61,7 @@ impl std::fmt::Display for LogError {
             Self::Corrupt { line, reason } => write!(f, "op log line {line}: {reason}"),
             Self::Key(path) => write!(f, "{}: not an ed25519 key", path.display()),
             Self::Unanchored(a) => write!(f, "op log: op {} isn't op {} of the log", a.op, a.seq),
-            Self::Poisoned => f.write_str("op log: an earlier append failed; reopen the log"),
+            Self::Poisoned => f.write_str("op log: an earlier append failed; take the lock again"),
             Self::NoAnchor(path) => write!(
                 f,
                 "{}: no anchor for the op log; `cn init` sets a ledger up, and `cn verify` checks one against GitHub",
@@ -270,8 +270,18 @@ impl std::str::FromStr for Anchor {
 impl Anchor {
     /// Whether `ops`, a whole log, holds this anchor.
     pub fn check(self, ops: &[Op]) -> Result<(), LogError> {
-        match self.seq.checked_sub(1).and_then(|i| ops.get(i)) {
-            Some(op) if op.id == self.op => Ok(()),
+        self.found(
+            self.seq
+                .checked_sub(1)
+                .and_then(|i| ops.get(i))
+                .map(|o| o.id),
+        )
+    }
+
+    /// Whether `at`, the log's `seq`th op if it has one, is this anchor's.
+    fn found(self, at: Option<OpId>) -> Result<(), LogError> {
+        match at {
+            Some(id) if id == self.op => Ok(()),
             _ => Err(LogError::Unanchored(self)),
         }
     }
@@ -300,12 +310,12 @@ enum Tail {
     Torn { at: usize },
 }
 
-/// Verifies one line, the `n`th, as the op after `ops`: all of it, but for
-/// the signature of one that's `marked` ([`Mark`]).
+/// Verifies one line, the `n`th, as the op after `parent`: all of it, but
+/// for the signature of one that's `marked` ([`Mark`]).
 fn verify_line(
     n: usize,
     raw: &[u8],
-    ops: &[Op],
+    parent: Option<OpId>,
     key: &VerifyingKey,
     marked: bool,
 ) -> Result<Op, LogError> {
@@ -326,17 +336,22 @@ fn verify_line(
             .map_err(|_| corrupt("signature doesn't verify against the ledger's key"))?;
     }
     let op: Unsigned = serde_json::from_str(line.op.get()).map_err(|e| corrupt(&e.to_string()))?;
-    if op.parent != ops.last().map(|o| o.id) {
+    if op.parent != parent {
         return Err(corrupt("parent isn't the op before it"));
     }
     Ok(Op { id: line.id, op })
 }
 
 /// Every op in the log's bytes, verified against `key` and its chain: each
-/// signature, but for those of the bytes `mark` vouches for.
+/// signature, but for those of the bytes `mark` vouches for. The bytes may
+/// be the log's from some line on: `before` ops come before them, the last
+/// of them `parent`. A mark vouches only from the log's start, so such
+/// bytes are verified with none.
 fn verify(
     bytes: &[u8],
     key: &VerifyingKey,
+    before: usize,
+    parent: Option<OpId>,
     mark: Option<&Mark>,
 ) -> Result<(Vec<Op>, Tail), LogError> {
     let marked = mark.map_or(0, |m| m.covers(bytes, key));
@@ -347,7 +362,8 @@ fn verify(
     let mut line_end = 0;
     for (i, raw) in lines.into_iter().flatten().enumerate() {
         line_end += raw.len() + 1;
-        let op = verify_line(i + 1, raw, &ops, key, line_end <= marked)?;
+        let after = ops.last().map(|o| o.id).or(parent);
+        let op = verify_line(before + i + 1, raw, after, key, line_end <= marked)?;
         ops.push(op);
     }
     if rest.is_empty() {
@@ -357,7 +373,8 @@ fn verify(
         return Ok((ops, Tail::Torn { at: end }));
     }
     // Complete, so it verifies like any other line or the log is refused.
-    let op = verify_line(ops.len() + 1, rest, &ops, key, false)?;
+    let after = ops.last().map(|o| o.id).or(parent);
+    let op = verify_line(before + ops.len() + 1, rest, after, key, false)?;
     ops.push(op);
     Ok((ops, Tail::Unterminated))
 }
@@ -420,7 +437,7 @@ fn read_past(
     mark: Option<&Mark>,
 ) -> Result<Vec<Op>, LogError> {
     let ops = match fs::read(dir.join(LOG_FILE)) {
-        Ok(bytes) => verify(&bytes, key, mark)?.0,
+        Ok(bytes) => verify(&bytes, key, 0, None, mark)?.0,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
@@ -538,6 +555,13 @@ impl Lock {
     /// Makes `dir` if it isn't there yet, and waits for any other writer.
     pub fn take(dir: &Path) -> Result<Self, LogError> {
         publish_dir(dir)?;
+        Self::again(dir)
+    }
+
+    /// Waits for any other writer, in a directory the lock was taken in
+    /// before: each [`OpLog::writer`] takes it this way, without syncing the
+    /// directories on the way down again.
+    fn again(dir: &Path) -> Result<Self, LogError> {
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -555,15 +579,46 @@ impl Lock {
     }
 }
 
-/// The log, open for appending, under its directory's [`Lock`].
+/// The log, open for appending. It holds its directory's [`Lock`] only
+/// while it writes ([`OpLog::writer`]), so other writers append between its
+/// writes, and each time it takes the lock back it reads what they appended.
 pub struct OpLog {
     file: File,
-    lock: Lock,
+    dir: PathBuf,
     key: SigningKey,
-    head: Option<Anchor>,
+    /// Every op's id, in order: what an anchor is checked against without
+    /// reading the log again.
+    ids: Vec<OpId>,
+    /// The bytes of the file read and verified: where another writer's ops
+    /// start.
+    len: u64,
+    /// The lock, while its caller holds it across writes ([`OpLog::hold`]).
+    held: Option<Lock>,
     poisoned: bool,
     #[cfg(test)]
     fail_next_write: bool,
+}
+
+/// Makes the file end on a whole line after verifying bytes from `from` on,
+/// and returns where it ends.
+fn mend(file: &mut File, from: u64, bytes: &[u8], tail: Tail) -> io::Result<u64> {
+    let end = from + bytes.len() as u64;
+    match tail {
+        Tail::Whole => Ok(end),
+        Tail::Unterminated => {
+            file.write_all(b"\n")?;
+            file.sync_data()?;
+            Ok(end + 1)
+        }
+        Tail::Torn { at } => {
+            // Never a recorded op: its append didn't finish, so nobody
+            // was told it happened. Cutting it keeps the next line whole.
+            let at = from + at as u64;
+            file.set_len(at)?;
+            file.sync_all()?;
+            Ok(at)
+        }
+    }
 }
 
 impl OpLog {
@@ -571,7 +626,8 @@ impl OpLog {
     /// it against `key` and, when there is one, the newest anchor its caller
     /// holds, and returns them with the log ready to append after them.
     /// Nothing in the file changes until it has verified. What verified is
-    /// marked, so the next open checks only the signatures after it.
+    /// marked, so the next open checks only the signatures after it. The lock
+    /// is let go once it's open: each write takes it again.
     pub fn open(
         lock: Lock,
         key: SigningKey,
@@ -590,33 +646,18 @@ impl OpLog {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let mark = Mark::load(&dir);
-        let (ops, tail) = verify(&bytes, &key.verifying_key(), mark.as_ref())?;
+        let (ops, tail) = verify(&bytes, &key.verifying_key(), 0, None, mark.as_ref())?;
         anchor.map_or(Ok(()), |a| a.check(&ops))?;
         verified::keep(&dir, &bytes, &key, mark)?;
-        match tail {
-            Tail::Whole => {}
-            Tail::Unterminated => {
-                file.write_all(b"\n")?;
-                file.sync_data()?;
-            }
-            Tail::Torn { at } => {
-                // Never a recorded op: its append didn't finish, so nobody
-                // was told it happened. Cutting it keeps the next line whole.
-                file.set_len(at as u64)?;
-                file.sync_all()?;
-            }
-        }
-        file.seek(SeekFrom::End(0))?;
-        let head = ops.last().map(|o| Anchor {
-            seq: ops.len(),
-            op: o.id,
-        });
+        let len = mend(&mut file, 0, &bytes, tail)?;
         Ok((
             Self {
                 file,
-                lock,
+                dir,
                 key,
-                head,
+                ids: ops.iter().map(|o| o.id).collect(),
+                len,
+                held: None,
                 poisoned: false,
                 #[cfg(test)]
                 fail_next_write: false,
@@ -625,51 +666,168 @@ impl OpLog {
         ))
     }
 
-    pub fn lock(&self) -> &Lock {
-        &self.lock
-    }
-
     pub fn verifying_key(&self) -> VerifyingKey {
         self.key.verifying_key()
     }
 
+    /// The ledger's directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// The last op written, to anchor the log at.
     pub fn head(&self) -> Option<Anchor> {
-        self.head
+        self.ids.last().map(|&op| Anchor {
+            seq: self.ids.len(),
+            op,
+        })
+    }
+
+    /// Takes the lock again, waiting for any other writer, and returns the
+    /// ops other writers appended since this log last held it, verified as
+    /// the ones after its head: only the bytes past what it read before are
+    /// read, so a write never costs a read of the whole log. A log cut
+    /// shorter than that, or whose next line isn't the op after the head, is
+    /// refused. An append of this log's own that failed is reconciled here,
+    /// the way opening the log reconciles one.
+    pub fn writer(&mut self) -> Result<(Writer<'_>, Vec<Op>), LogError> {
+        let lock = match self.held {
+            Some(_) => None,
+            None => Some(Lock::again(&self.dir)?),
+        };
+        let ops = self.catch_up()?;
+        Ok((Writer { log: self, lock }, ops))
+    }
+
+    /// Takes the lock as [`OpLog::writer`] does and keeps it, every write
+    /// made under it, until [`OpLog::release`] or the log is dropped. Held
+    /// already, it reads nothing new. When what was appended can't be read,
+    /// a lock this call took is let go.
+    pub fn hold(&mut self) -> Result<Vec<Op>, LogError> {
+        let took = self.held.is_none();
+        if took {
+            self.held = Some(Lock::again(&self.dir)?);
+        }
+        let ops = self.catch_up();
+        if ops.is_err() && took {
+            self.held = None;
+        }
+        ops
+    }
+
+    /// Lets the lock [`OpLog::hold`] took go.
+    pub fn release(&mut self) {
+        self.held = None;
+    }
+
+    /// Whether it holds the lock ([`OpLog::hold`]).
+    pub fn holds(&self) -> bool {
+        self.held.is_some()
+    }
+
+    fn catch_up(&mut self) -> Result<Vec<Op>, LogError> {
+        let size = self.file.metadata()?.len();
+        if size < self.len
+            && let Some(head) = self.head()
+        {
+            return Err(LogError::Unanchored(head));
+        }
+        if size == self.len {
+            self.poisoned = false;
+            return Ok(Vec::new());
+        }
+        // Another writer's ops, before any is acknowledged: it may have
+        // failed to sync them.
+        self.file.sync_all()?;
+        self.file.seek(SeekFrom::Start(self.len))?;
+        let mut bytes = Vec::new();
+        (&self.file).read_to_end(&mut bytes)?;
+        let head = self.head();
+        let (ops, tail) = verify(
+            &bytes,
+            &self.key.verifying_key(),
+            self.ids.len(),
+            head.map(|h| h.op),
+            None,
+        )?;
+        self.len = mend(&mut self.file, self.len, &bytes, tail)?;
+        self.ids.extend(ops.iter().map(|o| o.id));
+        self.poisoned = false;
+        Ok(ops)
+    }
+}
+
+/// The log under its lock: what [`OpLog::writer`] returns. The lock goes
+/// when it's dropped, unless the log holds it ([`OpLog::hold`]).
+pub struct Writer<'a> {
+    log: &'a mut OpLog,
+    /// The lock this writer took; none while the log holds its own.
+    lock: Option<Lock>,
+}
+
+impl Writer<'_> {
+    pub fn lock(&self) -> &Lock {
+        self.lock
+            .as_ref()
+            .or(self.log.held.as_ref())
+            .expect("a writer has the lock or its log holds it")
+    }
+
+    /// The last op written, to anchor the log at.
+    pub fn head(&self) -> Option<Anchor> {
+        self.log.head()
+    }
+
+    /// Whether its log holds the lock across writes ([`OpLog::hold`]),
+    /// rather than this writer for its own.
+    pub fn held(&self) -> bool {
+        self.lock.is_none()
+    }
+
+    /// Whether the log holds `anchor`, as it stands under this lock.
+    pub fn check(&self, anchor: Anchor) -> Result<(), LogError> {
+        anchor.found(
+            anchor
+                .seq
+                .checked_sub(1)
+                .and_then(|i| self.log.ids.get(i))
+                .copied(),
+        )
     }
 
     /// Appends one op after the last, signed, and returns it once it's on
     /// disk.
     pub fn append(&mut self, body: Body, at: i64) -> Result<Op, LogError> {
-        if self.poisoned {
+        let log = &mut *self.log;
+        if log.poisoned {
             return Err(LogError::Poisoned);
         }
         let op = Unsigned {
-            parent: self.head.map(|h| h.op),
+            parent: log.ids.last().copied(),
             at,
             body,
         };
         let json = serde_json::to_string(&op).map_err(|e| LogError::Io(io::Error::other(e)))?;
         let id = OpId::of(json.as_bytes());
-        let sig = self.key.sign(id.as_bytes());
+        let sig = log.key.sign(id.as_bytes());
         let line = format!(
             "{{\"id\":\"{id}\",\"sig\":\"{}\",\"op\":{json}}}\n",
             hex(&sig.to_bytes())
         );
-        if let Err(e) = self.write(line.as_bytes()) {
+        if let Err(e) = log.write_line(line.as_bytes()) {
             // The line may be on disk whole, in part or not at all, and only
-            // reopening, which verifies the file again, can tell which.
-            self.poisoned = true;
+            // reading it again, under the lock, can tell which.
+            log.poisoned = true;
             return Err(e.into());
         }
-        self.head = Some(Anchor {
-            seq: self.head.map_or(1, |h| h.seq + 1),
-            op: id,
-        });
+        log.ids.push(id);
+        log.len += line.len() as u64;
         Ok(Op { id, op })
     }
+}
 
-    fn write(&mut self, line: &[u8]) -> io::Result<()> {
+impl OpLog {
+    fn write_line(&mut self, line: &[u8]) -> io::Result<()> {
         #[cfg(test)]
         if std::mem::take(&mut self.fail_next_write) {
             // Half the line reaches the file, then the write fails.

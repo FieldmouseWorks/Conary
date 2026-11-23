@@ -293,7 +293,11 @@ Three rules make it trustworthy:
    test is a file, by its path (`tests/**`, `**/tests.rs`, `**/test_*.py`
    and the like), so a change adds one when it adds or changes a test file
    and changes anything else too: a change of tests alone has the base's
-   code as its own.
+   code as its own. A test file that only moved, its mode and blob
+   unchanged from a test path the change deletes, adds none, so code
+   changed beside a pure move is code changed with no test; an identical
+   file that reads differently at its new path is the limit of that
+   ([the rule](ci-attestation.md#negative-runs)).
    The record comes from burrow's shared CI, which builds the checks that
    read those files on the base with the head's test files, and attests
    whether they failed ([how](ci-attestation.md#negative-runs)). A test
@@ -440,8 +444,9 @@ The log is refused whole if any line fails its id, its signature, its
 parent or its schema, the last line included. A last line with no newline is
 kept if it verifies. Only a line whose JSON stops short is a write that never
 finished (its caller was never told it succeeded), so the next writer cuts it.
-A writer whose append fails partway stops until the log is reopened and
-verified again. A log cut short by whole lines still chains, so its head is
+A writer whose append fails partway appends nothing more until it takes the
+lock again or opens the log again. Either way it reads on from the last op
+it holds, keeps a line written whole and cuts one left half written. A log cut short by whole lines still chains, so its head is
 anchored off the box, at `refs/conary/anchor` in a repository the machine
 names. Each move is a commit naming the ledger's key and its newest op.
 
@@ -450,10 +455,15 @@ names. Each move is a commit naming the ledger's key and its newest op.
   ref already there it takes only the key that ref names, so a lost key or
   directory is refused until the key is back, never replaced by a new
   ledger. A writer never makes a key.
-- Each write takes the ledger's lock, then reads the ref, and refuses another
-  key's ref or a log that doesn't hold the ref's op, before it changes a byte
-  of the log. After writing it moves the ref on, fast-forward only, and keeps
-  a copy beside the log.
+- A writer opens by taking the ledger's lock, then reads the ref, and
+  refuses another key's ref or a log that doesn't hold the ref's op, before
+  it changes a byte of the log. Then it lets the lock go. Each write after
+  that takes the lock again, catches up on what other writers appended and
+  appends, without reading the ref; which writes hold the lock across more
+  than one is [flow.md](flow.md#state-and-workers)'s. When it's done
+  writing, it takes the lock again, reads the ref as it stands now and
+  checks it as it did on opening, then moves it on, fast-forward only, and keeps a
+  copy beside the log.
 - The copy names the ref's commit it was checked against. Every move on the
   ref since that commit, and the commit itself, must name the ledger's key,
   have one parent, go forward and be held by the log, so a ref moved back, by

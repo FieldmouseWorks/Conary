@@ -13,17 +13,18 @@ use super::{Result, TESTS, git};
 /// A test file's change, from the merge base to the head.
 #[derive(Clone)]
 pub(super) struct Change {
-    was_mode: String,
-    was_id: String,
-    mode: String,
-    id: String,
-    deletes: bool,
-    added: bool,
+    pub(super) was_mode: String,
+    pub(super) was_id: String,
+    pub(super) mode: String,
+    pub(super) id: String,
+    pub(super) deletes: bool,
+    pub(super) added: bool,
     pub(super) path: String,
 }
 
-/// The test files' changes, renames as the path left and the path made.
-pub(super) fn changes(repo: &Path, base: &str, head: &str) -> Result<Vec<Change>> {
+/// The files' changes (only the test files' where `tests`), renames as the
+/// path left and the path made.
+pub(super) fn changes(repo: &Path, base: &str, head: &str, tests: bool) -> Result<Vec<Change>> {
     let mut args = vec![
         "diff-tree",
         "--no-commit-id",
@@ -39,13 +40,21 @@ pub(super) fn changes(repo: &Path, base: &str, head: &str) -> Result<Vec<Change>
         head,
         "--",
     ];
-    args.extend_from_slice(TESTS);
+    if tests {
+        args.extend_from_slice(TESTS);
+    }
     let out = git(repo, &args)?;
+    // With -z each entry is ":MODE MODE ID ID STATUS\0PATH\0"; paths may
+    // hold newlines, so only NUL separates them.
     let mut fields = out.split('\0');
     let mut changes = vec![];
     while let Some(meta) = fields.next().filter(|m| !m.is_empty()) {
         let path = fields.next().ok_or("incomplete raw diff")?;
-        let meta: Vec<_> = meta.trim_start_matches(':').split(' ').collect();
+        let meta: Vec<_> = meta
+            .strip_prefix(':')
+            .ok_or("bad raw diff")?
+            .split(' ')
+            .collect();
         let [was_mode, mode, was_id, id, status] = meta[..] else {
             return Err("bad raw diff".into());
         };

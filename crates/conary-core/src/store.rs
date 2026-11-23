@@ -2,14 +2,15 @@
 //! kept in step. Every write is checked against the ledger before it's
 //! appended, so the log only ever holds ops that apply.
 
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
 
-use crate::id::OpId;
+use crate::id::{ChangeId, CommitId, OpId};
 use crate::ledger::{Invalid, Ledger};
-use crate::log::{Anchor, Lock, LogError, OpLog};
-use crate::op::Body;
+use crate::log::{self, Anchor, Lock, LogError, OpLog};
+use crate::op::{Body, Repo};
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -18,6 +19,10 @@ pub enum StoreError {
     Invalid(Invalid),
     /// The log verifies but holds an op that doesn't apply.
     Replay(OpId, Invalid),
+    /// Another writer recorded about what the op is about since it was read
+    /// ([`Store::reading`]), so the op may say it as it was before that;
+    /// nothing was written.
+    Overtaken,
 }
 
 impl std::fmt::Display for StoreError {
@@ -26,6 +31,9 @@ impl std::fmt::Display for StoreError {
             Self::Log(e) => e.fmt(f),
             Self::Invalid(e) => e.fmt(f),
             Self::Replay(id, e) => write!(f, "op {id} in the log doesn't apply: {e}"),
+            Self::Overtaken => {
+                f.write_str("another writer recorded about it since it was read: read it again")
+            }
         }
     }
 }
@@ -38,21 +46,65 @@ impl From<LogError> for StoreError {
     }
 }
 
+/// The ledger open for writing. It holds the writer lock only while it
+/// writes: each op, or each batch under one [`Store::writer`], takes it, and
+/// first reads what other writers appended since, so every op is admitted
+/// against the ledger as the log holds it then. That alone would let a
+/// writer record something as it was before what another recorded while it
+/// read, so an op written without a hold ([`Store::hold`]) is refused once
+/// another writer recorded about the same thing since [`Store::reading`].
 pub struct Store {
     log: OpLog,
     ledger: Ledger,
+    /// An op another writer appended that doesn't apply: the log and the
+    /// ledger no longer agree, so nothing more is written.
+    broken: Option<(OpId, Invalid)>,
+    /// What other writers recorded about since [`Store::reading`].
+    overtaken: HashSet<About>,
+}
+
+/// What an op says something of, as far as another's can make it out of
+/// date. A train's own ops are none's: they're written only under a hold.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum About {
+    Change(ChangeId),
+    /// A commit trunk moved to, by a landing or outside one.
+    Trunk(Repo, CommitId),
+}
+
+impl About {
+    /// All `body` is about. A landing is about its change and, in that
+    /// change's repository as `ledger` holds it, the commit it moved trunk
+    /// to: the same commit an outside move there is about.
+    fn of(ledger: &Ledger, body: &Body) -> impl Iterator<Item = Self> {
+        let moved = match body {
+            Body::Land { change, after, .. } => ledger.change(*change).map(|c| (&c.repo, after)),
+            Body::Outside { repo, after, .. } => Some((repo, after)),
+            _ => None,
+        };
+        let trunk = moved.map(|(repo, after)| Self::Trunk(repo.clone(), after.clone()));
+        body.change().map(Self::Change).into_iter().chain(trunk)
+    }
 }
 
 impl Store {
     /// Opens the ledger in `lock`'s directory for writing, refusing a log
     /// that doesn't hold `anchor`, the newest one its caller holds (and read
-    /// under that lock, so no other writer moved it since).
+    /// under that lock, so no other writer moved it since). The lock is let
+    /// go once it's open.
     pub fn open(lock: Lock, key: SigningKey, anchor: Option<Anchor>) -> Result<Self, StoreError> {
         let (log, ops) = OpLog::open(lock, key, anchor)?;
         let ledger = Ledger::replay(&ops).map_err(|(id, e)| StoreError::Replay(id, e))?;
-        Ok(Self { log, ledger })
+        Ok(Self {
+            log,
+            ledger,
+            broken: None,
+            overtaken: HashSet::new(),
+        })
     }
 
+    /// The ledger as of this store's last write, or its opening: another
+    /// writer's ops are read at the next write.
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
     }
@@ -62,9 +114,146 @@ impl Store {
         self.log.head()
     }
 
-    /// The writer lock this store holds.
+    /// The ledger's directory.
+    pub fn dir(&self) -> &std::path::Path {
+        self.log.dir()
+    }
+
+    /// Takes the writer lock, waiting for any other writer, and applies what
+    /// other writers appended since: a batch of writes, until it's dropped.
+    pub fn writer(&mut self) -> Result<Writer<'_>, StoreError> {
+        self.whole()?;
+        let (log, ops) = self.log.writer()?;
+        Self::catch_up(
+            &mut self.ledger,
+            &mut self.broken,
+            &mut self.overtaken,
+            &ops,
+        )?;
+        Ok(Writer {
+            log,
+            ledger: &mut self.ledger,
+            overtaken: &self.overtaken,
+        })
+    }
+
+    /// The ledger as the log holds it now: what other writers appended since
+    /// this store's last write applied, under the lock for only as long as
+    /// that takes.
+    pub fn refresh(&mut self) -> Result<&Ledger, StoreError> {
+        drop(self.writer()?);
+        Ok(&self.ledger)
+    }
+
+    /// Starts a read that writes are to be decided from, and returns the
+    /// ledger as it stands then. Call it before reading GitHub: what another
+    /// writer records from here on refuses an op of this store's about the
+    /// same change, or the same trunk commit's move ([`StoreError::Overtaken`]).
+    pub fn reading(&mut self) -> Result<&Ledger, StoreError> {
+        self.refresh()?;
+        self.overtaken.clear();
+        Ok(&self.ledger)
+    }
+
+    /// Whether another writer recorded about `change` since
+    /// [`Store::reading`], as far as this store has caught up.
+    pub fn overtaken(&self, change: ChangeId) -> bool {
+        self.overtaken.contains(&About::Change(change))
+    }
+
+    /// Takes the writer lock, applies what other writers appended, and
+    /// holds it, every write after included, until the store is dropped:
+    /// for a writer whose reads, of the ledger and GitHub, must still hold
+    /// when it writes, such as a `cn` command.
+    pub fn hold(&mut self) -> Result<(), StoreError> {
+        self.whole()?;
+        let ops = self.log.hold()?;
+        let caught = Self::catch_up(
+            &mut self.ledger,
+            &mut self.broken,
+            &mut self.overtaken,
+            &ops,
+        );
+        if caught.is_err() {
+            self.log.release();
+        }
+        caught
+    }
+
+    /// [`Store::hold`] through `then` only, such as a train step. Within
+    /// another's hold, `then` just runs.
+    pub fn holding<T>(&mut self, then: impl FnOnce(&mut Self) -> T) -> Result<T, StoreError> {
+        let outer = self.log.holds();
+        self.hold()?;
+        let done = then(self);
+        if !outer {
+            self.log.release();
+        }
+        Ok(done)
+    }
+
+    /// Refuses to write once the log and the ledger disagree.
+    fn whole(&self) -> Result<(), StoreError> {
+        match &self.broken {
+            Some((id, e)) => Err(StoreError::Replay(*id, e.clone())),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies `ops`, other writers' since the last write.
+    fn catch_up(
+        ledger: &mut Ledger,
+        broken: &mut Option<(OpId, Invalid)>,
+        overtaken: &mut HashSet<About>,
+        ops: &[crate::op::Op],
+    ) -> Result<(), StoreError> {
+        for op in ops {
+            if let Err(e) = ledger.check(&op.op.body) {
+                *broken = Some((op.id, e.clone()));
+                return Err(StoreError::Replay(op.id, e));
+            }
+            ledger.apply(op);
+            overtaken.extend(About::of(ledger, &op.op.body));
+        }
+        Ok(())
+    }
+
+    /// Records one op, now.
+    pub fn record(&mut self, body: Body) -> Result<OpId, StoreError> {
+        self.record_at(body, now())
+    }
+
+    pub fn record_at(&mut self, body: Body, at: i64) -> Result<OpId, StoreError> {
+        self.writer()?.record_at(body, at)
+    }
+}
+
+/// The ledger under its writer lock: what [`Store::writer`] returns. The
+/// lock goes when it's dropped.
+pub struct Writer<'a> {
+    log: log::Writer<'a>,
+    ledger: &'a mut Ledger,
+    overtaken: &'a HashSet<About>,
+}
+
+impl Writer<'_> {
+    pub fn ledger(&self) -> &Ledger {
+        self.ledger
+    }
+
+    /// The last op recorded, to anchor the log at.
+    pub fn head(&self) -> Option<Anchor> {
+        self.log.head()
+    }
+
+    /// The writer lock this batch holds.
     pub fn lock(&self) -> &Lock {
         self.log.lock()
+    }
+
+    /// Whether the log holds `anchor`.
+    pub fn check(&self, anchor: Anchor) -> Result<(), LogError> {
+        self.log.check(anchor)
     }
 
     /// Records one op, now.
@@ -74,6 +263,12 @@ impl Store {
 
     pub fn record_at(&mut self, body: Body, at: i64) -> Result<OpId, StoreError> {
         self.ledger.admit(&body).map_err(StoreError::Invalid)?;
+        // Checked after admission, so an op that says only what another
+        // writer already said is the duplicate it always was. Under a hold
+        // what's written was read under it.
+        if !self.log.held() && About::of(self.ledger, &body).any(|a| self.overtaken.contains(&a)) {
+            return Err(StoreError::Overtaken);
+        }
         let op = self.log.append(body, at)?;
         self.ledger.apply(&op);
         Ok(op.id)
@@ -126,6 +321,107 @@ mod tests {
             })
             .unwrap();
         change
+    }
+
+    /// What a writer read before another recorded about it is refused, not
+    /// appended after it as the newer word; what both say is only said once.
+    #[test]
+    fn an_op_decided_before_anothers_about_the_same_thing_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let mut a = open();
+        let (change, other) = (observe(&mut a, 1), observe(&mut a, 2));
+        let revision = |change, head| Body::Revision {
+            change,
+            base: commit('a'),
+            head: commit(head),
+        };
+        let outside = || Body::Outside {
+            repo: repo(),
+            before: None,
+            after: commit('f'),
+        };
+        let mut b = open();
+        a.reading().unwrap();
+        b.record(revision(change, 'c')).unwrap();
+        b.record(outside()).unwrap();
+
+        assert!(matches!(
+            a.record(revision(change, 'b')),
+            Err(StoreError::Overtaken)
+        ));
+        assert!(matches!(a.record(outside()), Err(StoreError::Overtaken)));
+        assert!(matches!(
+            a.record(revision(change, 'c')),
+            Err(StoreError::Invalid(Invalid::Duplicate))
+        ));
+        assert!(a.overtaken(change));
+        // What the other didn't touch is recorded.
+        a.record(revision(other, 'b')).unwrap();
+        // Catching up alone doesn't make an earlier read current.
+        a.refresh().unwrap();
+        assert!(matches!(
+            a.record(revision(change, 'b')),
+            Err(StoreError::Overtaken)
+        ));
+        // Reading again does, and so does reading under a hold.
+        a.reading().unwrap();
+        a.record(revision(change, 'd')).unwrap();
+        b.holding(|b| b.record(revision(change, 'e')))
+            .unwrap()
+            .unwrap();
+    }
+
+    /// One commit trunk moved to gets one verdict: whichever of a landing
+    /// and an outside move another writer recorded there overtakes the other.
+    #[test]
+    fn a_land_and_an_outside_at_one_trunk_commit_overtake_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = || Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+        let mut a = open();
+        let mut changes = Vec::new();
+        for pr in [1, 2] {
+            let change = observe(&mut a, pr);
+            a.record(Body::Revision {
+                change,
+                base: commit('a'),
+                head: commit('b'),
+            })
+            .unwrap();
+            changes.push(change);
+        }
+        let land = |change, after| Body::Land {
+            change,
+            revision: RevisionId::new(&commit('a'), &commit('b')),
+            before: commit('a'),
+            after: commit(after),
+            by: Authority::Status {
+                login: "steward".into(),
+            },
+        };
+        // GitHub ignores case in a repository's name.
+        let outside = |after| Body::Outside {
+            repo: "fieldmouseworks/Burrow".parse().unwrap(),
+            before: None,
+            after: commit(after),
+        };
+        let mut b = open();
+        a.reading().unwrap();
+        b.record(land(changes[0], 'c')).unwrap();
+        assert!(matches!(a.record(outside('c')), Err(StoreError::Overtaken)));
+        assert!(a.overtaken(changes[0]));
+        // Trunk moved where no landing is stays a violation.
+        a.record(outside('d')).unwrap();
+
+        a.reading().unwrap();
+        b.record(outside('e')).unwrap();
+        assert!(matches!(
+            a.record(land(changes[1], 'e')),
+            Err(StoreError::Overtaken)
+        ));
+        // It overtakes a landing there, not the change, or one elsewhere.
+        assert!(!a.overtaken(changes[1]));
+        a.record(land(changes[1], 'f')).unwrap();
     }
 
     /// Each degraded path is written as the op log spells it, and a replay
@@ -538,7 +834,7 @@ mod tests {
         let body: Body = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&body).unwrap(), json);
         let (mut log, _) = OpLog::open(Lock::take(dir.path()).unwrap(), key(), anchor).unwrap();
-        log.append(body, now()).unwrap();
+        log.writer().unwrap().0.append(body, now()).unwrap();
         let anchor = log.head();
         drop(log);
         let path = dir.path().join("ops.jsonl");
