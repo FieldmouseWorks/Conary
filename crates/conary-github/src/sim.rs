@@ -48,6 +48,7 @@ mod fixtures;
 mod flow;
 mod flow_write;
 mod forge;
+mod notes;
 
 pub(crate) use faults::{Call, On};
 
@@ -131,6 +132,8 @@ pub(crate) struct World {
     refs: HashMap<(String, String), crate::anchor::Kept>,
     /// Every commit a ref has been moved to.
     ref_commits: HashMap<String, crate::anchor::Kept>,
+    /// Each repo's notes refs, by repo and name.
+    notes: HashMap<(String, String), crate::notes::Kept>,
 }
 
 #[derive(Clone, Default)]

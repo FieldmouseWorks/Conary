@@ -755,6 +755,7 @@ fn sync_reads_a_closed_pr_again_when_its_base_changed_and_asks_github_once() {
     assert!(synced(&mut store, &f).unwrap().is_empty());
 }
 
+mod pass;
 mod sync;
 mod undo;
 

@@ -310,6 +310,17 @@ enum Tail {
     Torn { at: usize },
 }
 
+thread_local! {
+    static PARSED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many of the log's lines this thread has read, of any log, by any
+/// open, read or catch-up: what a pass pays for the log, which a writer
+/// that reads it once and catches up after pays once.
+pub fn lines_read() -> u64 {
+    PARSED.get()
+}
+
 /// Verifies one line, the `n`th, as the op after `parent`: all of it, but
 /// for the signature of one that's `marked` ([`Mark`]).
 fn verify_line(
@@ -323,6 +334,7 @@ fn verify_line(
         line: n,
         reason: reason.to_owned(),
     };
+    PARSED.set(PARSED.get() + 1);
     let raw = std::str::from_utf8(raw).map_err(|_| corrupt("not UTF-8"))?;
     let line: Line = serde_json::from_str(raw).map_err(|e| corrupt(&e.to_string()))?;
     if OpId::of(line.op.get().as_bytes()) != line.id {

@@ -463,7 +463,11 @@ names. Each move is a commit naming the ledger's key and its newest op.
   than one is [flow.md](flow.md#state-and-workers)'s. When it's done
   writing, it takes the lock again, reads the ref as it stands now and
   checks it as it did on opening, then moves it on, fast-forward only, and keeps a
-  copy beside the log.
+  copy beside the log. A writer that opens once and writes in several
+  turns, letting the lock go between them (`cn sync`, a turn per
+  repository), checks the ref that way each time it takes the lock back
+  for a turn, after catching up and before it appends, and moves it on
+  at the end of each turn.
 - The copy names the ref's commit it was checked against. Every move on the
   ref since that commit, and the commit itself, must name the ledger's key,
   have one parent, go forward and be held by the log, so a ref moved back, by

@@ -180,6 +180,12 @@ impl Store {
         caught
     }
 
+    /// Lets go the lock [`Store::hold`] took: writes after take it each
+    /// for their own again.
+    pub fn release(&mut self) {
+        self.log.release();
+    }
+
     /// [`Store::hold`] through `then` only, such as a train step. Within
     /// another's hold, `then` just runs.
     pub fn holding<T>(&mut self, then: impl FnOnce(&mut Self) -> T) -> Result<T, StoreError> {

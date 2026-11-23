@@ -1,5 +1,5 @@
 use super::*;
-use conary_github::IngestError;
+use conary_github::{ApiError, IngestError};
 use conary_github::anchor::AnchorError;
 use conary_github::undo::UndoError;
 

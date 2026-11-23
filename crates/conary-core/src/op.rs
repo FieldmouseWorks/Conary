@@ -16,6 +16,11 @@ pub struct Repo {
 }
 
 impl Repo {
+    /// Its pull request `pr` on GitHub.
+    pub fn pull_url(&self, pr: u64) -> String {
+        format!("https://github.com/{self}/pull/{pr}")
+    }
+
     fn key(&self) -> (String, String) {
         (
             self.owner.to_ascii_lowercase(),

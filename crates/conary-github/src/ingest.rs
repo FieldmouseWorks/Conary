@@ -153,6 +153,8 @@ impl From<BasesError> for IngestError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ingested {
     pub change: ChangeId,
+    /// The change's PR's number.
+    pub pr: u64,
     /// The PR's head on its base as GitHub shows it now.
     pub revision: RevisionId,
     /// Ops written; 0 when the ledger already held everything.
@@ -235,6 +237,9 @@ pub fn backfill(
 
 mod sync;
 pub use sync::{Gathered, Refused, Synced, gather, sync};
+
+mod pass;
+pub use pass::{Ended, Stopped, Target, sync_all};
 
 pub(crate) fn commit(sha: &str) -> Result<CommitId, IngestError> {
     sha.parse()
@@ -661,6 +666,7 @@ fn record_with_submission(
 
     Ok(Ingested {
         change,
+        pr: pr.number,
         revision,
         recorded: w.recorded,
         settled: is_settled,

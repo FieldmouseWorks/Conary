@@ -312,7 +312,8 @@ pub fn init(
 /// the log holds each of them. The anchor is read under the ledger's lock and
 /// the log isn't touched until it's checked against it. A ref found past the
 /// copy is kept there. Then the lock is let go: the store takes it for each
-/// write, and [`Anchored::publish`] for the move.
+/// write, [`Anchored::hold`] for a batch of them, which checks the ref again
+/// first, and [`Anchored::publish`] for the move.
 pub struct Anchored {
     pub store: Store,
     repo: String,
@@ -349,6 +350,29 @@ pub fn open(
 }
 
 impl Anchored {
+    /// Takes the ledger's lock again, for a writer that let it go after
+    /// [`open`] or its last hold, and holds it until [`Anchored::release`]:
+    /// it catches up on what other writers appended since, then reads the
+    /// ref as it stands and checks it as [`Anchored::publish`] does, before
+    /// anything is written under it. A check that fails lets the lock go.
+    pub fn hold(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
+        let Self { store, repo, key } = self;
+        store.hold()?;
+        let checked = store
+            .writer()
+            .map_err(AnchorError::from)
+            .and_then(|writer| check(&writer, anchors, repo, key).map(drop));
+        if checked.is_err() {
+            store.release();
+        }
+        checked
+    }
+
+    /// Lets go the lock [`Anchored::hold`] took.
+    pub fn release(&mut self) {
+        self.store.release();
+    }
+
     /// Moves the anchor on GitHub to the log's head, and keeps a copy beside
     /// the log for readers, all under the ledger's lock. Other writers may
     /// have written and moved the ref since this one checked it, so the ref
@@ -360,17 +384,7 @@ impl Anchored {
     pub fn publish(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
         let Self { store, repo, key } = self;
         let writer = store.writer()?;
-        let checked = log::load_checked(writer.lock().dir())?;
-        let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
-        same_ledger(repo, &remote, key)?;
-        for a in checkpoints(anchors, repo, &tip, &remote, checked.at.as_deref())?
-            .into_iter()
-            .chain(remote.anchor)
-        {
-            writer.check(a)?;
-        }
-        // Before the move, which can fail.
-        keep(writer.lock(), &checked, &tip, &remote)?;
+        let (tip, remote) = check(&writer, anchors, repo, key)?;
         let head = writer.head();
         let at = if head == remote.anchor {
             tip.commit
@@ -381,6 +395,30 @@ impl Anchored {
         log::save_anchor(writer.lock(), head, &at)?;
         Ok(())
     }
+}
+
+/// Reads the ref as it stands, under `writer`'s lock, and refuses it unless
+/// its tip and every move since the newest check any writer kept beside the
+/// log name this ledger, go forward and are held by the log. Then keeps the
+/// tip as checked, and returns it.
+fn check(
+    writer: &conary_core::store::Writer<'_>,
+    anchors: &dyn Anchors,
+    repo: &str,
+    key: &VerifyingKey,
+) -> Result<(Kept, Remote), AnchorError> {
+    let checked = log::load_checked(writer.lock().dir())?;
+    let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
+    same_ledger(repo, &remote, key)?;
+    for a in checkpoints(anchors, repo, &tip, &remote, checked.at.as_deref())?
+        .into_iter()
+        .chain(remote.anchor)
+    {
+        writer.check(a)?;
+    }
+    // Before the move, which can fail.
+    keep(writer.lock(), &checked, &tip, &remote)?;
+    Ok((tip, remote))
 }
 
 /// Checks the log at `dir` against the anchor on GitHub: the remote check,

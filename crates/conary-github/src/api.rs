@@ -293,6 +293,13 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// Whether `e`, or anything it wraps, is GitHub being unavailable: asked
+/// again later, it may answer.
+pub fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(e), |e| e.source())
+        .any(|e| e.downcast_ref::<ApiError>().is_some_and(|a| a.unavailable))
+}
+
 /// Which of a repo's PRs to list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pulls {
