@@ -87,13 +87,15 @@ dependency and toolchain setup in that command when needed (for example,
 test suite: Conary
 cannot infer which tests an arbitrary command runs. Setup or compilation
 failure inside the command is a failure on the negative tree, just as a
-flake failing to evaluate is; failure constructing the tree or provisioning
-the trusted tool produces no negative evidence. The independent `negative`
+flake failing to evaluate is, unless the tree made it by taking away a test
+file ([below](#a-failure-the-negative-tree-made)); failure constructing the
+tree or provisioning the trusted tool produces no negative evidence. The independent `negative`
 signing job recomputes the tree and test list, names `negative-run` in
 `checks`, and signs the execution job's result. The supplied shell command
 is not copied into the evidence. Passing tests on old code
 make that check red; failing tests or a change needing no negative make it
-green. Fork PRs and unsupported events get no attestations. A run without
+green. A failure that can't be told from the tree's own makes
+`negative-run` red, so `negative` doesn't run and nothing is signed. Fork PRs and unsupported events get no attestations. A run without
 OIDC permission fails closed.
 
 Both signing jobs execute trusted Conary code and pinned actions only, with
@@ -246,8 +248,9 @@ flake-specific selection below applies only to burrow's workflow.
   one. Every other check builds what it built on the base, which passed
   there. If any of those checks fails (a test failing, a check that doesn't
   evaluate, or the tests not compiling against the old code), the new tests
-  failed on the old code. A check the caller's `build-skip` names isn't
-  built here.
+  failed on the old code, unless the tree made that failure
+  ([below](#a-failure-the-negative-tree-made)). A check the caller's
+  `build-skip` names isn't built here.
 - **What runs a test.** Reading a test file isn't running it: a formatter,
   a lint or a secrets scan reads every file. A check says which tests it
   runs as its `testFiles`, git glob pathspecs from the repo's root, in the
@@ -275,7 +278,8 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
 }
 ```
 
-- `result`: `fail` when a check failed on the negative tree, which is what
+- `result`: `fail` when a check failed on the negative tree and the new
+  tests, not a test file it took away, are what fail it, which is what
   rule 2 asks for; `pass` when every one passed and each new test is run by
   one of them; `skipped` when every one built passed but some that read the
   tests weren't built (`build-skip`) or some new tests none of them runs
@@ -304,6 +308,33 @@ joining, and says `fail` or `none`. What it checked is recorded as that
 revision's `negative` evidence, with its attestation, and counted from the
 ledger after: `fail` and `pass` as what the new tests did on the old code,
 `none` as itself.
+
+### A failure the negative tree made
+
+The negative tree takes away each test file the PR deletes, a moved one's
+old path included. Where the old code names that file (a `mod` line, a
+list of test files), the command or check fails there before any test runs,
+whatever the tests assert. So where the PR deletes a test file, a failure
+on the negative tree counts only where the removal isn't its cause: the
+base with only those files taken away passes, or the command fails with
+them put back beside the new tests. Otherwise nothing is attested. The tree,
+the subject and the predicate don't change; the trees that judge a failure
+are never signed.
+
+Both workflows judge by one rule, which
+[burrow's README](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md#a-failure-the-negative-tree-made)
+states in full, with its limits: what a file the PR replaced is (a Rust
+module's other spelling, a file made a directory), and the controls that
+decide whether it stays away or goes back beside its replacement. burrow
+judges each flake check; `attest.yml` judges the whole command, with
+`cn attest prepare-negative` planning the trees by git alone and
+`cn attest judge-negative` running the command on each in its own checkout
+([the rule](../crates/conary-github/src/attest/ci/removal.rs)). The trees of
+old code alone run first, as far as a failure on the negative tree would need
+them, so no new test has run on the machine when they do: nothing one leaves
+behind (a process, a file) can make them pass. So where a PR deletes a test
+file, the command runs on old code alone even where the negative tree
+passes.
 
 ## What doesn't get one
 

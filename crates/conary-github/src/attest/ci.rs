@@ -2,6 +2,8 @@
 //! hooks, filters or programs run while deriving the attested identities.
 use std::process::Command;
 
+pub mod removal;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn git(repo: &std::path::Path, args: &[&str]) -> Result<String> {
@@ -36,6 +38,9 @@ pub struct Plan {
     pub base: String,
     pub tree: Option<String>,
     pub tests: Vec<String>,
+    /// Where the PR deletes a test file, the trees a failure on `tree` is
+    /// judged by. Never signed.
+    pub judging: Option<removal::Judging>,
 }
 
 // These are the path rules documented in ci-attestation.md. Git's glob
@@ -50,79 +55,32 @@ const TESTS: &[&str] = &[
     ":(glob)src/test/**",
 ];
 
-/// One entry of `git diff-tree --raw`: the path, its status letter, and the
-/// mode and blob ID on each side (zeros where a side has no file).
-struct Change {
-    path: String,
-    status: String,
-    old: (String, String),
-    new: (String, String),
-}
-
-fn changes(repo: &std::path::Path, base: &str, head: &str, tests: bool) -> Result<Vec<Change>> {
-    let mut args = vec![
-        "diff-tree",
-        "--no-commit-id",
-        "-r",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--raw",
-        "--no-abbrev",
-        "-z",
-        "--diff-filter=ACDMT",
-        base,
-        head,
-        "--",
-    ];
-    if tests {
-        args.extend_from_slice(TESTS);
-    }
-    let out = git(repo, &args)?;
-    // With -z each entry is ":MODE MODE ID ID STATUS\0PATH\0"; paths may
-    // hold newlines, so only NUL separates them.
-    let mut fields = out.split('\0');
-    let mut changes = vec![];
-    while let Some(meta) = fields.next().filter(|m| !m.is_empty()) {
-        let path = fields.next().ok_or("diff-tree entry without a path")?;
-        let meta: Vec<&str> = meta
-            .strip_prefix(':')
-            .ok_or("malformed diff-tree entry")?
-            .split(' ')
-            .collect();
-        let [old_mode, new_mode, old_id, new_id, status] = meta[..] else {
-            return Err("malformed diff-tree entry".into());
-        };
-        changes.push(Change {
-            path: path.to_owned(),
-            status: status.to_owned(),
-            old: (old_mode.to_owned(), old_id.to_owned()),
-            new: (new_mode.to_owned(), new_id.to_owned()),
-        });
-    }
-    Ok(changes)
-}
-
 /// Whether the test changes add or change a test beyond pure moves. An
 /// added test path is a move only when the same revision deletes a test
 /// path with the identical mode and blob ID, each deletion accounting for
 /// one addition at most. No similarity score: a file edited as it moved,
 /// or moved in from a path that is no test path, still counts.
-fn adds_tests(tests: &[Change]) -> bool {
-    let mut deleted = std::collections::HashMap::<&(String, String), usize>::new();
-    for change in tests.iter().filter(|c| c.status == "D") {
-        *deleted.entry(&change.old).or_default() += 1;
+fn adds_tests(tests: &[removal::Change]) -> bool {
+    let mut deleted = std::collections::HashMap::<(&str, &str), usize>::new();
+    for change in tests.iter().filter(|c| c.deletes) {
+        *deleted
+            .entry((&change.was_mode, &change.was_id))
+            .or_default() += 1;
     }
-    tests.iter().any(|change| match change.status.as_str() {
-        "D" => false,
-        "A" => match deleted.get_mut(&change.new) {
+    tests.iter().any(|change| {
+        if change.deletes {
+            return false;
+        }
+        if !change.added {
+            return true;
+        }
+        match deleted.get_mut(&(change.mode.as_str(), change.id.as_str())) {
             Some(left) if *left > 0 => {
                 *left -= 1;
                 false
             }
             _ => true,
-        },
-        _ => true,
+        }
     })
 }
 
@@ -130,69 +88,28 @@ pub fn plan(repo: &std::path::Path, base: &str, head: &str) -> Result<Plan> {
     oid(base)?;
     oid(head)?;
     let base = git(repo, &["merge-base", base, head])?.trim().to_owned();
-    let test_changes = changes(repo, &base, head, true)?;
-    let changed_tests: Vec<String> = test_changes.iter().map(|c| c.path.clone()).collect();
-    let tests: Vec<String> = test_changes
+    let changes = removal::changes(repo, &base, head, true)?;
+    let tests: Vec<String> = changes
         .iter()
-        .filter(|c| c.status != "D")
+        .filter(|c| !c.deletes)
         .map(|c| c.path.clone())
         .collect();
-    let all = changes(repo, &base, head, false)?;
-    if !adds_tests(&test_changes) || all.iter().all(|c| changed_tests.contains(&c.path)) {
+    let all = removal::changes(repo, &base, head, false)?;
+    if !adds_tests(&changes) || all.iter().all(|a| changes.iter().any(|c| c.path == a.path)) {
         return Ok(Plan {
             base,
             tree: None,
             tests: vec![],
+            judging: None,
         });
     }
-    // A separate index prevents touching the candidate's worktree, hooks,
-    // filters, or configuration-controlled checkout conversions.
-    let temporary = tempfile::tempdir()?;
-    let index = temporary.path().join("index");
-    let run = |cmd: &[&str]| -> Result<String> {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .env("GIT_INDEX_FILE", &index)
-            .args(cmd)
-            .output()?;
-        if !out.status.success() {
-            return Err("negative index construction failed".into());
-        }
-        Ok(String::from_utf8(out.stdout)?.trim().to_owned())
-    };
-    run(&["read-tree", &base])?;
-    // ls-tree supplies modes and blob IDs; update-index --index-info takes
-    // those verbatim and never invokes a candidate's smudge/clean filters.
-    for path in changed_tests {
-        let entry = git(
-            repo,
-            &["ls-tree", "-z", head, "--", &format!(":(literal){path}")],
-        )?;
-        use std::io::Write;
-        use std::process::Stdio;
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .env("GIT_INDEX_FILE", &index)
-            .args(["update-index", "-z", "--index-info"])
-            .stdin(Stdio::piped())
-            .spawn()?;
-        let entry = if entry.is_empty() {
-            format!("0 {}\t{path}\0", "0".repeat(head.len()))
-        } else {
-            entry
-        };
-        child.stdin.take().unwrap().write_all(entry.as_bytes())?;
-        if !child.wait()?.success() {
-            return Err("negative index update failed".into());
-        }
-    }
-    let tree = run(&["write-tree"])?;
+    let tree = removal::tree_with(repo, &base, &changes.iter().collect::<Vec<_>>())?;
+    let judging = removal::judging(repo, &base, &changes)?;
     Ok(Plan {
         base,
         tree: Some(tree),
         tests,
+        judging,
     })
 }
 
