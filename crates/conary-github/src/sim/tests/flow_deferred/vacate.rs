@@ -200,3 +200,49 @@ fn a_closed_prs_running_check_is_stopped_and_forgotten() {
     assert!(c.record().dispatches.is_empty());
     assert_eq!(c.hub.count(Call::CancelRun), 1);
 }
+
+#[test]
+fn a_rejected_stop_is_asked_again_while_paused() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    let n = nonce(&c);
+    let run = run_of(&c, &n).unwrap();
+    pause(&c);
+    c.hub.fail(Call::CancelRun);
+    assert!(c.pass(now + 1, false)[0].error.is_some());
+    assert_eq!(status(&c, run).0, "queued");
+    c.hub.heal(Call::CancelRun);
+    assert_eq!(quiet_step(&c, now + 62), Step::CancelDeferred(n.clone()));
+    assert_eq!(status(&c, run).1.as_deref(), Some("cancelled"));
+}
+
+#[test]
+fn a_closed_prs_ignored_stop_is_asked_again_and_an_unseen_run_is_forgotten() {
+    let c = configured();
+    c.clean_review();
+    let now = jobs::now();
+    step(&c, now);
+    c.hub.ignore_cancels(true);
+    c.hub
+        .edit_pull(REPO, 3, |p| p["state"] = serde_json::json!("closed"));
+    c.pass(now + 1, false);
+    c.pass(now + 2, false);
+    assert_eq!(c.hub.count(Call::CancelRun), 1);
+    c.pass(now + 62, false);
+    assert_eq!(c.hub.count(Call::CancelRun), 2);
+
+    // A dispatch that never shows: looked for until its start timeout.
+    let c = configured();
+    c.clean_review();
+    c.hub.cap_run_list(Some(0));
+    step(&c, now);
+    c.hub
+        .edit_pull(REPO, 3, |p| p["state"] = serde_json::json!("closed"));
+    c.pass(now + 1, false);
+    assert_eq!(c.record().dispatches.len(), 1);
+    c.pass(now + c.config.settings.deferred.start_timeout + 1, false);
+    assert!(c.record().dispatches.is_empty());
+    assert_eq!(c.hub.count(Call::CancelRun), 0);
+}

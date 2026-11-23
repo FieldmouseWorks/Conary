@@ -1033,7 +1033,8 @@ confirmed the check is not replaced, and removal of its configuration cannot
 bypass this wait. The new head starts its own. A PR that is no longer open
 can land nothing and no decision reads it, so each pass, paused or not, asks
 its runs still going to stop the same way and forgets each once it is seen
-finished.
+finished; one never seen is looked for until `start_timeout` and then
+forgotten, since nothing is left to land or replace it.
 
 **Pause and hold.** A paused or held PR vacates its deferred runs as it does
 its workers: once its unanswered workers are asked to stop, each run of its

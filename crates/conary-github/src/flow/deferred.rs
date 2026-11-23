@@ -750,15 +750,18 @@ fn ask<G: Write>(
 
 /// A PR no longer open lands nothing, and no decision of the flow reads it
 /// again: its owned runs still going are asked to stop, again each `RETRY`,
-/// and each is forgotten once its run is seen finished. One never seen stays
-/// discoverable until it is. The stop is a vacating one: should the PR be
-/// reopened first, it spends none of the check's attempts.
+/// and each is forgotten once its run is seen finished. One never seen is
+/// looked for until `start_timeout` lapses and then forgotten: with nothing
+/// left to land or replace it, no wait is worth a listing on every pass. The
+/// stop is a vacating one: should the PR be reopened first, it spends none of
+/// the check's attempts.
 pub(super) fn abandon<G: Write>(
     github: &G,
     repo: &str,
     pr: u64,
     record: &mut Record,
     data: &Data,
+    config: &DeferredConfig,
     now: u64,
 ) -> Result<()> {
     let run_of = runs(github, repo, &record.dispatches)?;
@@ -777,7 +780,7 @@ pub(super) fn abandon<G: Write>(
             Some(_) => {
                 finished.insert(d.nonce);
             }
-            None if d.run.is_some() => {
+            None if d.run.is_some() || now >= d.sent_at.saturating_add(config.start_timeout) => {
                 finished.insert(d.nonce);
             }
             None => {}

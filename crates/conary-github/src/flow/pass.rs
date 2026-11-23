@@ -197,6 +197,7 @@ impl Pass<'_> {
                         pr,
                         &mut record,
                         data,
+                        &self.config.settings.deferred,
                         self.now,
                     )
                 });
