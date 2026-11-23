@@ -251,9 +251,28 @@ pub enum Outcome {
 const TREE_MADE: &str = "the command fails with the test files the old code names taken away, and not with them put back: the tree made that failure, not the new tests. A new test has to fail where the old code runs it: one in a file that moved isn't run there, so leave that file where it was, or fail a test in a file that stayed";
 const NEITHER: &str = "the command isn't seen to pass on the base with a test file the PR replaced away, nor with it beside what replaced it: a failure can be the tree's, not the new tests'. Leave that file where it was";
 
-/// Judge the negative tree by running the command on it and, where it fails
-/// and the PR deletes test files, on the judging trees, each at most once.
-/// `run` says whether the command passed on a tree.
+/// What the old code alone says of the deleted test files, from the trees
+/// that hold no new test.
+enum Old<'a> {
+    /// No test file was deleted.
+    Untouched,
+    /// The base passes with them taken away.
+    PassesWithout,
+    /// It passes with them back this way, beside what replaced them.
+    PassesBeside(&'a Judging, &'a Trial),
+    /// It passes no way the trees try.
+    Neither,
+}
+
+/// Judge the negative tree by running the command on it and, where the PR
+/// deletes test files, on the judging trees, each at most once. `run` says
+/// whether the command passed on a tree.
+///
+/// The trees of old code alone run first, as far as a failure on the
+/// negative tree would need them: when they run, no new test has run on
+/// the machine, so nothing one leaves behind (a process, a file) can make
+/// one pass. Every tree run after the negative tree holds all the new tests
+/// it does, so what's left behind there the tests could do themselves.
 pub fn judge(
     negative: &str,
     judging: Option<&Judging>,
@@ -268,27 +287,36 @@ pub fn judge(
         seen.insert(tree.to_owned(), passed);
         Ok(passed)
     };
+    let old = match judging {
+        None => Old::Untouched,
+        Some(j) if passes(&j.removed)? => Old::PassesWithout,
+        Some(j) => {
+            let mut old = Old::Neither;
+            for t in &j.restored {
+                if passes(&t.control)? {
+                    old = Old::PassesBeside(j, t);
+                    break;
+                }
+            }
+            old
+        }
+    };
     if passes(negative)? {
         return Ok(Outcome::Pass);
     }
-    let Some(j) = judging else {
-        return Ok(Outcome::Fail);
-    };
-    // The removal alone doesn't break it: the new tests do.
-    if passes(&j.removed)? {
-        return Ok(Outcome::Fail);
-    }
-    for t in &j.restored {
-        if !passes(&t.control)? {
-            continue;
-        }
+    Ok(match old {
+        // The removal alone doesn't break it: the new tests do.
+        Old::Untouched | Old::PassesWithout => Outcome::Fail,
+        Old::Neither => Outcome::Unsure(NEITHER),
         // No new test is in the base, nor in a control that passed.
-        if t.tree == j.base || t.tree == t.control || passes(&t.tree)? {
-            return Ok(Outcome::Unsure(TREE_MADE));
+        Old::PassesBeside(j, t) => {
+            if t.tree == j.base || t.tree == t.control || passes(&t.tree)? {
+                Outcome::Unsure(TREE_MADE)
+            } else {
+                Outcome::Fail
+            }
         }
-        return Ok(Outcome::Fail);
-    }
-    Ok(Outcome::Unsure(NEITHER))
+    })
 }
 
 #[cfg(test)]

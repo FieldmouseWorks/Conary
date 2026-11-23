@@ -47,9 +47,9 @@ impl Repo {
         git(repo, &[&id[..], &["commit", "-qm", "c"]].concat()).unwrap();
         git(repo, &["rev-parse", "HEAD"]).unwrap().trim().to_owned()
     }
-    /// The command on a tree, as a negative run would run it.
-    fn passes(&self, tree: &str) -> bool {
-        let dir = tempfile::tempdir().unwrap();
+    /// A tree's files in `dir`, as a negative run checks one out.
+    fn extract(&self, tree: &str, dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
         let archive = Command::new("git")
             .arg("-C")
             .arg(self.path())
@@ -58,7 +58,7 @@ impl Repo {
             .unwrap();
         let mut tar = Command::new("tar")
             .args(["-x", "-C"])
-            .arg(dir.path())
+            .arg(dir)
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
@@ -69,26 +69,80 @@ impl Repo {
             .write_all(&archive.stdout)
             .unwrap();
         assert!(tar.wait().unwrap().success());
-        Command::new("bash")
-            .arg("run.sh")
-            .current_dir(dir.path())
-            .status()
-            .unwrap()
-            .success()
+    }
+    /// The command on a tree, as a negative run would run it.
+    fn passes(&self, tree: &str) -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        self.extract(tree, dir.path());
+        run_in(dir.path())
     }
     /// What the negative says of the PR from `base` to the head, and the
     /// trees it ran the command on.
     fn judged(&self, base: &str) -> (Outcome, usize) {
+        let (outcome, runs) = self.judged_by(base, |tree| self.passes(tree));
+        (outcome, runs.len())
+    }
+    /// The same with each run made by `passes`, and the trees in the order
+    /// it ran them, checked to run no tree of old code alone after a tree
+    /// with the new tests in it.
+    fn judged_by(
+        &self,
+        base: &str,
+        mut passes: impl FnMut(&str) -> bool,
+    ) -> (Outcome, Vec<String>) {
         let head = git(self.path(), &["rev-parse", "HEAD"]).unwrap();
         let plan = plan(self.path(), base, head.trim()).unwrap();
-        let mut runs = 0;
-        let outcome = judge(&plan.tree.unwrap(), plan.judging.as_ref(), |tree| {
-            runs += 1;
-            Ok(self.passes(tree))
+        let negative = plan.tree.unwrap();
+        let mut runs = vec![];
+        let outcome = judge(&negative, plan.judging.as_ref(), |tree| {
+            runs.push(tree.to_owned());
+            Ok(passes(tree))
         })
         .unwrap();
+        let put_back: Vec<_> = plan
+            .judging
+            .iter()
+            .flat_map(|j| &j.restored)
+            .map(|t| &t.tree)
+            .collect();
+        let after = runs.iter().skip_while(|t| **t != negative).skip(1);
+        for tree in after {
+            assert!(
+                put_back.contains(&tree),
+                "{tree} ran after the new tests did"
+            );
+        }
         (outcome, runs)
     }
+    /// The same with every planned tree checked out beside the others before
+    /// any runs, as the workflow has them, so that a test can reach the
+    /// trees that run after it.
+    fn judged_side_by_side(&self, base: &str) -> Outcome {
+        let head = git(self.path(), &["rev-parse", "HEAD"]).unwrap();
+        let plan = plan(self.path(), base, head.trim()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let j = plan.judging.as_ref().unwrap();
+        let trees = [plan.tree.clone().unwrap(), j.removed.clone()]
+            .into_iter()
+            .chain(
+                j.restored
+                    .iter()
+                    .flat_map(|t| [t.control.clone(), t.tree.clone()]),
+            );
+        for tree in trees {
+            self.extract(&tree, &root.path().join(&tree));
+        }
+        self.judged_by(base, |tree| run_in(&root.path().join(tree)))
+            .0
+    }
+}
+fn run_in(dir: &Path) -> bool {
+    Command::new("bash")
+        .arg("run.sh")
+        .current_dir(dir)
+        .status()
+        .unwrap()
+        .success()
 }
 
 fn unsure(outcome: &Outcome) -> bool {
@@ -246,5 +300,63 @@ fn a_test_file_made_a_directory_leaves_only_the_directory() {
     assert_eq!(files, "mods\nrun.sh\ntests/x/y\nvalue\n");
     // The old code reads the file, and it can't go back beside its
     // directory: a failure there can't be told from the move.
+    assert!(unsure(&repo.judged(&base).0));
+}
+
+/// A new test the old code runs, which writes the test file the PR moved
+/// into every other tree's checkout: a process left behind would, once that
+/// checkout is the tests'. The removal alone ran first, so it still fails
+/// for the missing file, and nothing is attested.
+#[test]
+fn a_new_test_never_reaches_the_removal_alone() {
+    const PUTS_IT_BACK: &str = r#"for d in ../*/; do
+  [ "$d" -ef . ] || { mkdir -p "$d/src/a" && echo true > "$d/src/a/tests.rs"; }
+done
+"#;
+    let repo = Repo::new(&[
+        ("mods", "c/tests\na/tests\n"),
+        ("src/a/tests.rs", PASSES),
+        ("src/c/tests.rs", PASSES),
+    ]);
+    let base = repo.commit();
+    repo.remove("src/a/tests.rs");
+    repo.write(&[
+        ("src/b/tests.rs", PASSES),
+        ("src/c/tests.rs", PUTS_IT_BACK),
+        ("value", "new\n"),
+    ]);
+    repo.commit();
+    let outcome = repo.judged_side_by_side(&base);
+    assert!(unsure(&outcome), "{outcome:?}");
+}
+
+/// The same for a control: the new test takes the replacement out of each
+/// old-code tree with both copies, so that one would pass, while the tree
+/// with the new tests keeps the clash. The control ran first, so it still
+/// fails, and nothing is attested.
+#[test]
+fn a_new_test_never_reaches_a_control() {
+    const CLEARS_THE_CLASH: &str = r#"# new
+for d in ../*/; do
+  [ "$d" -ef . ] || [ ! -f "$d/src/tests.rs" ] || grep -q new "$d/src/c/tests.rs" ||
+    rm -f "$d/src/tests/mod.rs"
+done
+"#;
+    let repo = Repo::new(&[
+        ("mods", "c/tests\npath:src/tests.rs\ntests\n"),
+        ("src/tests.rs", PASSES),
+        ("src/c/tests.rs", PASSES),
+    ]);
+    let base = repo.commit();
+    repo.remove("src/tests.rs");
+    repo.write(&[
+        ("src/tests/mod.rs", PASSES),
+        ("src/c/tests.rs", CLEARS_THE_CLASH),
+        ("value", "new\n"),
+    ]);
+    repo.commit();
+    let outcome = repo.judged_side_by_side(&base);
+    assert!(unsure(&outcome), "{outcome:?}");
+    // Untouched, the same PR is judged the same.
     assert!(unsure(&repo.judged(&base).0));
 }

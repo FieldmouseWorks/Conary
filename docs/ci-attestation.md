@@ -316,9 +316,13 @@ module's other spelling, a file made a directory), and the controls that
 decide whether it stays away or goes back beside its replacement. burrow
 judges each flake check; `attest.yml` judges the whole command, with
 `cn attest prepare-negative` planning the trees by git alone and
-`cn attest judge-negative` running the command on each in its own checkout,
-only as far as a judgment needs
-([the rule](../crates/conary-github/src/attest/ci/removal.rs)).
+`cn attest judge-negative` running the command on each in its own checkout
+([the rule](../crates/conary-github/src/attest/ci/removal.rs)). The trees of
+old code alone run first, as far as a failure on the negative tree would need
+them, so no new test has run on the machine when they do: nothing one leaves
+behind (a process, a file) can make them pass. So where a PR deletes a test
+file, the command runs on old code alone even where the negative tree
+passes.
 
 ## What doesn't get one
 
