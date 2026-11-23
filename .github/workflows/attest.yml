@@ -16,7 +16,7 @@ permissions:
   contents: read
 # The tool is part of the signer's reviewed source, never a caller input.
 env:
-  CONARY_TOOL_REV: 2b57d0a1e0025e84596b682e4b1c157ef84b4aa3
+  CONARY_TOOL_REV: cb2df2b5298741d783d21420a9444209101a64ea
 jobs:
   negative-run:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
