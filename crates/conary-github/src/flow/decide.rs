@@ -674,9 +674,14 @@ pub(super) fn work(f: &Facts, m: &mut Memory, now: u64, kind: Kind) -> Decision 
 }
 
 fn job_wake(f: &Facts, kind: Kind, job: &Job, now: u64) -> u64 {
-    // A proof is a program: a model-run check is never one.
+    // A proof is a program: a model-run check is never one. Its deadline
+    // is the one it started with.
     let timeout = if kind == Kind::Proof {
-        f.settings.proof_timeout
+        f.proof_data
+            .records
+            .iter()
+            .find(|r| r.job.id == job.id)
+            .map_or(f.settings.proof_timeout, |r| r.sized.seconds)
     } else {
         f.settings.job_timeout
     };

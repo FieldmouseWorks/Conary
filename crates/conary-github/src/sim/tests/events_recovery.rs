@@ -29,6 +29,7 @@ pub(super) fn booked(at: u64) -> Report {
             recovery: None,
             owner: None,
             proof: None,
+            deadline: None,
             wait_on: None,
             on_usage: false,
             owner_notice: None,

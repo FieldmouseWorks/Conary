@@ -119,6 +119,7 @@ fn a_new_proof_kind_does_not_inherit_an_ended_builds_lost_answer() {
             recipes: BTreeMap::from([("vm".into(), Recipe::Build("checks.vm".into()))]),
             verdicts: None,
             note_needed: false,
+            sized: crate::flow::durations::Sized::configured(10_800),
         });
         assert_eq!(c.pass(800).step, Step::Prove);
         assert!(!c.memory.strikes.contains_key(&Failure::Lost));
@@ -148,6 +149,7 @@ fn pending_verdicts_are_bound_to_their_kind_command_and_attribute() {
                 ("keep".into(), Verdict::Findings),
             ])),
             note_needed: false,
+            sized: crate::flow::durations::Sized::configured(10_800),
         });
         match replacement {
             Some(recipe) => {

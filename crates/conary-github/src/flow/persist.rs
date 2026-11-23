@@ -167,6 +167,10 @@ impl Data {
         numbers.sort_unstable();
         Ok(numbers)
     }
+    /// The repository's flow directory, which this holds the lock of.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
     pub fn path(&self, pr: u64) -> PathBuf {
         self.dir.join(format!("{pr}.json"))
     }

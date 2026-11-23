@@ -809,7 +809,8 @@ recipe set:
   selected recipe changes. A preparation that failed, or answered that the
   inputs aren't ready, is asked again after fifteen minutes.
 - **`proof`** then runs the checks. It takes a slot, in the queue order
-  above, unless its preparation answered `slot: false`.
+  above, unless its preparation answered `slot: false`. Its deadline is
+  sized from its own history ([Deadlines](#deadlines)).
 
 A `Job` recipe is a model-run check, not a proof, and is never sent to a
 proof plugin: its check waits, with that reason. A targeted kick reads the
@@ -846,6 +847,26 @@ flow reads the head's tree before deciding. A read of it that fails is the
 degraded `tree` read: whether the head is on the stalled tree can't be told,
 so nothing starts until it reads. Work saved before trees were kept counts
 toward no tree.
+
+A proof's deadline is sized from its own history (`flow::durations`). Each
+proof that answers with every check it ran passing is timed, from its start
+to its answer, with the checks and recipes it ran and whether it held a
+proof slot. The times' one home is the flow's own records, the repository's
+`durations.json` beside its PRs' records; the ledger keeps none. Only a real
+pass writes it, under the repository's lock, keeping the newest ten runs of
+each recipe set held each way; a dry run reads it as it is. A proof's
+deadline is twice the longest kept run of its recipe set, held as it will
+be, at least fifteen minutes and at most `proof_timeout`. It's
+`proof_timeout` when its recipe set has no timed run yet, held that way, and
+when one of its checks reached a deadline on the PR as its recipe stands:
+history said too little for it, and a second deadline on its tree is the
+stall above. A preparation's deadline is always `proof_timeout`. Each proof
+keeps the deadline it started with. Timed proofs that don't read are never
+taken as no history: no proof starts, and the PR says why, until they read
+or are removed. Next's `deadline` says the deadline of the proof the
+decision starts, or of the head's running proof: its `seconds` and where
+it came `from`, `configured`, `reached`, or `history` with its `runs` and
+the `longest`.
 
 A wait on CI costs nothing (`waiting-costs-nothing`): it starts no plugin
 and books no wake for the checks' result, which comes as their own events (a
@@ -927,6 +948,7 @@ it uses only that Store's ledger observations.
 Output is one JSON object per PR, sorted by PR number. Each successful read
 includes `repo`, `pr` and all of Next: `stage`, `step`, `description`,
 `overdue_at`, `proof`, `wait_on`, `on_usage`, `owner_notice`, `priority` and, when
+a proof starts or runs, `deadline` ([Deadlines](#deadlines)), when
 any stop it, `switches` ([Switches](#switches)), when any path half-worked,
 `degraded` ([Degraded paths](#degraded-paths)), when it lists the owner,
 `owner` ([Asking the owner](#asking-the-owner)), and

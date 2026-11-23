@@ -6,6 +6,7 @@ mod ci;
 mod claims;
 pub use claims::{FixAnswer, FixClaim, FixResult, Unposted};
 mod decide;
+pub mod durations;
 mod gates;
 mod history;
 mod markers;

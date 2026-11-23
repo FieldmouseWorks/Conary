@@ -46,6 +46,11 @@ pub struct Work {
     /// A proof its preparation said needs no proof slot, so holds none.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub slotless: bool,
+    /// A proof's deadline, from its start, and where it came from. None for
+    /// other work, and for a proof saved before the flow sized it, whose
+    /// deadline was `proof_timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sized: Option<super::durations::Sized>,
     /// A fix's problems, by index: the review thread each was, which its
     /// answer is a reply on, or None for a problem that isn't a thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

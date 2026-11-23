@@ -201,6 +201,7 @@ mod tests {
                 recipes: Default::default(),
                 tree: None,
                 slotless: false,
+                sized: None,
                 handed: Vec::new(),
                 sent: Default::default(),
             }],

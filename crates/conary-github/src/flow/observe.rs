@@ -80,6 +80,11 @@ fn hydrate_with(
         if completion.result.is_none() {
             f.working.insert(job.id.clone());
         }
+        // A proof that answered with every check passing is timed: what
+        // sizes the deadlines of the proofs after it.
+        f.proof_data
+            .ran
+            .extend(super::durations::ran(work, &completion));
         job.state = match &completion.result {
             None => JobState::Running,
             Some(Ok(_)) => JobState::Done,
@@ -184,6 +189,13 @@ fn hydrate_with(
                         recipes: work.recipes.clone(),
                         verdicts: None,
                         note_needed: false,
+                        // A proof saved before the flow sized it had
+                        // `proof_timeout`, as its deadline says.
+                        sized: work.sized.clone().unwrap_or_else(|| {
+                            super::durations::Sized::configured(
+                                work.deadline.saturating_sub(work.job.started),
+                            )
+                        }),
                     });
                 }
             }

@@ -29,6 +29,7 @@ fn record(c: &Case, state: JobState) -> ProofRecord {
         recipes: c.settings.proofs.clone(),
         verdicts: None,
         note_needed: false,
+        sized: crate::flow::durations::Sized::configured(10_800),
     }
 }
 #[test]

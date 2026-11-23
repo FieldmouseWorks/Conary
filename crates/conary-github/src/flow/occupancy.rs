@@ -119,6 +119,7 @@ impl Occupancy {
         github: &G,
         repo: &conary_core::op::Repo,
         ledger: Option<&conary_core::Ledger>,
+        durations: &std::result::Result<super::durations::Durations, String>,
     ) {
         for (number, record) in &self.records {
             let mut reads = Reads::default();
@@ -147,6 +148,7 @@ impl Occupancy {
                 let mut memory = record.memory.clone();
                 super::ledger::raised(&mut facts, &mut memory, ledger);
                 super::observe::hydrate(&mut facts, record, pass.now, true)?;
+                super::durations::apply(&mut facts, durations);
                 super::proofs::tree(github, &mut facts);
                 reads.extend(facts.reads.clone());
                 let paused = super::pause::read(pass.root, repo)

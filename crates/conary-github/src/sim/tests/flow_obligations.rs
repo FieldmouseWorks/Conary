@@ -79,6 +79,7 @@ fn record(c: &Case, id: &str, started: u64) -> ProofRecord {
         recipes: c.settings.proofs.clone(),
         verdicts: None,
         note_needed: false,
+        sized: crate::flow::durations::Sized::configured(10_800),
     }
 }
 fn holder(record: &ProofRecord) -> ProofHolder {

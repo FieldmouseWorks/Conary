@@ -22,6 +22,15 @@ pub struct ProofData {
     /// deadline twice on one tree ([`tree`]), and None when that read
     /// failed.
     pub tree: Option<String>,
+    /// The repository's timed proofs, which size a proof's deadline
+    /// ([`super::durations`]).
+    pub durations: super::durations::Durations,
+    /// Why the repository's timed proofs didn't read, when they didn't:
+    /// no proof starts until they do.
+    pub unread: Option<String>,
+    /// The runs this PR's proofs answered with every check passing, which
+    /// a real pass adds to [`Self::durations`].
+    pub ran: Vec<super::durations::Run>,
 }
 /// A check whose preparation or proof reached its deadline
 /// ([`super::jobs::Work::reached_deadline`]): with which recipe, on which
@@ -40,6 +49,8 @@ pub struct ProofRecord {
     /// None is an infrastructure failure, even when the unit exited zero.
     pub verdicts: Option<BTreeMap<String, Verdict>>,
     pub note_needed: bool,
+    /// Its deadline, from its start, and where it came from.
+    pub sized: super::durations::Sized,
 }
 /// A proof that holds one of the scarce proof slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,7 +445,7 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
             (
                 Stage::Proof,
                 Step::Wait {
-                    until: Some(deadline(r.job.started, f.settings.proof_timeout, now)),
+                    until: Some(deadline(r.job.started, r.sized.seconds, now)),
                 },
                 "Machine proof is still running".into(),
                 None,
@@ -515,6 +526,17 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
             ));
         }
     }
+    if let Some(why) = &f.proof_data.unread {
+        return Some((
+            Stage::Proof,
+            Step::Wait { until: None },
+            format!("Can't read the proofs' durations to size its deadline: {why}; not started")
+                .chars()
+                .take(140)
+                .collect(),
+            None,
+        ));
+    }
     Some((
         Stage::Proof,
         Step::Prove,
@@ -526,4 +548,17 @@ pub(super) fn next(f: &Facts, now: u64) -> Option<(Stage, Step, String, Option<P
         .into(),
         Some(ProofPlan::Prove { recipes, slot }),
     ))
+}
+
+/// The deadline of the proof this decision starts, or of this head's
+/// running proof, and where it came from: what Next shows.
+pub(super) fn deadline_shown(f: &Facts, step: &Step) -> Option<super::durations::Sized> {
+    if *step == Step::Prove {
+        return Some(super::durations::sized(f));
+    }
+    f.proof_data
+        .records
+        .iter()
+        .find(|r| current(f, r) && r.job.state.live())
+        .map(|r| r.sized.clone())
 }

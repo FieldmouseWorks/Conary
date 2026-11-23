@@ -281,6 +281,7 @@ mod tests {
             recipes: Default::default(),
             tree: None,
             slotless: false,
+            sized: None,
             handed: vec![],
             sent: Default::default(),
         }

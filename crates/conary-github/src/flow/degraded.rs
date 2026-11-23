@@ -297,6 +297,7 @@ pub(crate) fn waiting(
         queued: None,
         recovery: None,
         proof: None,
+        deadline: None,
         wait_on: None,
         on_usage: false,
         owner_notice: None,
@@ -346,6 +347,7 @@ pub(crate) fn wait(next: &mut super::Next, read: &[Degradation]) {
     next.step = super::Step::Wait { until: None };
     next.wait_until = None;
     next.proof = None;
+    next.deadline = None;
     next.wait_on = None;
     next.description = match read.len() {
         1 => format!("Degraded: {first}"),
