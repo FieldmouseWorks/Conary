@@ -352,7 +352,9 @@ pub struct Settings {
     /// none; `null` sets no limit.
     #[schemars(extend("x-spender" = true))]
     pub proof_slots: Option<u32>,
-    /// Seconds a proof may run before it's stopped.
+    /// Seconds a proof may run before it's stopped: the most its deadline,
+    /// sized from its own history, may be, and its deadline while it has
+    /// none. A proof's preparation has this deadline.
     #[schemars(extend("x-spender" = false))]
     pub proof_timeout: u64,
     /// Seconds a review, fix or judge job may run before it's stopped.
@@ -904,6 +906,11 @@ pub struct Next {
     pub queued: Option<u64>,
     #[serde(default, deserialize_with = "super::persist::proof_plan::deserialize")]
     pub proof: Option<ProofPlan>,
+    /// The deadline of the proof this decision starts, or of the head's
+    /// running proof, and where it came from ([`super::durations`]). Left
+    /// out when there's neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<super::durations::Sized>,
     pub wait_on: Option<WaitOn>,
     pub on_usage: bool,
     /// A digest decision, independent of the one executable intention.

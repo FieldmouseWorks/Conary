@@ -188,12 +188,16 @@ impl Pass<'_> {
                 },
             )?;
         }
+        // The repository's timed proofs, read once: each decision sizes its
+        // proof's deadline from them, and a real pass adds what it timed.
+        let mut durations = super::durations::read(self.root, repo).map_err(|e| e.to_string());
         let mut occupancy = super::occupancy::Occupancy::read(self.root, repo, &pulls, self.now);
         occupancy.discover(
             self,
             github,
             repo,
             store.as_deref().map(Store::ledger).or(self.ledger),
+            &durations,
         );
         // What half-worked for a PR this pass doesn't visit is recorded
         // now; a visited PR's once its revision is.
@@ -320,6 +324,12 @@ impl Pass<'_> {
                     report.error = Some(format!("recording what degraded: {e}"));
                 }
                 hydrated?;
+                if let (Some(data), Ok(timed)) = (&data, &mut durations)
+                    && timed.fold(&facts.proof_data.ran)
+                {
+                    super::durations::save(data, timed)?;
+                }
+                super::durations::apply(&mut facts, &durations);
                 super::proofs::tree(github, &mut facts);
                 // Read afresh before each PR's decision: a pause written
                 // during the pass stops the PRs after it.
@@ -651,10 +661,13 @@ impl Pass<'_> {
         let id = job_id(facts, record)?;
         record.sequence += 1;
         let path = data.job_path(facts.number, record.sequence);
-        let timeout = if kind == "proof" {
-            facts.settings.proof_timeout
-        } else {
-            facts.settings.job_timeout
+        // A proof's deadline is sized from its own history; its
+        // preparation's is `proof_timeout`.
+        let sized = matches!(purpose, Purpose::Proof).then(|| super::durations::sized(facts));
+        let timeout = match (&purpose, &sized) {
+            (_, Some(sized)) => sized.seconds,
+            (Purpose::Prepare, _) => facts.settings.proof_timeout,
+            _ => facts.settings.job_timeout,
         };
         let deadline = self.now.saturating_add(timeout);
         let tree = match &task {
@@ -681,6 +694,7 @@ impl Pass<'_> {
         record.jobs.push(jobs::Work {
             purpose,
             slotless,
+            sized,
             job: Job {
                 id,
                 revision: facts.revision.clone(),

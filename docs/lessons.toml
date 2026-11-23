@@ -155,8 +155,8 @@ id = "limits-are-design-bugs"
 lesson = "A deadline work keeps hitting is a stall to fix, not a retry; a proof's deadline is sized from its own history."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/646", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow", "waits and deadlines", "M6 slice 5d", "M6 slice 7"]
-status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+status = "built"
+where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/312", "https://github.com/FieldmouseWorks/Conary/issues/318", "docs/flow.md#deadlines", "crates/conary-github/src/sim/tests/flow_deadlines.rs", "crates/conary-github/src/sim/tests/flow_proof_history.rs"]
 
 [[lessons]]
 id = "off-switch-independent"

@@ -78,7 +78,7 @@ another issue are not scheduled again here.
 | `explicit-priority` | [FP4](#fp4-flow-order-admission-and-proof-slots-by-explicit-priority-then-age) | Not built: one binary `first_label` |
 | `one-question-per-decision` | [FP10](#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) | Built: one open request per subject key, which a later wait joins with no new listing, its marker on the head now ([flow.md](flow.md#asking-the-owner)) |
 | `switches-show-their-effect` | [FP3](#fp3-flow-report-every-switch-in-effect-and-what-it-holds) | Not built |
-| `limits-are-design-bugs` | [FP6](#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP12](#fp12-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Half built: a check's second deadline on one tree is a stall, not a retry ([flow.md](flow.md#deadlines)); every proof's deadline is still the configured `proof_timeout` until FP12 |
+| `limits-are-design-bugs` | [FP6](#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) and [FP12](#fp12-flow-size-a-proofs-deadline-from-its-own-history); burrow's watchdog baselines are [burrow#651](https://github.com/FieldmouseWorks/burrow/issues/651) | Built: a check's second deadline on one tree is a stall, not a retry, and a proof's deadline is sized from its recipes' own history under the configured `proof_timeout` ([flow.md](flow.md#deadlines)); held by [`a_hung_proof_is_cut_at_its_history_sized_deadline`](../crates/conary-github/src/sim/tests/flow_proof_history.rs) |
 | `off-switch-independent` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline), then [#313](https://github.com/FieldmouseWorks/Conary/issues/313) for the landing owner | Not built: Conary has no pause |
 | `reusable-modules` | Finish-line item 7 in [DESIGN](DESIGN.md#12-roadmap) | Designed |
 | `pause-vacates` | [FP2](#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline); the plugins answer its cancellation ([m6-plugins.md](m6-plugins.md#restart-and-cancellation)) | Not built: a held PR's proof keeps its slot |
@@ -133,8 +133,8 @@ FP11 isn't a #314 prerequisite because the steward it replaces on remi has
 no loop breaker either; FP6 and FP8 already stop a stage from repeating
 without end, and no prerequisite waits on it: what FP8 and FP10 don't hand
 on stays overdue until FP11 lands. FP12 isn't one because FP6 already stops a deadline from being
-hit over and over; the configured `proof_timeout` stays the ceiling until
-FP12 lands.
+hit over and over; the configured `proof_timeout` is the ceiling FP12
+sizes each proof's deadline under.
 
 ## The tasks
 

@@ -235,6 +235,7 @@ fn posted_answer(c: &mut Case, seated: bool, now: u64) -> std::path::PathBuf {
         recipes: Default::default(),
         tree: None,
         slotless: false,
+        sized: None,
         handed: vec![],
         sent: Default::default(),
     });

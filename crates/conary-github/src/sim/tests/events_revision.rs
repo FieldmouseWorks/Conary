@@ -24,6 +24,7 @@ fn report(pr: u64, at: u64, error: bool, next: bool) -> Report {
             owner: None,
             description: "waiting".into(),
             proof: None,
+            deadline: None,
             wait_on: None,
             on_usage: false,
             owner_notice: None,
