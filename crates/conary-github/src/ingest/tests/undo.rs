@@ -14,6 +14,7 @@ fn with_undo(store: &mut Store, f: &Hub, undo: u64) -> (ChangeId, ChangeId) {
     let u = pull(store, f, &config(), &repo(), undo).unwrap().change;
     store
         .record(Body::Undo {
+            reason: Some("The landed change broke the health check".into()),
             change: u,
             reverts: vec![x],
             asked: conary_core::op::Asked::Change,
@@ -49,7 +50,7 @@ fn a_reverted_pr_read_again_is_landed_still() {
     assert_eq!(status(&store), Status::Reverted);
     assert!(store.ledger().outside().is_empty());
     assert_eq!(store.ledger().change(x).unwrap().reverted_by, Some(u));
-    assert!(sync(&mut store, &f, &config(), &repo()).is_ok());
+    assert!(synced(&mut store, &f).is_ok());
 }
 
 /// 9 landed, its first undo, 10, closed, and a second, 11, open in its
@@ -62,6 +63,7 @@ fn two_undos(store: &mut Store, f: &Hub) -> [ChangeId; 3] {
     let second = pull(store, f, &config(), &repo(), 11).unwrap().change;
     store
         .record(Body::Undo {
+            reason: Some("The landed change broke the health check".into()),
             change: second,
             reverts: vec![x],
             asked: conary_core::op::Asked::Change,
@@ -80,7 +82,7 @@ fn read_every_way(then: impl Fn(&Hub)) -> Vec<((tempfile::TempDir, Store), [Chan
     let ways: [fn(&mut Store, &Hub); 4] = [
         |s, f| [10, 11].into_iter().for_each(|n| one(s, f, n)),
         |s, f| [11, 10].into_iter().for_each(|n| one(s, f, n)),
-        |s, f| _ = sync(s, f, &config(), &repo()).unwrap(),
+        |s, f| _ = synced(s, f).unwrap(),
         |s, f| _ = backfill(s, f, &config(), &repo()).unwrap(),
     ];
     ways.iter()
@@ -268,6 +270,7 @@ fn an_undo_lands_over_a_rival_that_merged_elsewhere_or_after_it() {
 /// The body `cn undo` gives `x`'s undo, its marker last.
 fn marked(x: ChangeId) -> String {
     let marker = crate::undo::Marker {
+        reason: "The landed change broke the health check".into(),
         reverts: vec![x],
         asked: conary_core::op::Asked::Change,
     };
@@ -295,7 +298,7 @@ fn from_undo_branch(f: &Hub, store: &mut Store, number: u64, head_repo: &str) ->
 fn a_pr_from_an_undo_branch_is_its_undo_whatever_reads_it() {
     let reads: [fn(&mut Store, &Hub); 3] = [
         |s, f| _ = pull(s, f, &config(), &repo(), 10).unwrap(),
-        |s, f| _ = sync(s, f, &config(), &repo()).unwrap(),
+        |s, f| _ = synced(s, f).unwrap(),
         |s, f| _ = backfill(s, f, &config(), &repo()).unwrap(),
     ];
     for read in reads {
@@ -334,7 +337,7 @@ fn a_pr_from_an_undo_branch_beside_a_landed_undo_is_recorded_closed_and_its_merg
     f.put_statuses(DEV, f.statuses_json(HEAD));
     f.put_commit(LATER, &[REBASED], false);
     f.link(REPO, LATER, &[11]);
-    sync(&mut store, &f, &config(), &repo()).unwrap();
+    synced(&mut store, &f).unwrap();
     let second = store.ledger().by_pr(&repo(), 11).unwrap();
     assert_eq!(second.status(), Status::Closed);
     assert_eq!(

@@ -107,6 +107,11 @@ impl Reader {
         (self.dir.clone(), self.key)
     }
 
+    /// The ledger as it was last read, without reading the log again.
+    pub fn ledger(&self) -> Arc<Ledger> {
+        Arc::clone(&self.ledger)
+    }
+
     /// The ledger as the log now holds it, read again only if the log or
     /// the anchor beside it changed since the last read. A read that fails
     /// keeps nothing of it: the next one tries again. What it returns is a
@@ -234,7 +239,7 @@ mod tests {
         let mut store = Store::open(lock, key, None).unwrap();
         observe(&mut store, 1);
         let head = store.head().unwrap();
-        log::save_anchor(store.lock(), Some(head), "c1").unwrap();
+        log::save_anchor(store.writer().unwrap().lock(), Some(head), "c1").unwrap();
         let mut reader = Reader::open(dir.path(), public).unwrap();
         // An anchor naming an op the log doesn't hold, in a copy the same
         // size and with the same time as the one it replaces.
@@ -245,7 +250,7 @@ mod tests {
         let other: log::Anchor = format!("{}{last}", &text[..text.len() - 1])
             .parse()
             .unwrap();
-        log::save_anchor(store.lock(), Some(other), "c1").unwrap();
+        log::save_anchor(store.writer().unwrap().lock(), Some(other), "c1").unwrap();
         fs::File::options()
             .write(true)
             .open(&path)

@@ -1,7 +1,6 @@
 use super::flow_case::Case;
 use crate::flow::*;
 use crate::sim::REMI;
-use std::collections::BTreeMap;
 const PUSHED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const THEIRS: &str = "cccccccccccccccccccccccccccccccccccccccc";
 fn claim() -> Case {
@@ -18,7 +17,7 @@ fn claim() -> Case {
         },
         answer: FixResult::Answer(FixAnswer {
             pushed: Some(PUSHED.into()),
-            threads: BTreeMap::from([("thread".into(), true)]),
+            answers: vec![("thread".into(), true)],
             description: None,
             comment: false,
         }),
@@ -28,7 +27,8 @@ fn claim() -> Case {
 }
 #[test]
 fn an_unpushed_fix_posts_nothing_and_retries_as_a_job_without_its_answer() {
-    // unpushed.py:115-142: claiming a refused push is no answer; a second unanswered job goes to the owner.
+    // unpushed.py:115-142: claiming a refused push is no answer; a second
+    // unanswered job went to the owner, and is now a stall in the status.
     let mut c = claim();
     assert_eq!(c.pass(2400).step, Step::Wait { until: Some(2460) });
     assert_eq!(c.memory.unposted[&Kind::Findings].1, Unposted::Unpushed);
@@ -37,7 +37,9 @@ fn an_unpushed_fix_posts_nothing_and_retries_as_a_job_without_its_answer() {
     c.claims[0].job.id = "fix-2".into();
     c.claims[0].job.repeated = true;
     assert!(matches!(c.pass(3000).step, Step::Wait { .. }));
-    assert_eq!(c.pass(3060).step, Step::ListOwner);
+    let n = c.pass(3060);
+    assert!(n.description.starts_with("Two jobs ended"), "{n:?}");
+    assert_eq!(n.overdue_at, Some(3060));
 }
 #[test]
 fn only_the_actual_pushed_head_allows_fix_answers_to_post() {
@@ -118,7 +120,7 @@ fn invalid_fix_claims_never_post_any_part_of_their_answers() {
                 0 => a.pushed = Some("not-a-commit".into()),
                 1 => {
                     a.pushed = None;
-                    a.threads = BTreeMap::from([("foreign-thread".into(), false)]);
+                    a.answers = vec![("foreign-thread".into(), false)];
                 }
                 _ => a.pushed = None,
             }

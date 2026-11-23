@@ -4,11 +4,35 @@ use crate::flow::{Stage, Write};
 use serde_json::{Value, json};
 
 impl Api {
-    fn flow_put(&self, path: &str, body: Value) -> Result<(), ApiError> {
-        let url = format!("{}{path}", self.base);
+    /// A GraphQL mutation about PR `pr`, with the repository's token. Any
+    /// error GitHub returns is a refusal.
+    fn mutation(&self, repo: &str, pr: u64, query: &str, variables: Value) -> Result<(), ApiError> {
+        let path = format!("/repos/{repo}/pulls/{pr}");
+        let url = self.graphql();
         let mut response = self
             .agent
-            .put(&url)
+            .post(&url)
+            .header("Authorization", &self.authorization(&path)?)
+            .send_json(json!({"query":query,"variables":variables}))
+            .map_err(|e| unreachable(&url, e))?;
+        if !response.status().is_success() {
+            return Err(failed(&url, &mut response));
+        }
+        let result: Value = parse(&url, &read(&url, &mut response)?)?;
+        if result.get("errors").is_some() {
+            return Err(ApiError::new("GitHub refused a GraphQL mutation"));
+        }
+        Ok(())
+    }
+    /// A PUT, or else a POST, whose answer says nothing the flow reads.
+    pub(super) fn flow_call(&self, put: bool, path: &str, body: Value) -> Result<(), ApiError> {
+        let url = format!("{}{path}", self.base);
+        let request = if put {
+            self.agent.put(&url)
+        } else {
+            self.agent.post(&url)
+        };
+        let mut response = request
             .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
@@ -91,18 +115,42 @@ impl Write for Api {
         Ok(())
     }
 
-    fn review(&self, repo: &str, pr: u64, head: &str, body: &str) -> Result<(), ApiError> {
+    fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError> {
         let _: Value = self.send(
             false,
-            &format!("/repos/{repo}/pulls/{pr}/reviews"),
-            &json!({"commit_id":head,"body":body,"event":"COMMENT"}),
+            &format!("/repos/{repo}/issues/{pr}/comments"),
+            &json!({"body":body}),
         )?;
         Ok(())
     }
+    fn reply(&self, repo: &str, pr: u64, thread: &str, body: &str) -> Result<(), ApiError> {
+        self.mutation(
+            repo,
+            pr,
+            "mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}",
+            json!({"thread":thread,"body":body}),
+        )
+    }
+    fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError> {
+        self.mutation(
+            repo,
+            pr,
+            "mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}",
+            json!({"thread":thread}),
+        )
+    }
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError> {
-        self.flow_put(
+        self.flow_call(
+            true,
             &format!("/repos/{repo}/pulls/{pr}/update-branch"),
             json!({"expected_head_sha":head}),
+        )
+    }
+    fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
+        self.flow_call(
+            false,
+            &format!("/repos/{repo}/check-suites/{suite}/rerequest"),
+            json!({}),
         )
     }
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError> {
@@ -129,18 +177,11 @@ impl Write for Api {
         let id = pull["node_id"]
             .as_str()
             .ok_or_else(|| ApiError::new("PR lacks node ID"))?;
-        let path = format!("/repos/{repo}/pulls/{pr}");
-        let url = format!("{}/graphql", self.base);
-        let mut response = self.agent.post(&url).header("Authorization", &self.authorization(&path)?)
-            .send_json(json!({"query":"mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}","variables":{"id":id}}))
-            .map_err(|e| unreachable(&url,e))?;
-        if !response.status().is_success() {
-            return Err(failed(&url, &mut response));
-        }
-        let result: Value = parse(&url, &read(&url, &mut response)?)?;
-        if result.get("errors").is_some() {
-            return Err(ApiError::new("GitHub refused disabling auto merge"));
-        }
-        Ok(())
+        self.mutation(
+            repo,
+            pr,
+            "mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}",
+            json!({"id":id}),
+        )
     }
 }

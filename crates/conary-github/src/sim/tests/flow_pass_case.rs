@@ -9,6 +9,9 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+#[path = "../../../../conary-core/tests/support/nested_cargo.rs"]
+mod nested_cargo;
+
 pub(super) const REPO: &str = "conary-test/flow-simulation";
 pub(super) struct Deferred(pub(super) RefCell<Vec<PathBuf>>);
 impl flow::jobs::Launch for Deferred {
@@ -17,7 +20,9 @@ impl flow::jobs::Launch for Deferred {
         path: &Path,
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let invocation: flow::jobs::Invocation = serde_json::from_slice(&std::fs::read(path)?)?;
-        if let conary_core::plugin::Task::Review { pr, head, .. } = invocation.task {
+        if let conary_core::plugin::Task::Fix { pr, head, .. }
+        | conary_core::plugin::Task::Judge { pr, head, .. } = invocation.task
+        {
             let record: flow::Record = serde_json::from_slice(&std::fs::read(
                 path.parent().unwrap().join(format!("{pr}.json")),
             )?)?;
@@ -31,18 +36,41 @@ impl flow::jobs::Launch for Deferred {
     }
 }
 pub(super) fn example() -> PathBuf {
-    let executable = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conary-flow-test-plugin");
-    assert!(
-        executable.is_file(),
-        "Cargo must build the shared example fixture"
-    );
-    executable
+    static EXECUTABLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    EXECUTABLE
+        .get_or_init(|| {
+            const FIXTURE: &str = "plugin";
+            // The example from its own package, so without this one's
+            // dependencies. Cargo's intermediate layout is private: its
+            // artifact messages locate the build.
+            let output = nested_cargo::cargo()
+                .args([
+                    "build",
+                    "--locked",
+                    "-p",
+                    "conary-core",
+                    "--example",
+                    FIXTURE,
+                    "--message-format=json",
+                ])
+                .output()
+                .expect("Cargo must build the shared example fixture");
+            assert!(
+                output.status.success(),
+                "fixture build failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|message| {
+                    message["reason"] == "compiler-artifact" && message["target"]["name"] == FIXTURE
+                })
+                .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+                .expect("Cargo must report the shared example executable")
+        })
+        .clone()
 }
 
 pub(super) struct Case {
@@ -72,30 +100,32 @@ impl Case {
                 draft: false,
                 complete: true,
                 merge_state: "CLEAN".into(),
+                diff: None,
                 open_threads: 0,
                 threads: Default::default(),
                 resolved_reviews: Default::default(),
                 updated_at: 0,
                 suites: Default::default(),
-                checks_complete: true,
                 rebase_removed: vec![],
                 timeline_cut_at: None,
+                since: Default::default(),
             },
         );
         let mut config = flow::Config {
             trusted_authors: vec!["owner".into()],
+            settings: crate::sim::settings(),
             ..Default::default()
         };
         config.settings.people.insert("maintainer".into());
         config.settings.settle_delay = 0;
         config.settings.handoff_after = 0;
-        config.plugins.review = Some(example());
         config.plugins.fix = Some(example());
         config.evidence = Some(Evidence {
             signer: testing::SIGNER.into(),
             fresh: Some(FRESH.into()),
             require: vec!["check".into()],
             negative: "negative".into(),
+            producers: None,
         });
         config.settings.judge_key = Some(SealKey::from_hex(&"a".repeat(64)).unwrap());
         config.settings.verdict_authors.insert("producer".into());
@@ -153,6 +183,7 @@ impl Case {
                         answer:
                             conary_core::plugin::Answer::Fix {
                                 result: conary_core::plugin::FixResult::Pushed { head },
+                                ..
                             },
                         ..
                     })),
@@ -161,32 +192,63 @@ impl Case {
                     self.hub.refresh_flow(REPO, 3);
                     self.good_ci(head);
                 }
+                // The producer seals what the judge was asked on, at the
+                // next generation.
                 (
-                    conary_core::plugin::Task::Review { .. },
-                    Some(Ok(conary_core::plugin::Response {
-                        answer: conary_core::plugin::Answer::Review { findings },
-                        ..
-                    })),
-                ) => {
-                    let record = self.record();
-                    let work = record.jobs.iter().find(|w| w.path == path).unwrap();
-                    let body = review_body("reviewer", &work.job.revision, answer.at, findings);
-                    self.sign_check(
-                        &work.job.revision.head,
-                        "conary/review/reviewer",
-                        Some(&review_receipt(&work.job.revision.head, &body)),
-                    );
-                }
-                (
-                    conary_core::plugin::Task::Judge { .. },
+                    conary_core::plugin::Task::Judge { why, context, .. },
                     Some(Ok(conary_core::plugin::Response {
                         answer: conary_core::plugin::Answer::Judge { .. },
                         ..
                     })),
-                ) => self.judgment(1, Judgment::Land, true),
+                ) => self.judgment_on(
+                    self.hub.comments(REPO, 3).unwrap().len() as u64 + 1,
+                    Judgment::Pass,
+                    true,
+                    crate::flow::Basis {
+                        why: why.clone(),
+                        context: context.clone(),
+                    },
+                ),
                 _ => {}
             }
         }
+    }
+    /// Answers each launched preparation, of PR `only` or of every PR, as
+    /// ready, needing a proof slot or not. Other launches stay launched.
+    pub(super) fn prepared(&self, slot: bool, only: Option<u64>) {
+        self.deferred.0.borrow_mut().retain(|path| {
+            let invocation: flow::jobs::Invocation =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let conary_core::plugin::Task::Prepare { .. } = invocation.task else {
+                return true;
+            };
+            let name = path.file_name().unwrap().to_string_lossy();
+            if only.is_some_and(|n| !name.starts_with(&format!("{n}-"))) {
+                return true;
+            }
+            let completion = flow::jobs::Completion {
+                at: flow::jobs::now(),
+                result: Some(Ok(conary_core::plugin::Response {
+                    contract: conary_core::plugin::CONTRACT.into(),
+                    by: conary_core::plugin::Identity {
+                        engine: "fixture".into(),
+                        session: None,
+                    },
+                    execution: None,
+                    answer: conary_core::plugin::Answer::Prepare {
+                        ready: true,
+                        slot,
+                        why: "inputs built".into(),
+                    },
+                })),
+            };
+            std::fs::write(
+                path.with_extension("answer"),
+                serde_json::to_vec(&completion).unwrap(),
+            )
+            .unwrap();
+            false
+        });
     }
     pub(super) fn record(&self) -> flow::Record {
         Data::read(self.dir.path(), &REPO.parse().unwrap(), 3).unwrap()
@@ -203,15 +265,59 @@ impl Case {
             "APPROVED",
         );
     }
+    /// The connector's clean review of head 3.
     pub(super) fn clean_review(&self) {
-        self.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 0);
-        let records = self.hub.reviews(REPO, 3).unwrap();
-        let r = records.last().unwrap();
-        self.sign_check(
-            &head(3),
-            "conary/review/reviewer",
-            Some(&review_receipt(&head(3), r.body.as_deref().unwrap())),
-        );
+        self.clean_review_at(0);
+    }
+    /// [`Self::clean_review`], its review finished at `at`.
+    pub(super) fn clean_review_at(&self, at: u64) {
+        self.hub.flow_review(REPO, 3, Verdict::Clean, at);
+    }
+    /// The body of the connector's last summary comment on PR `pr`.
+    pub(super) fn connector_summary(&self, pr: u64) -> String {
+        self.hub
+            .comments(REPO, pr)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|c| {
+                c.user
+                    .as_ref()
+                    .is_some_and(|u| u.login == crate::sim::CONNECTOR)
+            })
+            .and_then(|c| c.body)
+            .expect("the connector's summary comment")
+    }
+    /// The connector's review of the PR's current head at `at`, finding
+    /// `findings`, each on a thread of its own as the connector opens them.
+    /// Returns the threads' ids, in order.
+    pub(super) fn connector_findings(
+        &self,
+        findings: &[conary_core::plugin::Finding],
+        at: u64,
+    ) -> Vec<String> {
+        self.hub.flow_review(REPO, 3, Verdict::Findings, at);
+        let id = self.hub.reviews(REPO, 3).unwrap().len();
+        findings
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let thread = format!("PRRT_{id}_{i}");
+                let p = format!("{:?}", f.severity);
+                let body = format!(
+                    "**<sub><sub>![{p} Badge](https://img.shields.io/badge/{p}-yellow?style=flat)</sub></sub>  {}**\n\n{}\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+                    f.text, f.text
+                );
+                self.hub.flow_thread_at(
+                    REPO,
+                    3,
+                    &thread,
+                    (&f.path, f.line),
+                    (crate::sim::CONNECTOR, &body),
+                );
+                thread
+            })
+            .collect()
     }
     pub(super) fn sign_check(&self, head: &str, name: &str, receipt: Option<&[u8]>) -> u64 {
         let id = self.hub.run_id();
@@ -260,30 +366,80 @@ impl Case {
         }
         self.negative(head, "none");
     }
-    pub(super) fn judgment(&self, generation: u64, verdict: Judgment, attest: bool) {
+    /// A producer's judgment, judged for every reason on what GitHub shows
+    /// now with no worker answers. Returns what it was judged on.
+    pub(super) fn judgment(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+    ) -> crate::flow::Basis {
+        let basis = super::judged_for_everything(&self.hub, REPO);
+        self.judgment_on(generation, verdict, attest, basis.clone());
+        basis
+    }
+    /// A producer's v3 judgment of the PR's current revision, judged on
+    /// `basis`, and its signed receipt when `attest`.
+    pub(super) fn judgment_on(
+        &self,
+        generation: u64,
+        verdict: Judgment,
+        attest: bool,
+        basis: crate::flow::Basis,
+    ) {
         let revision = Revision::from(&self.hub.pull(REPO, 3).unwrap());
-        let word = match verdict {
-            Judgment::Land => "land",
-            Judgment::Owner => "owner",
-            Judgment::Failing => "failed",
-            Judgment::Misdescribed => "misdescribed",
-        };
-        let body = self.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            word,
-            &revision,
-            generation,
-        );
+        let provenance = super::judge_provenance();
+        let body = self
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                verdict,
+                &revision,
+                generation,
+                provenance.clone(),
+                basis.clone(),
+            )
+            .unwrap();
         self.hub.flow_comment(REPO, 3, "producer", &body);
         if attest {
             self.sign_check(
                 &revision.head,
                 "conary/judgment",
-                Some(&judgment_receipt(&revision, generation, Some(verdict))),
+                Some(&judgment_receipt_by(
+                    &revision,
+                    generation,
+                    Some(verdict),
+                    Some(&provenance),
+                    Some(&basis),
+                )),
             );
         }
+    }
+    /// A minor Renovate update with Renovate's automerge on, its review
+    /// clean and CI green: settled, in a repository with no train.
+    pub(super) fn renovate() -> Self {
+        let mut c = Self::new();
+        c.config.settings.renovate_email = Some("bot@renovateapp.com".into());
+        c.config.settings.renovate_login = Some("renovate[bot]".into());
+        c.hub.edit_pull(REPO, 3, |p| {
+            p["head"]["ref"] = json!("renovate/foo");
+            p["title"] = json!("Update foo from 1.4 to 1.5");
+            p["body"] = json!("🚦 **Automerge**: Enabled.");
+        });
+        c.hub.refresh_flow(REPO, 3);
+        c.hub.commit_details(
+            &head(3),
+            Some("deps: bump"),
+            Some("bot@renovateapp.com"),
+            Some("bot@renovateapp.com"),
+        );
+        c.clean_review();
+        c
     }
     pub(super) fn as_bot(&mut self) {
         self.hub

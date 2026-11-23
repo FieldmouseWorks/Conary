@@ -3,74 +3,12 @@ use crate::flow::*;
 use crate::sim::REMI;
 use serde_json::json;
 #[test]
-fn an_outages_underway_look_counts_only_on_its_own_base() {
-    // handle.py:329: an old-base look is another change, not a verdict still owed here.
-    let mut c = Case::new();
-    c.roles(&["available", "out"]);
-    c.review("available", Verdict::Clean, 600);
-    let mut old = c.scope();
-    old.base = "release".into();
-    c.service("out").unavailable_until = Some(86400);
-    c.service("out").under_way_on = Some(old);
-    assert_eq!(c.view(700).step, Step::Merge);
-    let mut old = c.scope();
-    old.head = "old-head".into();
-    c.service("out").under_way_on = Some(old);
-    assert_eq!(c.view(800).stage, Stage::Review);
-    assert!(matches!(c.view(800).step, Step::Wait { .. }));
-}
-#[test]
-fn returned_answers_post_before_a_new_description_is_reviewed() {
-    // handle.py:58: an in-flight answer is posted on what it read, then the edited description needs a new look.
-    let mut c = Case::new();
-    c.roles(&["reviewer"]);
-    let reviewed = c.scope();
-    c.service("reviewer").answer = Some(Review {
-        revision: reviewed,
-        verdict: Verdict::Clean,
-        at: 600,
-    });
-    c.description("Why not Rust: quicker to write", 650);
-    assert_eq!(c.pass(650).step, Step::PostReview("reviewer".into()));
-    c.service("reviewer").answer = None;
-    assert_eq!(c.pass(700).step, Step::QueueReview("reviewer".into()));
-    c.review("reviewer", Verdict::Clean, 710);
-    assert_eq!(c.pass(720).step, Step::Merge);
-}
-#[test]
-fn a_clean_new_head_covers_a_late_available_answer_but_docs_still_post_it() {
-    // handle.py:112 / 592: a new look supersedes old findings; docs get no new look, so findings must be posted.
-    for docs in [false, true] {
-        let mut c = Case::new();
-        c.roles(&["reviewer"]);
-        c.service("reviewer").answer = Some(Review {
-            revision: c.scope(),
-            verdict: Verdict::Findings,
-            at: 600,
-        });
-        c.push("head-after-look");
-        if docs {
-            c.hub.touch(&c.scope().head, &["docs/a.md"]);
-        } else {
-            c.review("reviewer", Verdict::Clean, 690);
-        }
-        assert_eq!(
-            c.view(700).step,
-            if docs {
-                Step::PostReview("reviewer".into())
-            } else {
-                Step::Merge
-            }
-        );
-    }
-}
-#[test]
 fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_changes() {
     // handle.py:800 / 849: ordinary CI does not pass a judge already asked on this head and base.
     let mut c = Case::new();
     c.no_ci();
     c.pass(0);
-    assert_eq!(c.pass(700).step, Step::Judge);
+    assert_eq!(c.pass(700).step, Step::Judge(vec![Trigger::NoCi]));
     c.jobs.insert(
         Kind::Judge,
         Job {
@@ -85,12 +23,13 @@ fn a_judge_already_asked_for_still_decides_when_ci_appears_or_description_change
     assert!(matches!(c.pass(800).step, Step::Wait { .. }));
     c.description("its new description", 850);
     c.review("reviewer", Verdict::Clean, 851);
-    assert_eq!(c.pass(900).step, Step::Judge);
+    // Only the judge already started holds now: the request carries its reasons.
+    assert_eq!(c.pass(900).step, Step::Judge(vec![]));
 }
 #[test]
 fn legacy_base_only_seals_owe_a_judge_but_are_not_verdicts_on_the_description() {
     // handle.py:739: old seals keep the judgment owed, never permission to land.
-    for verdict in ["land", "owner", "failed"] {
+    for verdict in ["pass", "owner", "fail"] {
         let mut c = Case::new();
         let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
         c.settings.judge_key = Some(key.clone());
@@ -103,7 +42,7 @@ fn legacy_base_only_seals_owe_a_judge_but_are_not_verdicts_on_the_description() 
             "owner",
             &format!("<!-- autoland-judgment: {verdict} {} {tag} -->", scope.head),
         );
-        assert_eq!(c.view(900).step, Step::Judge);
+        assert_eq!(c.view(900).step, Step::Judge(vec![Trigger::Asked]));
     }
 }
 #[test]
@@ -120,18 +59,17 @@ fn owner_label_holds_before_red_pending_ci_or_threads() {
             ),
             _ => c.threads(1),
         }
-        assert_eq!(c.view(7200).step, Step::ListOwner);
+        assert_eq!(c.view(7200).step, Step::ListOwner(Door::Label));
     }
 }
 #[test]
 fn documentation_policy_waives_only_the_review_round_not_findings_or_ci() {
-    // handle.py:526 / 533 / 571: docs-only can land, mixed/hidden/policy code must be reviewed.
+    // handle.py:526 / 533 / 571: docs-only can land, mixed/policy code must be reviewed.
     for (paths, review) in [
         (&["docs/a.md", "README.md"][..], false),
         (&["docs/a.md", "src/a.rs"][..], true),
         (&["docs/AGENTS.md"][..], true),
         (&["docs/DESIGN.md"][..], true),
-        (&["hidden/a.md"][..], true),
     ] {
         let mut c = Case::new();
         c.roles(&["reviewer"]);
@@ -139,7 +77,7 @@ fn documentation_policy_waives_only_the_review_round_not_findings_or_ci() {
         assert_eq!(
             c.view(700).step,
             if review {
-                Step::QueueReview("reviewer".into())
+                Step::Wait { until: Some(1800) }
             } else {
                 Step::Merge
             }
@@ -176,7 +114,7 @@ fn a_cut_file_list_requires_judgment_and_cannot_keep_a_bots_ci_exemption() {
     let refs: Vec<_> = names.iter().map(String::as_str).collect();
     c.hub.touch(&c.scope().head, &refs);
     assert_eq!(c.facts().classified.class, conary_core::Class::R2);
-    assert_eq!(c.view(700).step, Step::Judge);
+    assert_eq!(c.view(700).step, Step::Judge(vec![Trigger::R2]));
 }
 #[test]
 fn build_recipe_wins_when_case_variants_name_the_same_check() {
@@ -190,7 +128,7 @@ fn build_recipe_wins_when_case_variants_name_the_same_check() {
         .insert("vm".into(), Recipe::Build("checks.vm".into()));
     assert_eq!(c.settings.machine().len(), 1);
     assert!(
-        matches!(c.view(700).proof,Some(ProofPlan::Evaluate(ref checks)) if checks.len()==1 && matches!(checks["vm"],Recipe::Build(_)))
+        matches!(c.view(700).proof,Some(ProofPlan::Prepare(ref checks)) if checks.len()==1 && matches!(checks["vm"],Recipe::Build(_)))
     );
 }
 
@@ -199,37 +137,37 @@ fn confirmed_label_application_cannot_replace_person_approval() {
     // Even a persisted legacy label observation cannot authorize the revision.
     let mut c = Case::new();
     c.judge("owner");
-    assert_eq!(c.pass(700).step, Step::ListOwner);
+    assert_eq!(c.pass(700).step, Step::ListOwner(Door::Judge));
     let mut legacy = serde_json::to_value(&c.memory).unwrap();
     legacy["owner_saw"] = serde_json::json!(c.scope());
     c.memory = serde_json::from_value(legacy).unwrap();
-    assert_eq!(c.pass(709).step, Step::ListOwner);
+    assert_eq!(c.pass(709).step, Step::ListOwner(Door::Judge));
     c.approve();
     assert_eq!(c.pass(710).step, Step::Merge);
     c.push("new-head-after-persons-answer");
     c.review("reviewer", Verdict::Clean, 720);
     c.judge("owner");
-    assert_eq!(c.view(900).step, Step::ListOwner);
+    assert_eq!(c.view(900).step, Step::ListOwner(Door::Judge));
 }
 #[test]
 fn the_newest_sealed_judge_verdict_for_the_revision_wins() {
     // handle.py:486: land after owner on this head supersedes it, but owner after land holds again.
     let mut c = Case::new();
     c.judge("owner");
-    assert_eq!(c.pass(700).step, Step::ListOwner);
-    c.judge("land");
+    assert_eq!(c.pass(700).step, Step::ListOwner(Door::Judge));
+    c.judge("pass");
     assert_eq!(c.pass(800).step, Step::Merge);
     c.judge("owner");
-    assert_eq!(c.pass(900).step, Step::ListOwner);
+    assert_eq!(c.pass(900).step, Step::ListOwner(Door::Judge));
 }
 #[test]
-fn missing_job_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency() {
+fn missing_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency() {
     // handle.py:789 / 917: absent is pending for configured machine checks, never a no-CI judge.
     for (ci, bot) in [(true, false), (false, false), (true, true)] {
         let mut c = Case::new();
         c.settings
             .proofs
-            .insert("proof".into(), Recipe::Job("run proof".into()));
+            .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
         if !ci {
             c.no_ci();
         }
@@ -238,8 +176,10 @@ fn missing_job_proof_statuses_still_run_even_without_other_ci_or_on_a_dependency
                 .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("dependabot/pkg-2"));
             c.hub.refresh_flow(REMI, 3);
         }
+        assert_eq!(c.view(900).step, Step::Prepare);
+        c.ready(true);
         assert_eq!(c.view(900).step, Step::Prove);
-        assert!(matches!(c.view(900).proof, Some(ProofPlan::Job(_))));
+        assert!(matches!(c.view(900).proof, Some(ProofPlan::Prove { .. })));
     }
 }
 #[test]
@@ -280,7 +220,8 @@ fn a_major_renovate_proof_waits_for_its_sweeps_verdict() {
     let mut c = Case::new();
     c.settings
         .proofs
-        .insert("proof".into(), Recipe::Job("run proof".into()));
+        .insert("proof".into(), Recipe::Run(vec!["run proof".into()]));
+    c.programs();
     c.hub.edit_pull(REMI, 3, |p| {
         p["head"]["ref"] = json!("renovate/pkg-2");
         p["title"] = json!("Update pkg from 1.4 to 2.0");
@@ -292,14 +233,18 @@ fn a_major_renovate_proof_waits_for_its_sweeps_verdict() {
     assert_eq!(c.view(1000).step, Step::Prove);
 }
 #[test]
-fn an_unread_check_page_does_not_land_on_its_green_first_page() {
-    // handle.py:978: something beyond the readable check page could be red.
+fn a_red_check_past_the_first_page_of_suites_is_read() {
+    // handle.py:978: something beyond the first check page could be red, and
+    // the suites are read to the end to see it.
     let c = Case::new();
-    c.hub.edit_flow(REMI, 3, |s| s.checks_complete = false);
-    let n = c.view(700);
-    assert_eq!(n.stage, Stage::Ci);
-    assert!(matches!(n.step, Step::Wait { .. }));
-    assert!(n.description.contains("over 100 checks"));
+    let head = c.scope().head;
+    for i in 0..crate::api::PER_PAGE {
+        c.hub
+            .check_run(&head, &format!("shard {i}"), "success", None);
+    }
+    c.hub.check_run(&head, "last", "failure", None);
+    let n = c.view(7200);
+    assert_eq!(n.step, Step::HandFix(Kind::Red), "{}", n.description);
 }
 #[test]
 fn red_negative_and_other_named_checks_request_the_same_ci_fix_kind() {
@@ -338,58 +283,77 @@ fn stacked_prs_wait_through_findings_red_ci_and_age_then_review_after_retarget()
         }
         c.hub.retarget(REMI, 3, "main");
         c.hub.refresh_flow(REMI, 3);
+        // GitHub dates the retarget after the head's push.
+        c.hub
+            .edit_flow(REMI, 3, |s| s.since.retargeted = Some(2 * 86400));
         c.threads(0);
         c.ci("success");
-        assert_eq!(
-            c.pass(2 * 86400 + 1).step,
-            Step::QueueReview("reviewer".into())
-        );
+        let retargeted = c.pass(2 * 86400 + 1).step;
+        if scenario == 0 {
+            // Its clean review read the diff against the base below.
+            assert_eq!(retargeted, Step::Judge(vec![Trigger::Changed]));
+        } else {
+            assert!(matches!(retargeted, Step::AskReview(_)));
+        }
         c.review("reviewer", Verdict::Clean, 2 * 86400 + 2);
-        assert_eq!(c.pass(2 * 86400 + 3).step, Step::Merge);
+        assert_eq!(
+            c.pass(2 * 86400 + 3).step,
+            Step::Judge(vec![Trigger::Changed])
+        );
+        c.judge("pass");
+        assert_eq!(c.pass(2 * 86400 + 4).step, Step::Merge);
         c.hub.set_branch(REMI, "release/1.x", super::TRUNK);
         c.hub.retarget(REMI, 3, "release/1.x");
         c.hub.refresh_flow(REMI, 3);
-        c.review("reviewer", Verdict::Clean, 2 * 86400 + 4);
-        assert_eq!(c.view(2 * 86400 + 5).step, Step::Merge);
+        c.hub
+            .edit_flow(REMI, 3, |s| s.since.retargeted = Some(2 * 86400 + 5));
+        // A release branch is an ordinary base, not a PR below: the new
+        // base is judged, not waited on.
+        assert_eq!(
+            c.view(2 * 86400 + 6).step,
+            Step::Judge(vec![Trigger::Changed])
+        );
+        c.judge("pass");
+        assert_eq!(c.view(2 * 86400 + 6).step, Step::Merge);
     }
 }
 
 #[test]
-fn only_the_configured_stewards_rest_login_can_supply_a_review_mark() {
-    // handle.py:356 / post.py:73: a person with the App's GraphQL name is not its REST [bot] identity.
-    for (who, kind, accepted) in [
-        ("fieldmouseworks-steward[bot]", "Bot", true),
-        ("mallory", "User", false),
-        ("fieldmouseworks-steward", "User", false),
+fn only_the_connectors_rest_login_can_supply_a_review() {
+    // review_step.py: a person with the App's GraphQL name is not its REST [bot] identity.
+    for (who, accepted) in [
+        (crate::sim::CONNECTOR, true),
+        ("mallory", false),
+        ("chatgpt-codex-connector", false),
     ] {
         let mut c = Case::new();
         c.roles(&["reviewer"]);
         let scope = c.scope();
-        let body = format!(
-            "<!-- reviewer-review:v2 {} -->",
-            json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
+        let state = json!({"code_review":{"commit_sha":scope.head,"has_any_findings":false,"status":"completed"}});
+        c.hub.flow_comment(
+            REMI,
+            3,
+            who,
+            &format!("<!-- codex-review-state:v1 {state} -->"),
         );
-        c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":who,"type":kind},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"2026-11-08T12:00:00Z"}]));
         assert_eq!(
             c.view(700).step,
             if accepted {
                 Step::Merge
             } else {
-                Step::QueueReview("reviewer".into())
-            }
+                Step::Wait { until: Some(1800) }
+            },
+            "{who}"
         );
     }
 }
 #[test]
-fn a_mark_with_an_invalid_time_stops_the_reader() {
-    // post.py:122: a malformed verdict timestamp is an error, never clean coverage.
+fn a_review_with_an_invalid_time_stops_the_reader() {
+    // reviews.rs: a malformed review time is an error, never clean coverage.
     let c = Case::new();
-    let scope = c.scope();
-    let body = format!(
-        "<!-- reviewer-review:v2 {} -->",
-        json!({"commit_sha":scope.head,"base":"main","scope":scope.description,"reviewed_at":0,"findings":0})
-    );
-    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":"fieldmouseworks-steward[bot]","type":"Bot"},"body":body,"commit_id":scope.head,"state":"COMMENTED","submitted_at":"yesterday"}]));
+    let head = c.scope().head;
+    let body = format!("**Reviewed commit:** `{}`", &head[..10]);
+    c.hub.put_reviews(REMI,3,json!([{"id":1,"user":{"login":crate::sim::CONNECTOR,"type":"Bot"},"body":body,"commit_id":head,"state":"COMMENTED","submitted_at":"yesterday"}]));
     assert!(
         read(
             &c.hub,

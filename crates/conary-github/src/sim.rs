@@ -41,17 +41,34 @@ use conary_core::policy::Touched;
 use crate::attest::testing;
 use crate::train::Mark;
 
+mod anchors;
 mod ci;
 mod faults;
 mod fixtures;
 mod flow;
 mod flow_write;
 mod forge;
+mod notes;
 
 pub(crate) use faults::{Call, On};
 
 /// The steward's App, whose `review-settled` statuses settle a head.
 pub(crate) const STEWARD: &str = "fieldmouseworks-steward[bot]";
+/// Codex's GitHub connector, whose posts are the reviewer's word.
+pub(crate) const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
+/// The flow settings of the machine the tests stand in for: Conary's own
+/// defaults name none of these.
+pub(crate) fn settings() -> crate::flow::Settings {
+    crate::flow::Settings {
+        proof_slots: None,
+        judge_engines: ["codex".into()].into(),
+        review_authors: [CONNECTOR.into()].into(),
+        flow_authors: [STEWARD.into()].into(),
+        bot_emails: ["49699333+dependabot[bot]@users.noreply.github.com".into()].into(),
+        owner_label: Some("needs-peter".into()),
+        ..Default::default()
+    }
+}
 /// The repos the tests are about.
 pub(crate) const REMI: &str = "FieldmouseWorks/remi";
 /// What the runners a job gets to itself are named, then its job's id.
@@ -94,7 +111,8 @@ pub(crate) struct World {
     /// Each check run's job's artifacts, by the job's check run id: name
     /// and GitHub's zip of it.
     artifacts: HashMap<u64, Vec<(String, Vec<u8>)>>,
-    expired_artifacts: BTreeSet<u64>,
+    /// The jobs, by check run id, whose artifacts GitHub lists as expired.
+    expired: BTreeSet<u64>,
     /// The runner each job ran on, when it isn't a fresh one of its own.
     runners: HashMap<u64, String>,
     /// Cancel requests GitHub accepts and does nothing about.
@@ -118,6 +136,12 @@ pub(crate) struct World {
     /// The last commit sha, check run id and PR number given out.
     shas: u64,
     runs: u64,
+    /// Refs outside branches, such as the ledger's anchor, by repo and name.
+    refs: HashMap<(String, String), crate::anchor::Kept>,
+    /// Every commit a ref has been moved to.
+    ref_commits: HashMap<String, crate::anchor::Kept>,
+    /// Each repo's notes refs, by repo and name.
+    notes: HashMap<(String, String), crate::notes::Kept>,
 }
 
 #[derive(Clone, Default)]
@@ -341,7 +365,6 @@ impl Hub {
             .map(|p| Touched {
                 path: (*p).into(),
                 from: None,
-                new: false,
             })
             .collect();
         self.world.borrow_mut().touched.insert(patch.into(), files);
@@ -548,10 +571,35 @@ impl Hub {
         self.edit_pull(repo, number, |p| p["base"]["ref"] = json!(base));
     }
 
-    /// PR `number`'s labels are `labels`.
+    /// PR `number`'s labels are `labels`, each it didn't have put on by a
+    /// person.
     pub(crate) fn label(&self, repo: &str, number: u64, labels: &[&str]) {
-        let labels: Vec<Value> = labels.iter().map(|l| json!({"name": l})).collect();
-        self.edit_pull(repo, number, |p| p["labels"] = json!(labels));
+        self.label_as(repo, number, labels, ("owner", "User"));
+    }
+
+    /// PR `number`'s labels are `labels`, each it didn't have put on by
+    /// `by`, a login and its kind (`User` or `Bot`), on its timeline.
+    pub(crate) fn label_as(&self, repo: &str, number: u64, labels: &[&str], by: (&str, &str)) {
+        let at = self.now();
+        self.repo_mut(repo, |r| {
+            let p = r.pulls.get_mut(&number).unwrap();
+            for l in labels {
+                if !p["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|o| o["name"] == *l)
+                {
+                    let mut e = fixtures::labeled();
+                    e["actor"] = fixtures::user(by.0, by.1);
+                    e["label"]["name"] = json!(l);
+                    e["created_at"] = json!(at);
+                    r.timeline.entry(number).or_default().push(e);
+                }
+            }
+            let labels: Vec<Value> = labels.iter().map(|l| json!({"name": l})).collect();
+            p["labels"] = json!(labels);
+        });
     }
 
     /// Head `head` does just what `other`'s does: it holds `other`'s patch
@@ -646,11 +694,41 @@ impl Hub {
     }
 
     /// Lands PR `number` as the steward does outside the train: settled at
-    /// its head, then merged. Trunk's new tip.
+    /// its head, then merged with the message the train would give it.
+    /// Trunk's new tip.
     pub(crate) fn steward_lands(&self, repo: &str, number: u64) -> String {
         let head = self.head_of(repo, number);
         self.settle(&head);
-        match self.squash(repo, number, &head) {
+        let p = self.pull_json(repo, number);
+        let tip = self
+            .branch_at(repo, p["base"]["ref"].as_str().unwrap())
+            .unwrap();
+        let messages: Vec<String> = {
+            let w = self.world.borrow();
+            let excluded: BTreeSet<_> = w.ancestors(&tip).into_iter().collect();
+            let mut commits: Vec<String> = w
+                .ancestors(&head)
+                .into_iter()
+                .filter(|c| !excluded.contains(c))
+                .collect();
+            commits.reverse();
+            commits
+                .iter()
+                .map(|c| {
+                    w.commit_record(repo, c)
+                        .ok()
+                        .and_then(|c| c.commit)
+                        .and_then(|c| c.message)
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let message = crate::train::Message::new(
+            p["title"].as_str().unwrap(),
+            number,
+            messages.iter().map(String::as_str),
+        );
+        match self.squash(repo, number, &head, &message) {
             Ok(sha) => sha,
             Err(why) => panic!("#{number} won't land: {why}"),
         }
@@ -668,6 +746,13 @@ impl Hub {
         let reviews = reviews.as_array().unwrap().clone();
         self.repo_mut(repo, |r| {
             r.reviews.insert(number, reviews);
+        });
+    }
+
+    pub(crate) fn put_comments(&self, repo: &str, number: u64, comments: Value) {
+        let comments = comments.as_array().unwrap().clone();
+        self.repo_mut(repo, |r| {
+            r.comments.insert(number, comments);
         });
     }
 
@@ -713,7 +798,15 @@ impl Hub {
     /// Squashes PR `number`'s head `head` onto its base branch, as its
     /// merge does: the new commit, linked to it, and the PR merged and
     /// closed, its branch deleted if it's the repo's own.
-    fn squash(&self, repo: &str, number: u64, head: &str) -> Result<String, String> {
+    /// Squashes PR `number` at `head` onto its base, as a commit saying
+    /// `message`, the way GitHub's merge does.
+    fn squash(
+        &self,
+        repo: &str,
+        number: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<String, String> {
         let p = self.pull_json(repo, number);
         let base = p["base"]["ref"].as_str().unwrap().to_owned();
         let tip = self.branch_at(repo, &base).ok_or("no base branch")?;
@@ -725,6 +818,9 @@ impl Hub {
         let sha = self.next_sha();
         self.commit_as(&sha, &[tip], merged);
         self.by_github(&sha);
+        let mut record = fixtures::commit();
+        record["commit"]["message"] = json!(message.whole());
+        self.commit_response(&sha, record);
         self.set_branch(repo, &base, &sha);
         self.link(repo, &sha, &[number]);
         let at = self.now();
@@ -844,7 +940,6 @@ impl World {
                 vec![Touched {
                     path: SOME_FILE.into(),
                     from: None,
-                    new: false,
                 }]
             });
             for t in touched {
@@ -854,6 +949,28 @@ impl World {
             }
         }
         Some(files)
+    }
+}
+
+/// Runs `writers` on a thread of their own and fails when it doesn't finish
+/// within `secs`: a writer waiting on another's ledger lock in the same
+/// process never would, so a test of writers that mustn't wait fails there
+/// rather than hangs.
+pub(crate) fn unblocked(secs: u64, writers: impl FnOnce() + Send + 'static) {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    let (done, finished) = channel();
+    let thread = std::thread::spawn(move || {
+        writers();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(()) => thread.join().unwrap(),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("a writer still waits on the ledger's lock after {secs}s")
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(thread.join().unwrap_err())
+        }
     }
 }
 

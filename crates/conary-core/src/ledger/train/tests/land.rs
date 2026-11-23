@@ -172,6 +172,7 @@ fn a_landing_a_stopped_candidate_had_open_lands_through_it() {
     b.ok(Body::Leave {
         change: r,
         why: Left::Unready,
+        trunk: None,
     });
     for c in [s, t] {
         b.join(c);
@@ -182,6 +183,7 @@ fn a_landing_a_stopped_candidate_had_open_lands_through_it() {
     b.ok(Body::Leave {
         change: s,
         why: Left::Unready,
+        trunk: None,
     });
     b.land(s, 'e').unwrap();
     assert_eq!(b.landing(s), None);

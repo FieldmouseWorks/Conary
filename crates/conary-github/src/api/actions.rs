@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use super::{Api, ApiError, MAX_PAGES, failed, parse, read, unreachable};
+use super::{Api, ApiError, PER_PAGE, Page, failed, paged, parse, read, unreachable};
 use crate::attest::{Actions, Artifact, Job, KEYS, Key};
 
 #[derive(Deserialize)]
@@ -22,20 +22,21 @@ impl Actions for Api {
     }
 
     fn artifacts(&self, repo: &str, run: u64) -> Result<Vec<Artifact>, ApiError> {
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: Artifacts = self.get(&format!(
-                "/repos/{repo}/actions/runs/{run}/artifacts?per_page=100&page={page}"
-            ))?;
-            let short = got.artifacts.len() < 100;
-            all.extend(got.artifacts);
-            if short {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "run {run}'s artifacts: more than {MAX_PAGES} pages"
-        )))
+        paged(
+            &format!("run {run}'s artifacts"),
+            self.read_for,
+            |page, left| {
+                let got: Artifacts = self.get_within(
+                    &format!("/repos/{repo}/actions/runs/{run}/artifacts?per_page=100&page={page}"),
+                    left,
+                )?;
+                let more = got.artifacts.len() == PER_PAGE;
+                Ok(Page {
+                    items: got.artifacts,
+                    more,
+                })
+            },
+        )
     }
 
     /// GitHub answers with a redirect to the zip, a minute's signed URL on

@@ -1,5 +1,6 @@
 //! GitHub's answers as its REST API sent them, recorded from
-//! FieldmouseWorks/Conary#255 (`gh api`), one item of each list kept and
+//! FieldmouseWorks/Conary#255 (`gh api`), and the timeline's `labeled`
+//! event from FieldmouseWorks/Conary#538, one item of each list kept and
 //! long text and diffs cut out. The simulated GitHub builds each answer from
 //! one of these and writes its own fields over it, so what the code under
 //! test parses is in GitHub's own shape, fields nothing reads included.
@@ -33,6 +34,11 @@ pub(super) fn commit() -> Value {
 /// One of `GET /repos/{repo}/issues/{n}/timeline`.
 pub(super) fn event() -> Value {
     load(include_str!("fixtures/timeline.json"))[0].clone()
+}
+
+/// A `labeled` event of `GET /repos/{repo}/issues/{n}/timeline`.
+pub(super) fn labeled() -> Value {
+    load(include_str!("fixtures/timeline.json"))[2].clone()
 }
 
 /// `GET /repos/{repo}/compare/{base}...{head}`.

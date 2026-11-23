@@ -1,6 +1,7 @@
 use conary_core::op::Repo;
 use conary_core::{Policy, log};
-use conary_github::flow::{Config, Pass, jobs};
+use conary_github::events::Runtime;
+use conary_github::flow::{self, Config, Pass, Pause, Scope, jobs, pause, schema};
 use conary_github::{Api, Tokens, anchor};
 use std::path::PathBuf;
 
@@ -13,6 +14,65 @@ pub enum FlowCommand {
     /// A dry pass beside what the steward running the repository says of
     /// each PR now: one JSON line per PR, disagreements first, then a tally.
     Compare(Args),
+    /// Every option of the flow's configuration and conaryd's events and
+    /// gate-reuse configurations: their schema, or what a machine's files
+    /// set.
+    Settings(SettingsArgs),
+    /// Pause the repository: the next decision stops every worker its PRs
+    /// have running and starts nothing, until it's resumed. Needs no
+    /// conaryd, GitHub, build or deploy, and is always allowed.
+    Pause(PauseArgs),
+    /// Lift the repository's pause: the next pass carries on from each PR's
+    /// saved state.
+    Resume(ResumeArgs),
+    /// Every switch in effect (the pause, holds, omitted plugins, the train
+    /// off, no person list, no evidence verifier) and the PRs and workers
+    /// each one holds. Reads the data directory and the configuration
+    /// alone: no GitHub, conaryd, token or lock.
+    Status(StatusArgs),
+}
+#[derive(clap::Args)]
+pub struct StatusArgs {
+    repo: Repo,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
+    #[arg(long, env = "CONARY_FLOW_CONFIG")]
+    config: PathBuf,
+}
+#[derive(clap::Args)]
+pub struct PauseArgs {
+    repo: Repo,
+    /// Why it's paused, shown in each PR's decision while it is.
+    #[arg(long)]
+    reason: String,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
+}
+#[derive(clap::Args)]
+pub struct ResumeArgs {
+    repo: Repo,
+    #[arg(long, env = "CONARY_DATA", default_value_os_t = log::default_dir().join("data"))]
+    data: PathBuf,
+}
+#[derive(clap::Args)]
+pub struct SettingsArgs {
+    /// Print the schema of all three configurations: each option's type, allowed
+    /// values, default, description, whether it starts paid work and
+    /// whether it's live. No configuration file is read.
+    #[arg(long)]
+    schema: bool,
+    /// The flow configuration whose options to print, each with its
+    /// effective value and whether the file or the default set it.
+    #[arg(long, env = "CONARY_FLOW_CONFIG")]
+    config: Option<PathBuf>,
+    /// conaryd's events configuration whose options to print, the ones that
+    /// take effect only at a restart listed apart.
+    #[arg(long, env = "CONARY_EVENTS_CONFIG")]
+    events_config: Option<PathBuf>,
+    /// conaryd's gate-reuse configuration whose options to print, the ones
+    /// that take effect only at a restart listed apart.
+    #[arg(long, env = "CONARY_GATE_REUSE_CONFIG")]
+    gate_reuse_config: Option<PathBuf>,
 }
 #[derive(clap::Args)]
 pub struct Args {
@@ -37,10 +97,30 @@ pub struct Args {
     anchor_repo: Option<String>,
 }
 pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
-    let (FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args)) = command;
+    let args = match command {
+        FlowCommand::Settings(args) => return settings(args),
+        FlowCommand::Pause(args) => {
+            let paused = Pause {
+                scope: Scope::Repository,
+                reason: args.reason.clone(),
+                at: jobs::now(),
+            };
+            pause::pause(&args.data, &args.repo, &paused).map_err(own)?;
+            println!("{}", serde_json::to_string(&paused)?);
+            return Ok(());
+        }
+        FlowCommand::Resume(args) => return pause::resume(&args.data, &args.repo).map_err(own),
+        FlowCommand::Status(args) => {
+            let config = Config::load(&args.config).map_err(own)?;
+            let status = flow::status(&args.data, &args.repo, &config, jobs::now()).map_err(own)?;
+            println!("{}", serde_json::to_string_pretty(&status)?);
+            return Ok(());
+        }
+        FlowCommand::Pass(args) | FlowCommand::Kick(args) | FlowCommand::Compare(args) => args,
+    };
     let compare = matches!(command, FlowCommand::Compare(_));
     let dry_run = args.dry_run || compare;
-    let config: Config = serde_json::from_slice(&std::fs::read(&args.config)?)?;
+    let config = Config::load(&args.config).map_err(own)?;
     let policy = Policy::load(&args.policy)?;
     let tokens: Tokens = super::choose_tokens(
         args.token_command.as_deref(),
@@ -69,7 +149,11 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     } else {
         None
     };
-    let process = jobs::Process(std::env::current_exe()?);
+    // One pass, then this CLI exits: whoever runs it runs the next one.
+    let process = jobs::Process {
+        worker: std::env::current_exe()?,
+        ended: None,
+    };
     let pass = Pass {
         config: &config,
         policy: &policy,
@@ -94,7 +178,7 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     let reports = reports?;
     if compare {
         let (lines, tally) =
-            conary_github::flow::beside(&api, reports, &config.settings.review_authors);
+            conary_github::flow::beside(&api, reports, &config.settings.flow_authors);
         for line in lines {
             println!("{}", serde_json::to_string(&line)?);
         }
@@ -105,4 +189,39 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
         println!("{}", serde_json::to_string(&report)?);
     }
     Ok(())
+}
+
+/// `cn flow settings`: one JSON document, keyed by configuration.
+fn settings(args: &SettingsArgs) -> super::Result<()> {
+    let mut out = serde_json::Map::new();
+    if args.schema {
+        out.insert("flow".into(), schema::flow().map_err(own)?);
+        out.insert("events".into(), schema::events().map_err(own)?);
+        out.insert("gate_reuse".into(), schema::reuse().map_err(own)?);
+    } else {
+        if args.config.is_none() && args.events_config.is_none() && args.gate_reuse_config.is_none()
+        {
+            return Err("give --schema, or a configuration with --config, --events-config or --gate-reuse-config".into());
+        }
+        if let Some(path) = &args.config {
+            let listing = schema::effective::<Config>(&std::fs::read(path)?).map_err(own)?;
+            out.insert("flow".into(), serde_json::to_value(listing)?);
+        }
+        if let Some(path) = &args.events_config {
+            let listing = schema::effective::<Runtime>(&std::fs::read(path)?).map_err(own)?;
+            out.insert("events".into(), serde_json::to_value(listing)?);
+        }
+        if let Some(path) = &args.gate_reuse_config {
+            let listing =
+                schema::effective::<conary_github::reuse::Settings>(&std::fs::read(path)?)
+                    .map_err(own)?;
+            out.insert("gate_reuse".into(), serde_json::to_value(listing)?);
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+/// The library's errors, as this command's.
+fn own(e: Box<dyn std::error::Error + Send + Sync>) -> Box<dyn std::error::Error> {
+    e
 }

@@ -16,7 +16,7 @@ permissions:
   contents: read
 # The tool is part of the signer's reviewed source, never a caller input.
 env:
-  CONARY_TOOL_REV: 6a99e855d927c50e1fa6f2c7f8176dad037e7e7a
+  CONARY_TOOL_REV: cb2df2b5298741d783d21420a9444209101a64ea
 jobs:
   negative-run:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -55,6 +55,13 @@ jobs:
           if [ -n "$tree" ]; then
             git -C candidate read-tree --reset -u "$tree"
           fi
+          # Where the PR deletes a test file, the trees a failure on the
+          # negative tree is judged by, each in its own directory, all
+          # checked out before any candidate code runs.
+          for judging in $(jq -r '.judging // empty | [.removed, (.restored[] | .control, .tree)] | unique[]' plan.json); do
+            git clone -q --shared --no-checkout candidate "judging/$judging"
+            git -C "judging/$judging" read-tree --reset -u "$judging"
+          done
       - name: Run candidate tests without a signing token
         id: tests
         env:
@@ -67,23 +74,41 @@ jobs:
             # Their stdout is data, never Actions workflow commands.
             sudo useradd --create-home --shell /bin/bash conary-tests
             chmod go-rwx "$RUNNER_TEMP" "$(dirname "$GITHUB_OUTPUT")" "$(dirname "$GITHUB_ENV")"
-            sudo chown -hR conary-tests:conary-tests candidate
+            # Runs the command on one planned tree: exit 0 where it passed,
+            # 1 where it failed, and anything else where the run broke.
+            cat > "$RUNNER_TEMP/run-tree" <<'RUN'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          tree=$1
+          if [ "$tree" = "$(jq -r .tree "$GITHUB_WORKSPACE/plan.json")" ]; then
+            dir=$GITHUB_WORKSPACE/candidate
+          else
+            dir=$GITHUB_WORKSPACE/judging/$tree
+          fi
+          # A runner/setup failure must not masquerade as a failed test.
+          {
+            sudo chown -hR conary-tests:conary-tests "$dir" &&
             # Checkout's post-job cleanup must never read test-controlled
             # git configuration. Keep metadata read-only and its name fixed.
-            sudo chown -hR "$(id -u):$(id -g)" candidate/.git
-            sudo chown "$(id -u):$(id -g)" candidate
-            chmod 1777 candidate
-            cd candidate
-            # A runner/setup failure must not masquerade as a failed test.
-            sudo --user conary-tests test -x "$PWD"
+            sudo chown -hR "$(id -u):$(id -g)" "$dir/.git" &&
+            sudo chown "$(id -u):$(id -g)" "$dir" &&
+            chmod 1777 "$dir" &&
+            cd "$dir" &&
+            sudo --user conary-tests test -x "$PWD" &&
             sudo --user conary-tests test -r "$PWD/.git/HEAD"
-            if sudo --user conary-tests env -i HOME=/home/conary-tests PATH="$PATH" \
-              bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND" \
-              > "$RUNNER_TEMP/negative-command.log" 2>&1; then
-              echo 'result=pass' >> "$GITHUB_OUTPUT"
-            else
-              echo 'result=fail' >> "$GITHUB_OUTPUT"
-            fi
+          } || exit 2
+          if sudo --user conary-tests env -i HOME=/home/conary-tests PATH="$PATH" \
+            bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND" \
+            > "$RUNNER_TEMP/negative-command-$tree.log" 2>&1; then
+            exit 0
+          fi
+          exit 1
+          RUN
+            chmod +x "$RUNNER_TEMP/run-tree"
+            # Fails, and so attests nothing, where a failure can be the
+            # tree's own rather than the new tests' (docs/ci-attestation.md).
+            result=$(cn attest judge-negative --plan plan.json --run "$RUNNER_TEMP/run-tree")
+            echo "result=$result" >> "$GITHUB_OUTPUT"
           fi
   gate:
     if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))

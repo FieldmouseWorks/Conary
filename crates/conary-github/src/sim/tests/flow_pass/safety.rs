@@ -109,8 +109,11 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             .proofs
             .insert("machine".into(), Recipe::Run(vec!["check".into()]));
         c.hub.pr(REPO, 5, &head(5));
-        c.hub
-            .edit_pull(REPO, 5, |p| p["user"]["login"] = json!("owner"));
+        // Opened with PR 3, so its number breaks the tie.
+        c.hub.edit_pull(REPO, 5, |p| {
+            p["user"]["login"] = json!("owner");
+            p["created_at"] = json!("2099-01-01T00:00:00Z");
+        });
         let snapshot = flow::Read::snapshot(&c.hub, REPO, 3).unwrap();
         c.hub.flow_snapshot(
             REPO,
@@ -121,12 +124,14 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             },
         );
         for pr in [3, 5] {
-            c.hub.flow_review(REPO, pr, "reviewer", Verdict::Clean, 0);
+            c.hub.flow_review(REPO, pr, Verdict::Clean, 0);
             c.hub
                 .post_status(&head(pr), json!({"context":"machine", "state":"pending"}));
         }
         let now = flow::jobs::now();
-        let reports = c.pass(now, dry);
+        c.pass(now, false);
+        c.prepared(true, None);
+        let reports = c.pass(now + 1, dry);
         assert_eq!(reports[0].next.as_ref().unwrap().step, Step::Prove);
         assert_eq!(reports[1].next.as_ref().unwrap().stage, Stage::ProofSlot);
         let reports = Pass {
@@ -134,7 +139,7 @@ fn pass_proof_slots_include_workers_started_in_this_pass_and_targeted_kicks() {
             policy: &c.policy,
             root: c.dir.path(),
             launcher: &c.deferred,
-            now: now + 1,
+            now: now + 2,
             dry_run: dry,
             ledger: None,
         }
@@ -167,7 +172,7 @@ fn pass_local_judgment_preserves_newer_and_conflicting_authenticated_issuances()
         let now = flow::jobs::now();
         assert_eq!(
             c.pass(now, false)[0].next.as_ref().unwrap().step,
-            Step::Judge
+            Step::Judge(vec![Trigger::AuthorEngine])
         );
         c.run_worker();
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
@@ -192,10 +197,10 @@ fn pass_local_judgment_preserves_newer_and_conflicting_authenticated_issuances()
 }
 
 #[test]
-fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release() {
-    for delegated in [false, true] {
-        let mut c = if delegated {
-            delegated_case()
+fn pass_direct_r2_by_a_person_or_renovate_requires_the_candidate_train_after_owner_release() {
+    for renovate in [false, true] {
+        let mut c = if renovate {
+            Case::renovate()
         } else {
             Case::new()
         };
@@ -205,19 +210,27 @@ fn pass_direct_and_delegated_r2_require_the_candidate_train_after_owner_release(
         c.hub
             .edit_pull(REPO, 3, |p| p["labels"] = json!([{"name":"r2"}]));
         let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-        let body = c.config.settings.judge_key.as_ref().unwrap().decision(
-            REPO,
-            3,
-            "autoland-judgment",
-            "land",
-            &revision,
-            1,
-        );
+        let body = c
+            .config
+            .settings
+            .judge_key
+            .as_ref()
+            .unwrap()
+            .judgment_by(
+                REPO,
+                3,
+                Judgment::Pass,
+                &revision,
+                1,
+                super::super::judge_provenance(),
+                super::super::judged_for_everything(&c.hub, REPO),
+            )
+            .unwrap();
         c.hub.flow_comment(REPO, 3, "owner", &body);
         let now = flow::jobs::now();
         assert_eq!(
             c.pass(now, false)[0].next.as_ref().unwrap().step,
-            Step::ListOwner
+            Step::ListOwner(Door::R2)
         );
         c.hub
             .edit_pull(REPO, 3, |p| p["labels"] = json!([{"name":"needs-peter"}]));
@@ -322,29 +335,9 @@ fn pass_negative_evidence_is_required_before_direct_or_train_permission() {
     }
 }
 
-fn delegated_case() -> Case {
-    let mut c = Case::new();
-    c.config.settings.renovate_email = Some("bot@renovateapp.com".into());
-    c.config.settings.renovate_login = Some("renovate[bot]".into());
-    c.hub.edit_pull(REPO, 3, |p| {
-        p["head"]["ref"] = json!("renovate/foo");
-        p["title"] = json!("Update foo from 1.4 to 1.5");
-        p["body"] = json!("🚦 **Automerge**: Enabled.");
-    });
-    c.hub.refresh_flow(REPO, 3);
-    c.hub.commit_details(
-        &head(3),
-        Some("deps: bump"),
-        Some("bot@renovateapp.com"),
-        Some("bot@renovateapp.com"),
-    );
-    c.clean_review();
-    c
-}
-
 #[test]
-fn pass_delegated_settlement_requires_negative_evidence() {
-    let c = delegated_case();
+fn pass_renovate_merge_requires_negative_evidence() {
+    let c = Case::renovate();
     strip_negative(&c);
     let reports = c.pass(flow::jobs::now(), false);
     assert!(matches!(
@@ -365,9 +358,9 @@ fn pass_delegated_settlement_requires_negative_evidence() {
 
 #[test]
 fn pass_revokes_permission_when_the_success_write_races_a_scope_change() {
-    for delegated in [false, true] {
-        let c = if delegated {
-            delegated_case()
+    for renovate in [false, true] {
+        let c = if renovate {
+            Case::renovate()
         } else {
             Case::new()
         };

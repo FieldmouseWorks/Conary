@@ -6,8 +6,9 @@ use conary_core::{Ledger, Store};
 
 pub(crate) fn config(settings: &Settings) -> crate::Config {
     crate::Config {
-        reviewers: settings.review_authors.iter().cloned().collect(),
-        own_contexts: vec![SETTLED.into(), crate::train::CONTEXT.into()],
+        reviewers: settings.flow_authors.iter().cloned().collect(),
+        review_authors: settings.review_authors.iter().cloned().collect(),
+        own_contexts: vec![SETTLED.into()],
     }
 }
 pub(crate) fn raised(f: &mut Facts, memory: &mut Memory, ledger: Option<&Ledger>) {
@@ -20,6 +21,14 @@ pub(crate) fn raised(f: &mut Facts, memory: &mut Memory, ledger: Option<&Ledger>
         .clone()
         .raise(memory.raised.iter().cloned().collect());
 }
+/// Whether the ledger holds the PR as the decision read it: nobody else
+/// recorded about its change since [`classify`] began reading it.
+pub(crate) fn unchanged(f: &Facts, store: &Store) -> bool {
+    store
+        .ledger()
+        .by_pr(&f.repo, f.number)
+        .is_some_and(|c| !store.overtaken(c.id))
+}
 pub(crate) fn classify<G: Write>(
     pass: &Pass<'_>,
     github: &G,
@@ -27,7 +36,9 @@ pub(crate) fn classify<G: Write>(
     record: &mut Record,
     store: &mut Store,
 ) -> Result<()> {
-    raised(f, &mut record.memory, Some(store.ledger()));
+    // Before GitHub is read, so nothing is recorded as it was before what
+    // another writer records while it's read.
+    raised(f, &mut record.memory, Some(store.reading()?));
     let pull = github.pull(&f.repo.to_string(), f.number)?;
     let receipts = submissions(record);
     let got = crate::ingest::submitted(
@@ -69,6 +80,7 @@ pub(crate) fn reconcile<G: Write>(
     record: &mut Record,
 ) -> Result<()> {
     if record.landing.is_some() || !record.pending.is_empty() {
+        store.reading()?;
         let pull = github.pull(&repo.to_string(), pr)?;
         let receipts = submissions(record);
         crate::ingest::submitted(
@@ -88,7 +100,7 @@ pub(crate) fn reconcile<G: Write>(
             )
         });
         for intent in record.landing.iter_mut().chain(&mut record.pending) {
-            if !intent.delegated && !intent.accepted && pull.state == "open" && !pull.is_merged() {
+            if !intent.accepted && pull.state == "open" && !pull.is_merged() {
                 intent.retry = retryable(github, repo, pr, &pull, intent)?;
             }
         }
@@ -117,14 +129,13 @@ fn submissions(record: &Record) -> Vec<crate::ingest::Submission> {
         })
         .collect()
 }
-pub(crate) fn intent(f: &Facts, delegated: bool) -> Result<Landing> {
+pub(crate) fn intent(f: &Facts) -> Result<Landing> {
     Ok(Landing {
         permission: None,
         head: f.revision.head.clone(),
         target: f.revision.base.clone(),
         revision: Some(f.revision.clone()),
         base: f.base_tip.clone().ok_or("landing base unknown")?,
-        delegated,
         accepted: false,
         retry: false,
     })
@@ -174,7 +185,7 @@ fn retryable<G: Write>(
     Ok(superseded || history.complete)
 }
 pub(crate) fn begin(f: &Facts, record: &mut Record) -> Result<()> {
-    let new = intent(f, false)?;
+    let new = intent(f)?;
     if let Some(old) = record.landing.take()
         && (old.head != new.head
             || old.target != new.target

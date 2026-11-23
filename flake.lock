@@ -6,30 +6,32 @@
         "microvm": "microvm",
         "nixpkgs": "nixpkgs",
         "nixpkgs-unstable": "nixpkgs-unstable",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": [
+          "rust-overlay"
+        ]
       },
       "locked": {
-        "lastModified": 1794476207,
-        "narHash": "sha256-J03rKoS1soAQ1Mm59PqTN2nARMwiw4I7m442EdVskRQ=",
+        "lastModified": 1795428670,
+        "narHash": "sha256-0311mCdpUXWXHL21RKKIkpeJS721BRuvgBfoTMT1wg0=",
         "ref": "main",
-        "rev": "202d1c06990656145a30a290b8dd134f61006b4a",
-        "revCount": 584,
+        "rev": "bdff7e264b5ab400ba4d90766ca81fdd23f315ae",
+        "revCount": 870,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
       "original": {
         "ref": "main",
-        "rev": "202d1c06990656145a30a290b8dd134f61006b4a",
+        "rev": "bdff7e264b5ab400ba4d90766ca81fdd23f315ae",
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       }
     },
     "crane": {
       "locked": {
-        "lastModified": 1793836618,
-        "narHash": "sha256-TREenflwEjxOSq292FYwbc3kEm7TDRtXCZRNWEdjBmg=",
+        "lastModified": 1794962885,
+        "narHash": "sha256-zrweT2tXbcWiJMACOhOr2eYFJKVa6g59ouRaZ3BS5Do=",
         "ref": "refs/heads/master",
-        "rev": "79fd63528501446749c09f08cad486a58c7d173e",
+        "rev": "95e62def851e9d650f0eab63cb4f59a3306e20bd",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/ipetkov/crane"
@@ -49,10 +51,10 @@
         "spectrum": "spectrum"
       },
       "locked": {
-        "lastModified": 1793281488,
-        "narHash": "sha256-ErGIqtoWEX9KKC8NFtJDx2pGGG02Cr6LGxrvzLd2sqA=",
+        "lastModified": 1795298370,
+        "narHash": "sha256-mruPu1cqOVBxPiRwrh6r1tnX1OAzMggy+rDk6YuqhK8=",
         "ref": "refs/heads/main",
-        "rev": "b7bd556974fa8a171b5b639200e81d52244dfde4",
+        "rev": "430a46d03ef15f1b8b715fafa85f21847960b783",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/microvm-nix/microvm.nix"
@@ -65,10 +67,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1794165970,
-        "narHash": "sha256-XuAV2cUwaod3Bt4XFVqiXz3v1w2ex16W6Sv4S7EWres=",
+        "lastModified": 1795258312,
+        "narHash": "sha256-IEuDsf80ubivfpidbRsIm30HVo7PZIdZt1stRsbaY4Y=",
         "ref": "nixos-26.05",
-        "rev": "ac588ef1c914865dad517b337ea0eb9694a4021c",
+        "rev": "94c3211b0ee8ba969a3f12eb4aff8ba0f72971dd",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
@@ -82,10 +84,10 @@
     },
     "nixpkgs-unstable": {
       "locked": {
-        "lastModified": 1794042290,
-        "narHash": "sha256-ziZn2PvCJE5JEEpqTdxXwJpPB+L3YqoCpTAMCzyaP3U=",
+        "lastModified": 1795234589,
+        "narHash": "sha256-f/VVvxf5RsQgWVhUtefoca5ktVg0DA2bnkMOcmSnozo=",
         "ref": "nixos-unstable",
-        "rev": "f4a03c008967841f2a0b3cb7c436fc6fc31671f6",
+        "rev": "2786a2a72088ecf32aea5b3ec52099e6a7cff78f",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs"
@@ -99,7 +101,8 @@
     },
     "root": {
       "inputs": {
-        "burrow": "burrow"
+        "burrow": "burrow",
+        "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
@@ -110,10 +113,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1794388042,
-        "narHash": "sha256-rsskkiDNmuZGK6Xk3JvWUxWENjuX4Jf0hOSFYujGC0s=",
+        "lastModified": 1795429968,
+        "narHash": "sha256-MJVmTxxAm87tT7yxH5BU8EnKGza32SQ2pqYsHWpJ1H4=",
         "ref": "refs/heads/master",
-        "rev": "0070500a3d72ade21323092e7bdd7125c5268482",
+        "rev": "ea2084066e0f3fed86a76a2654658ed2eb998046",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/oxalica/rust-overlay"

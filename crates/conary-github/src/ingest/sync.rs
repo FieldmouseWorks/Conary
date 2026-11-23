@@ -1,0 +1,262 @@
+//! A sync: the ledger brought up to date with a repo, read in two parts so
+//! the ledger's writer lock is held only while it records. [`gather`] reads
+//! what takes minutes, each open PR's check runs, statuses, reviews and
+//! timeline, before the lock; [`sync`], under it, lists the PRs again and
+//! records from what was gathered, reading a PR's timeline again when the
+//! PR changed since, and everything again when its revision did.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
+
+use conary_core::ledger::{Change, Ledger, Status};
+use conary_core::op::Repo;
+use conary_core::{RevisionId, Store};
+
+use super::{Config, IngestError, Ingested, Read, Refusal, Results, commit, record};
+use crate::api::{Event, PullRequest, Pulls, Source};
+use crate::bases::MergeBases;
+
+/// What a [`sync`] or [`backfill`](super::backfill) of a repo did.
+#[derive(Debug, Default)]
+pub struct Synced {
+    /// The PRs it recorded, in the order it read them.
+    pub ingested: Vec<Ingested>,
+    /// The undo PRs it refused, each alone: nothing of them was recorded,
+    /// and the repo's other PRs were synced all the same.
+    pub refused: Vec<Refused>,
+}
+
+/// An undo PR a sync refused, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub pr: u64,
+    pub why: Refusal,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let why = IngestError::Undo(self.why.clone());
+        write!(f, "PR #{} refused: {why}", self.pr)
+    }
+}
+
+impl Synced {
+    /// Takes one PR's ingest: what it recorded, or its refusal as an undo,
+    /// which is that PR's alone. Any other failure stops the sync.
+    pub(crate) fn take(
+        &mut self,
+        pr: u64,
+        got: Result<Ingested, IngestError>,
+    ) -> Result<(), IngestError> {
+        match got {
+            Ok(got) => self.ingested.push(got),
+            Err(IngestError::Undo(why)) => self.refused.push(Refused { pr, why }),
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+}
+
+/// What a sync read of a repo's open PRs before it took the ledger's lock.
+pub struct Gathered {
+    config: Config,
+    repo: Repo,
+    bases: MergeBases,
+    open: HashMap<u64, Held>,
+}
+
+/// One open PR's results, and the revision it was at when they were read.
+struct Held {
+    revision: RevisionId,
+    results: Results,
+    timeline: Option<Timeline>,
+}
+
+/// A PR's timeline, read after its results, and the PR's `updated_at` as
+/// it was listed before either. A retarget changes `updated_at`, so while
+/// the PR lists with the same one no retarget can have come since the
+/// timeline was read, and it still says which results came after the last.
+struct Timeline {
+    updated_at: String,
+    events: Vec<Event>,
+}
+
+/// How long before its timeline is read a PR must have last changed for
+/// the timeline to be kept: GitHub gives `updated_at` to the second, so a
+/// retarget in the same second as the change before it wouldn't show, and
+/// this box's clock and GitHub's needn't agree to the second.
+const SETTLED_FOR: Duration = Duration::from_secs(60);
+
+/// Reads what a [`sync`] of `repo` records for its open PRs, without the
+/// ledger: run it before the lock is taken, so other writers wait only for
+/// the recording. A PR that can't be read now is read again under the lock,
+/// where a failure stops the sync once the PRs before it are recorded, as
+/// it would have with nothing gathered; so are the ones after it. An undo
+/// PR refused there is refused alone.
+///
+/// Each PR's merge base, what tells [`sync`] whether the results are still
+/// the revision's it records, comes from the cache beside the ledger in
+/// `dir`, read as it is; one it doesn't hold is asked of GitHub, and [`sync`]
+/// keeps it there.
+pub fn gather(
+    source: &dyn Source,
+    config: &Config,
+    repo: &Repo,
+    dir: &Path,
+) -> Result<Gathered, IngestError> {
+    config.check()?;
+    let full = repo.to_string();
+    let mut bases = MergeBases::read(dir).map_err(IngestError::Cache)?;
+    let mut open = HashMap::new();
+    for pr in source.pulls(&full, Pulls::Open)? {
+        let Ok(held) = held(source, &mut bases, &full, &pr) else {
+            break;
+        };
+        open.insert(pr.number, held);
+    }
+    Ok(Gathered {
+        config: config.clone(),
+        repo: repo.clone(),
+        bases,
+        open,
+    })
+}
+
+fn held(
+    source: &dyn Source,
+    bases: &mut MergeBases,
+    repo: &str,
+    pr: &PullRequest,
+) -> Result<Held, IngestError> {
+    let head = commit(&pr.head.sha)?;
+    let base = commit(&bases.get(source, repo, &pr.base.sha, head.as_str())?)?;
+    let results = Results::of(source, repo, pr)?;
+    let asked = SystemTime::now();
+    let events = source.timeline(repo, pr.number)?;
+    let timeline = pr
+        .updated_at
+        .clone()
+        .filter(|at| settled_by(at, asked))
+        .map(|updated_at| Timeline { updated_at, events });
+    Ok(Held {
+        revision: RevisionId::new(&base, &head),
+        results,
+        timeline,
+    })
+}
+
+/// Whether a PR last changed at `at` changed at least [`SETTLED_FOR`]
+/// before `asked`. A time that can't be read never did.
+fn settled_by(at: &str, asked: SystemTime) -> bool {
+    at.parse::<jiff::Timestamp>()
+        .ok()
+        .and_then(|t| SystemTime::try_from(t).ok())
+        .and_then(|t| t.checked_add(SETTLED_FOR))
+        .is_some_and(|by| by <= asked)
+}
+
+/// Brings the ledger up to date with what's happening in the repo
+/// `gathered` was read from: every open PR, since its checks and reviews
+/// come and go, and every recently closed one the ledger doesn't hold as it
+/// finished yet. The merge base of a PR's base and head never changes, so
+/// it comes from the cache beside the ledger, and a closed PR the ledger
+/// already holds as GitHub shows it costs no calls.
+///
+/// The PRs are listed again here, under the lock: another writer may have
+/// recorded one as it was after it was gathered, and a PR is never
+/// recorded as it was before what the ledger holds. A PR's gathered
+/// results are its own while it's at the revision they were read at: they
+/// stay bound to that merge base and head, and one pushed to, or whose base
+/// moved or was rewritten so its merge base changed, is read again, as is
+/// one opened since. A PR's timeline is read again here, after its
+/// results, unless it lists with the same `updated_at` it had when its
+/// timeline was gathered, so a result from before its latest retarget is
+/// left out, however many there were since the gather and wherever they
+/// went.
+///
+/// An unrecorded PR on an own undo branch whose marker can't be read or
+/// gives no reason is never read as an ordinary PR: it's refused, alone, in
+/// [`Synced::refused`], and the repo's other PRs are synced all the same.
+/// Any other failure stops the sync.
+pub fn sync(
+    store: &mut Store,
+    source: &dyn Source,
+    gathered: Gathered,
+) -> Result<Synced, IngestError> {
+    let Gathered {
+        config,
+        repo,
+        bases: asked,
+        mut open,
+    } = gathered;
+    config.check()?;
+    let full = repo.to_string();
+    let mut bases = MergeBases::load(store.writer().map_err(IngestError::Store)?.lock())
+        .map_err(IngestError::Cache)?;
+    bases.keep(asked).map_err(IngestError::Cache)?;
+    let mut got = Synced::default();
+    for pr in source.pulls(&full, Pulls::Open)? {
+        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
+        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
+        let read = match open.remove(&pr.number) {
+            Some(h) if h.revision == revision => match h.timeline {
+                Some(t) if pr.updated_at.as_ref() == Some(&t.updated_at) => Read {
+                    timeline: t.events,
+                    results: h.results,
+                },
+                _ => Read::after(source, &full, &pr, h.results)?,
+            },
+            _ => Read::of(source, &full, &pr)?,
+        };
+        got.take(
+            pr.number,
+            record(store, source, &config, &repo, &pr, base, read),
+        )?;
+    }
+    for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
+        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
+        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
+        let ledger = store.ledger();
+        let settled = ledger
+            .by_pr(&repo, pr.number)
+            .is_some_and(|c| settled(ledger, c, pr, revision));
+        if !settled {
+            let read = Read::of(source, &full, pr)?;
+            got.take(
+                pr.number,
+                record(store, source, &config, &repo, pr, base, read),
+            )?;
+        }
+    }
+    Ok(got)
+}
+
+/// Whether the ledger already holds a closed PR as GitHub shows it: how it
+/// finished, the revision it's at and its intent. A PR reopened, retargeted or
+/// pushed to (back to an older head or base too) and closed again, or
+/// reopened and merged, between two syncs is read again.
+fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
+    let finished = match c.status() {
+        Status::Open => false,
+        Status::Landed | Status::Reverted => pr.is_merged(),
+        // Closed without landing, or merged without a landing: into another
+        // branch, or pushed to trunk outside a merge.
+        Status::Closed => {
+            !pr.is_merged()
+                || !pr.targets_trunk()
+                || pr.merge_commit_sha.as_deref().is_some_and(|sha| {
+                    ledger
+                        .outside()
+                        .iter()
+                        .any(|o| o.repo == c.repo && o.after.as_str() == sha)
+                })
+        }
+    };
+    let body = pr.body.as_deref().unwrap_or_default();
+    finished
+        && c.current == Some(revision)
+        && c.intent
+            .as_ref()
+            .is_some_and(|i| i.summary == pr.title && i.body == body)
+}

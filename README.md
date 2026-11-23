@@ -59,8 +59,10 @@ Early. It runs on one machine, remi, over one owner's repositories, alongside
 the service that gets PRs reviewed and merges them there today. Conary takes the
 steward's jobs over one at a time. So far it records every PR in those
 repositories, runs their merge trains, decides each change's class (which
-ones need a review round, and which a person) and opens undos; the steward
-still asks for the reviews and says when a PR is settled.
+ones need a review round, and which a person) and opens undos. On remi it
+also works out its own landing decision for each PR after every steward pass
+and logs where the two disagree, acting on none of it; the steward still asks
+for the reviews and says when a PR is settled.
 
 Where it's going, what's done and what's next are in the
 [roadmap](docs/DESIGN.md#12-roadmap).
@@ -88,8 +90,12 @@ writes it): `cn init` sets it up once, and every write moves it on, so a log
 that loses ops is refused. It prints JSON; add `--human` for people.
 
     cn init
-    cn backfill FieldmouseWorks/burrow --reviewer <steward-app>[bot]
-    cn ingest FieldmouseWorks/burrow 61 --reviewer <steward-app>[bot]
+    cn backfill FieldmouseWorks/burrow --reviewer <steward-app>[bot] \
+      --review-author chatgpt-codex-connector[bot]
+    cn ingest FieldmouseWorks/burrow 61 --reviewer <steward-app>[bot] \
+      --review-author chatgpt-codex-connector[bot]
+    cn sync FieldmouseWorks/burrow FieldmouseWorks/remi --reviewer <steward-app>[bot] \
+      --review-author chatgpt-codex-connector[bot]    # a line per repository; `cn sync --help`
     cn log --human
     cn why -C ~/src/burrow modules/claude.nix:40 --human
     cn at 1762300800000 log --human    # as the ledger stood then (ms since the epoch)
@@ -125,6 +131,9 @@ attestations](docs/ci-attestation.md)), signed by the workflow the machine
 names (`CONARY_SIGNER_WORKFLOW`) and made on one of GitHub's runners or on a
 self-hosted one started fresh for that job, whose name starts with
 `--fresh-runners`.
+Services can also attest results with machine-configured public keys;
+[`--producer-keys`](docs/service-attestation.md) names the trusted keys and
+the checks each can attest. This uses the same verifier as CI and flow.
 `verdict` records one `step` can't tell: `dropped`, for a gate that never
 finished.
 
@@ -138,10 +147,14 @@ finished.
 change's undo ([undo](docs/DESIGN.md#5-undo)); by session or time, one PR
 per repo reverts each change, newest first. A revert that conflicts with
 what came after it opens all the same, for its conflict to be resolved.
+Every request needs `--reason`: a nonblank operational explanation, kept
+on the undo operation and at the start of its PR body. For a red run, give
+the run's URL, failing checks and first error line. Reasons enter permanent
+history: never include secrets, personal data or prompt text.
 
-    cn undo FieldmouseWorks/remi#174
-    cn undo --actor https://claude.ai/code/session_01...
-    cn undo --since 1793750400000 --repo FieldmouseWorks/remi
+    cn undo FieldmouseWorks/remi#174 --reason 'Red run https://github.com/FieldmouseWorks/remi/actions/runs/123: check / check failed; error: build failed'
+    cn undo --actor https://claude.ai/code/session_01... --reason 'The session deployed the wrong configuration'
+    cn undo --since 1793750400000 --repo FieldmouseWorks/remi --reason 'Deployments since this time broke the health check'
 
 `cn attest` is a CI job's side of the same evidence: it writes a gate's or
 a negative run's attestation in [the format](docs/ci-attestation.md), and
@@ -151,15 +164,26 @@ with `--sign` signs it with the job's own OIDC token (the job needs
     cn attest revision <base> <head> --result pass --tree <tree> \
       --log flake.log --log-artifact flake-log-<uuid> --out "$RUNNER_TEMP/conary" --sign
 
+`cn attest job --audience AUDIENCE --repo OWNER/NAME` is a door's side: whether a job's own
+token, on stdin, may hand the machine something
+([a job's own token](docs/ci-attestation.md#a-jobs-own-token)).
+
 `cn plugin check PATH` checks an executable against the versioned
 [plugin contract](docs/plugins.md), with a copyable Rust example.
+
+`cn lessons check` checks the [lessons register](docs/lessons.toml) as the
+gate does, and `cn lessons exit M6` is the lessons part of a milestone's exit
+check: it fails while an open lesson applies to a component the milestone
+ships ([Properties](docs/DESIGN.md#properties)).
 
 `cn --help` and each command's `--help` list the rest, environment variables
 included.
 
 `conaryd` serves the same ledger over a Unix socket, as JSON-RPC, for
 anything on the box ([conaryd](docs/conaryd.md)), and `conary-mcp` offers it
-to agents as MCP tools ([the MCP server](docs/mcp.md)).
+to agents as MCP tools ([the MCP server](docs/mcp.md)). It can also tell a
+gate whether CI already attested a pass on the same tree
+([gate reuse](docs/gate-reuse.md)).
 
 ## Building
 

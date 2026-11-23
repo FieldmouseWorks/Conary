@@ -13,6 +13,7 @@ const RUN: u64 = 41;
 const PUSH: Subject = Subject::Commit {
     commit: COMMIT,
     tree: TREE,
+    definition: None,
 };
 
 fn repo() -> Repo {
@@ -31,6 +32,7 @@ fn run(conclusion: &str) -> CheckRun {
         started_at: None,
         check_suite: Some(CheckSuite { id: 3 }),
         external_id: None,
+        output: None,
     }
 }
 
@@ -206,7 +208,7 @@ fn a_token_counts_only_for_its_own_statement_run_and_commit() {
 }
 
 #[test]
-fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skipped() {
+fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_and_names_what_it_skipped() {
     // A statement that's changed, signed for as it is now: only what it
     // says decides.
     let says = |s: String, run: CheckRun| {
@@ -230,9 +232,17 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skippe
     // agree with doesn't count.
     assert!(why(statement(COMMIT, TREE, "fail"), run("success")).contains("says fail"));
     assert!(why(honest.clone(), run("failure")).contains("check run failure"));
+    // One that skipped a check counts for those it ran, and says which it
+    // skipped: what covers them is the counting policy's call.
     let skipped = honest.replace(r#""skipped":[]"#, r#""skipped":["agents"]"#);
     assert_ne!(skipped, honest);
-    assert!(why(skipped, run("success")).contains("skipped agents"));
+    let claimed = says(skipped, run("success")).unwrap();
+    assert_eq!(
+        super::skipped(&claimed.attested.attest).unwrap(),
+        ["agents"]
+    );
+    let whole = says(honest.clone(), run("success")).unwrap();
+    assert!(super::skipped(&whole.attested.attest).unwrap().is_empty());
     let pr = honest.replace(
         r#""revision":null"#,
         r#""revision":{"base":"b","head":"h"}"#,
@@ -250,6 +260,52 @@ fn a_statement_counts_only_for_a_pass_on_the_candidates_tree_with_nothing_skippe
     );
     assert!(why(pretty, run("success")).contains("subject"));
     assert!(why(format!("{honest}more\n"), run("success")).contains("subject"));
+}
+
+#[test]
+fn a_gate_that_broke_never_counts_as_a_pass() {
+    // As burrow's flake-check signs one: why after the log, then the gate.
+    let signed = |subject: &str, revision: &str| {
+        format!(
+            r#"{subject}{{"result":"error","revision":{revision},"tree":"{TREE}","skipped":[],"log":{{"sha256":"{}","artifact":"flake-log-1"}},"error":"couldn't write its log: No space left on device (os error 28)","gate":{{"workflow":"w"}}}}
+"#,
+            "0".repeat(64)
+        )
+    };
+    let push = signed(&format!("conary commit v1\n{COMMIT}\n"), "null");
+    let revision = signed(
+        &format!("conary revision v1\n{BASE}\n{COMMIT}\n"),
+        &format!(r#"{{"base":"{BASE}","head":"{COMMIT}"}}"#),
+    );
+    let gate = Subject::Gate {
+        commit: COMMIT,
+        tree: TREE,
+    };
+    for (broke, subject) in [(&push, PUSH), (&push, gate), (&revision, gate)] {
+        let counted = |s: &str, conclusion: &str| {
+            let c = claims("FieldmouseWorks/remi", COMMIT, RUN, s);
+            check(
+                file(s, &token(&c)).as_bytes(),
+                &[key()],
+                &repo(),
+                subject,
+                &run(conclusion),
+                &signer(),
+            )
+        };
+        // Refused for what it says, whatever its check run concluded.
+        for conclusion in ["success", "failure"] {
+            let why = counted(broke, conclusion).unwrap_err();
+            assert!(
+                why.contains("says error"),
+                "{subject:?} {conclusion}: {why}"
+            );
+        }
+        // Nothing else in it is refused: saying pass, the same one counts.
+        let passed = broke.replace(r#""result":"error""#, r#""result":"pass""#);
+        let claimed = counted(&passed, "success").unwrap();
+        assert_eq!(claimed.attested.result, Outcome::Pass);
+    }
 }
 
 #[test]
@@ -432,3 +488,68 @@ fn a_signer_is_a_workflow_of_a_repo_and_counts_only_where_the_machine_names_it()
 }
 
 mod make;
+
+#[test]
+fn a_kept_attestation_stands_only_for_the_ci_run_it_was_checked_for() {
+    let (s, c) = honest();
+    let kept = Attest::GithubToken {
+        statement: s,
+        token: token(&c),
+    };
+    assert!(stands_for(&kept, &run("success")));
+    // Another run, a URL and name shared or not: its token isn't that run's.
+    let mut other = run("success");
+    other.id = RUN + 1;
+    assert!(!stands_for(&kept, &other));
+    // A token naming no check run stands for none.
+    let mut unnamed = c.clone();
+    unnamed.as_object_mut().unwrap().remove("check_run_id");
+    let unnamed = Attest::GithubToken {
+        statement: String::new(),
+        token: token(&unnamed),
+    };
+    assert!(!stands_for(&unnamed, &run("success")));
+    // The run now carries a service statement: that counts in its place,
+    // checked, and the token kept for it stands for nothing.
+    let mut published = run("success");
+    published.output = Some(crate::api::CheckOutput {
+        text: Some(format!("{}\n", service::HEADER)),
+    });
+    assert!(!stands_for(&kept, &published));
+    // A service attestation is checked from its run's output every time,
+    // whatever the ledger kept of it.
+    let service = Attest::Service {
+        statement: format!("{}\n{{}}\n", service::HEADER),
+        key: String::new(),
+        signature: String::new(),
+    };
+    assert!(!stands_for(&service, &run("success")));
+    assert!(!stands_for(&service, &published));
+}
+
+#[test]
+fn a_ci_attestation_cannot_attest_a_check_the_machine_defines() {
+    use crate::sim::Call;
+    // Nothing on GitHub is asked: CI's statement names no recipe.
+    let hub = crate::sim::Hub::new("FieldmouseWorks/remi", COMMIT);
+    let trust = Trust {
+        signer: signer(),
+        fresh: None,
+        producers: service::Producers::default(),
+    };
+    let subject = Subject::Commit {
+        commit: COMMIT,
+        tree: TREE,
+        definition: Some("d"),
+    };
+    let why = attested(&hub, &hub, &repo(), subject, &run("success"), &trust)
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        why.contains("defines this check by d, which only a service's statement"),
+        "{why}"
+    );
+    for call in [Call::Job, Call::Artifacts, Call::Artifact, Call::Keys] {
+        assert_eq!(hub.count(call), 0, "{call:?}");
+    }
+}

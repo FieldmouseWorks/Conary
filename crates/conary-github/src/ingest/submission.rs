@@ -52,15 +52,7 @@ pub(super) fn authority(
             {
                 continue;
             }
-            let relevant: Vec<_> = statuses
-                .iter()
-                .filter(|s| {
-                    config.own_contexts.contains(&s.context)
-                        && s.creator
-                            .as_ref()
-                            .is_some_and(|u| config.reviewers.contains(&u.login))
-                })
-                .collect();
+            let relevant: Vec<_> = statuses.iter().filter(|s| config.settles(s)).collect();
             let observed = relevant.iter().position(|s| {
                 s.state == "success"
                     && s.created_at.as_deref() == Some(receipt.permission.at.as_str())

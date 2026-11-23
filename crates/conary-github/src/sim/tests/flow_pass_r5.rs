@@ -135,38 +135,25 @@ fn cleanup_cannot_invent_authorization_or_override_a_real_withdrawal() {
 
 #[test]
 fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
-    use conary_core::plugin::{Finding, Severity, Task};
-    for mode in ["fresh", "stale-local", "carried"] {
+    use conary_core::plugin::Task;
+    for mode in ["fresh", "carried"] {
         let c = Case::new();
         let now = jobs::now();
-        if mode == "stale-local" {
-            c.pass(now, false);
-            c.run_worker();
-            c.pass(now + 1, false);
-        }
-        let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-        for (id, text, at) in [
-            (10, "superseded", now + 2),
-            (11, "current blocker", now + 3),
+        // Two of the connector's findings, each on its thread: the earlier
+        // one answered and resolved, the later one open.
+        c.hub.flow_review(REPO, 3, Verdict::Findings, now + 2);
+        for (id, text, resolved) in [
+            ("PRRT_10", "superseded", true),
+            ("PRRT_11", "current blocker", false),
         ] {
-            let body = review_body(
-                "reviewer",
-                &revision,
-                at,
-                &[Finding {
-                    path: "src/lib.rs".into(),
-                    line: 7,
-                    severity: Severity::P1,
-                    text: text.into(),
-                }],
+            c.hub.flow_thread_at(
+                REPO,
+                3,
+                id,
+                ("src/lib.rs", 7),
+                (crate::sim::CONNECTOR, &format!("**P1** {text}")),
             );
-            let body = if mode == "carried" {
-                format!("{body}\n\n")
-            } else {
-                body
-            };
-            c.hub.world.borrow_mut().repos.get_mut(REPO).unwrap().reviews.entry(3).or_default().push(json!({"id":id, "user":{"login":STEWARD,"type":"Bot"},
-            "body":body,"commit_id":head(3),"submitted_at":"2099-01-01T00:00:00Z","state":"COMMENTED"}));
+            c.hub.flow_thread(REPO, 3, id, resolved);
         }
         if mode == "carried" {
             let tip = c.hub.add(super::TRUNK, "trunk-only patch");
@@ -178,9 +165,7 @@ fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
             c.hub.refresh_flow(REPO, 3);
             c.good_ci(&head(4));
         }
-        if mode != "stale-local" {
-            c.pass(now + 4, false);
-        }
+        c.pass(now + 4, false);
         let reports = c.pass(now + 5, false);
         assert_eq!(reports[0].error, None);
         assert_eq!(
@@ -195,70 +180,28 @@ fn github_findings_supply_the_current_fixer_problems_without_local_workers() {
         };
         let wire = serde_json::to_string(&problems).unwrap();
         assert!(wire.contains("current blocker"));
-        assert!(wire.contains("GitHub review 11"));
+        assert!(wire.contains("GitHub review thread PRRT_11"));
         assert!(!wire.contains("superseded"));
+        assert_eq!(c.record().jobs[0].handed, [Some("PRRT_11".to_string())]);
     }
 }
 
 #[test]
 fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
-    for blocker in [
-        "unstructured",
-        "lost",
-        "thread",
-        "native",
-        "judgment",
-        "description",
-    ] {
+    for blocker in ["thread", "native", "judgment", "description"] {
         let c = Case::new();
         if matches!(blocker, "judgment" | "description") {
             c.clean_review();
             c.judgment(
                 1,
                 if blocker == "judgment" {
-                    Judgment::Failing
+                    Judgment::Fail
                 } else {
                     Judgment::Misdescribed
                 },
                 true,
             );
         } else {
-            c.hub.flow_review(REPO, 3, "reviewer", Verdict::Findings, 1);
-            if blocker != "unstructured" {
-                let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
-                let body = review_body(
-                    "reviewer",
-                    &revision,
-                    1,
-                    &[conary_core::plugin::Finding {
-                        path: "src/lib.rs".into(),
-                        line: 1,
-                        severity: conary_core::plugin::Severity::P1,
-                        text: "located blocker".into(),
-                    }],
-                );
-                c.hub
-                    .world
-                    .borrow_mut()
-                    .repos
-                    .get_mut(REPO)
-                    .unwrap()
-                    .reviews
-                    .get_mut(&3)
-                    .unwrap()[0]["body"] = json!(body);
-            }
-            if blocker == "lost" {
-                let data = Data::open(c.dir.path(), &REPO.parse().unwrap()).unwrap();
-                let mut record = Record::default();
-                record
-                    .memory
-                    .lost_on
-                    .entry("reviewer".into())
-                    .or_default()
-                    .insert("main".into(), head(2).into());
-                data.save(3, &record).unwrap();
-            }
-
             if blocker == "native" {
                 c.hub.person_review(
                     REPO,
@@ -271,10 +214,14 @@ fn unrepresentable_blockers_wait_instead_of_launching_an_empty_fixer() {
                 );
             }
             if blocker == "thread" {
-                let mut snapshot = crate::flow::Read::snapshot(&c.hub, REPO, 3).unwrap();
-                snapshot.open_threads = 1;
-                snapshot.threads.insert("blocking-thread".into(), false);
-                c.hub.flow_snapshot(REPO, 3, snapshot);
+                // A person's thread on a whole file: no line to hand.
+                c.hub.flow_thread_comments(
+                    REPO,
+                    3,
+                    "file-thread",
+                    &[("maintainer", "This file shouldn't exist")],
+                );
+                c.hub.flow_thread(REPO, 3, "file-thread", false);
             }
         }
         let now = jobs::now();

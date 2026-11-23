@@ -68,11 +68,12 @@ model. A signer cannot infer the meaning or coverage of arbitrary test code.
 The required checks are `attest / gate` and, for PRs using negatives,
 `attest / negative` (replace `attest` with the caller job's name). The gate
 passes only when every supplied job concludes `success`; skipped and failed
-jobs give a failing statement, and cancelled, empty or malformed results
-produce no statement. The statement's hashed log artifact contains the
-supplied job names and conclusions, excluding arbitrary job outputs. This
-retains the v1 predicate and lets a single required gate explain which jobs it
-summarised.
+jobs give a failing statement, never an `error` (a job's conclusion can't
+tell a test that failed from a job that broke), and cancelled, empty or
+malformed results produce no statement. The statement's hashed log artifact
+contains the supplied job names and conclusions, excluding arbitrary job
+outputs. This retains the v1 predicate and lets a single required gate explain
+which jobs it summarised.
 
 On same-repository PRs, `negative-run` constructs base code with head tests
 using `cn attest prepare-negative`, then runs `negative-command` in that tree
@@ -86,13 +87,15 @@ dependency and toolchain setup in that command when needed (for example,
 test suite: Conary
 cannot infer which tests an arbitrary command runs. Setup or compilation
 failure inside the command is a failure on the negative tree, just as a
-flake failing to evaluate is; failure constructing the tree or provisioning
-the trusted tool produces no negative evidence. The independent `negative`
+flake failing to evaluate is, unless the tree made it by taking away a test
+file ([below](#a-failure-the-negative-tree-made)); failure constructing the
+tree or provisioning the trusted tool produces no negative evidence. The independent `negative`
 signing job recomputes the tree and test list, names `negative-run` in
 `checks`, and signs the execution job's result. The supplied shell command
 is not copied into the evidence. Passing tests on old code
 make that check red; failing tests or a change needing no negative make it
-green. Fork PRs and unsupported events get no attestations. A run without
+green. A failure that can't be told from the tree's own makes
+`negative-run` red, so `negative` doesn't run and nothing is signed. Fork PRs and unsupported events get no attestations. A run without
 OIDC permission fails closed.
 
 Both signing jobs execute trusted Conary code and pinned actions only, with
@@ -144,8 +147,19 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
 }
 ```
 
-- `result`: `pass` when the gate succeeded, otherwise `fail`. A cancelled run
-  attests nothing.
+- `result`: `pass` when the gate succeeded, and otherwise `fail` or `error`.
+  A cancelled run attests nothing.
+  - `fail`: a check, or what's being checked, failed. A signer that can't
+    tell that from a gate that broke says `fail` of both.
+  - `error`: the gate broke, so it says nothing about the change. A signer
+    that can tell says `fail` only where its gate said so and `error` of
+    anything else, since a gate that broke can't be counted on to say it
+    did. Which is which is the signer's to say: for burrow's workflow,
+    ["A gate that breaks"](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md#a-gate-that-breaks)
+    does.
+
+  Only `pass` counts. The train's second try doesn't read the other two
+  apart ([DESIGN section 4.7](DESIGN.md#47-the-train), Red).
 - `revision`: the subject's revision, or `null` for a push.
 - `tree`: the tree the gate ran on. For a PR that is the head merged onto the
   base branch's tip as the job found it (the workflow's merge step), never
@@ -156,6 +170,12 @@ Its type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attesta
   wherever the caller says they do run.
 - `log`: the SHA-256 of the gate's output, and the name of the run's
   artifact that keeps it, its own for each job.
+- `error`: with the result `error`, why the gate broke, as one line of
+  text, after `log`; left out otherwise. `cn attest commit` and
+  `cn attest revision` take it as `--error`.
+- `gate`: which gate ran, as burrow's workflow names it with `gate-reuse`
+  on, after the fields above; left out otherwise. Only the
+  [gate-reuse lookup](gate-reuse.md) reads it.
 
 ### Public repos: a Sigstore bundle
 
@@ -208,6 +228,18 @@ flake-specific selection below applies only to burrow's workflow.
   (tests alone, no tests, or test files only deleted) it needs none, and the
   job attests that. A change that tidies tests beside code no test of it
   catches is two changes: the tidy alone needs none.
+  A test file that only moved adds no test. An added test path is a move
+  when the same change deletes a test path with the identical mode and blob
+  ID, one deleted file accounting for one added file at most; git's
+  similarity score never counts, so a file edited as it moved, or moved in
+  from a path that is no test path, is a changed test. A PR whose test
+  changes are only such moves and deletions needs none: moving a declared
+  test module (`mod tests;` to a `#[path]`) means editing the code that
+  declares it, and that edit is code changed with no test. Beside any other
+  added or changed test file, the move is listed and put in the negative
+  tree like the rest. The limit: an identical file can read differently at
+  its new path (`super::`, `include_str!` or a `#[path]` of its own resolve
+  from there), and that isn't seen.
 - **The negative tree.** The merge base's tree with the head's version of
   each test file the PR changes: added, changed, or deleted.
 - **What it builds.** The flake's checks whose derivation on the negative
@@ -216,8 +248,9 @@ flake-specific selection below applies only to burrow's workflow.
   one. Every other check builds what it built on the base, which passed
   there. If any of those checks fails (a test failing, a check that doesn't
   evaluate, or the tests not compiling against the old code), the new tests
-  failed on the old code. A check the caller's `build-skip` names isn't
-  built here.
+  failed on the old code, unless the tree made that failure
+  ([below](#a-failure-the-negative-tree-made)). A check the caller's
+  `build-skip` names isn't built here.
 - **What runs a test.** Reading a test file isn't running it: a formatter,
   a lint or a secrets scan reads every file. A check says which tests it
   runs as its `testFiles`, git glob pathspecs from the repo's root, in the
@@ -245,13 +278,15 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
 }
 ```
 
-- `result`: `fail` when a check failed on the negative tree, which is what
+- `result`: `fail` when a check failed on the negative tree and the new
+  tests, not a test file it took away, are what fail it, which is what
   rule 2 asks for; `pass` when every one passed and each new test is run by
   one of them; `skipped` when every one built passed but some that read the
   tests weren't built (`build-skip`) or some new tests none of them runs
   (`unrun`), so where they'd fail is for wherever those are built or run;
   `none` when the PR needs no negative (`tree` is then `null`, and the
-  lists empty).
+  lists empty). There's no `error`: a negative run that broke attests
+  nothing.
 - `tests`: the test files the PR changes.
 - `checks`: the checks it built (or that didn't evaluate), those whose
   derivation differs from the base's.
@@ -274,6 +309,33 @@ revision's `negative` evidence, with its attestation, and counted from the
 ledger after: `fail` and `pass` as what the new tests did on the old code,
 `none` as itself.
 
+### A failure the negative tree made
+
+The negative tree takes away each test file the PR deletes, a moved one's
+old path included. Where the old code names that file (a `mod` line, a
+list of test files), the command or check fails there before any test runs,
+whatever the tests assert. So where the PR deletes a test file, a failure
+on the negative tree counts only where the removal isn't its cause: the
+base with only those files taken away passes, or the command fails with
+them put back beside the new tests. Otherwise nothing is attested. The tree,
+the subject and the predicate don't change; the trees that judge a failure
+are never signed.
+
+Both workflows judge by one rule, which
+[burrow's README](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-flake-check/README.md#a-failure-the-negative-tree-made)
+states in full, with its limits: what a file the PR replaced is (a Rust
+module's other spelling, a file made a directory), and the controls that
+decide whether it stays away or goes back beside its replacement. burrow
+judges each flake check; `attest.yml` judges the whole command, with
+`cn attest prepare-negative` planning the trees by git alone and
+`cn attest judge-negative` running the command on each in its own checkout
+([the rule](../crates/conary-github/src/attest/ci/removal.rs)). The trees of
+old code alone run first, as far as a failure on the negative tree would need
+them, so no new test has run on the machine when they do: nothing one leaves
+behind (a process, a file) can make them pass. So where a PR deletes a test
+file, the command runs on old code alone even where the negative tree
+passes.
+
 ## What doesn't get one
 
 A run with no OIDC token, such as a fork's PR or one Dependabot opened. Its
@@ -285,7 +347,9 @@ fails closed.
 A verifier takes an attestation as evidence only when all of these hold.
 Conary's train checks a private repo's token this way (`conary-github`'s
 `attest`): on its candidate's commit, and on a PR's negative run when it's
-asked to. Nothing checks a bundle, or a PR's revision's gate, yet.
+asked to. The [gate-reuse lookup](gate-reuse.md) checks a push's or a PR
+revision's gate the same way, to count it for another commit of the tree it
+ran on. Nothing checks a bundle yet.
 
 1. GitHub signed it: the bundle verifies against Sigstore's public trust
    root, or the token against GitHub's published keys
@@ -360,11 +424,35 @@ would break rule 5's reason for counting it, and a machine names only a
 workflow that keeps to this.
 
 A token expires minutes after the job asks for it; that only stops it being
-used to sign in somewhere, and doesn't bear on checking it. GitHub can drop a
+used to sign in somewhere (such as [a door](#a-jobs-own-token)), and doesn't
+bear on checking it as evidence. GitHub can drop a
 key from its published set later, so the verifier checks a token when it
 records it, and the ledger keeps the token with the evidence.
 
 The caller's own workflow can change what it passes in (`build-skip` among
 them), and a PR's run takes that workflow from the PR. So the predicate says
 what was skipped, and the policy that counts the evidence decides whether a
-result with skipped checks is enough. The train's counts none.
+result with skipped checks is enough. The flow's counts none; the train's
+counts one only once each check it skipped is a required machine proof of
+the same candidate ([DESIGN section 4.7](DESIGN.md#47-the-train)).
+
+## A job's own token
+
+A door on the machine that takes something from CI, such as burrow's build
+store taking a job's builds, admits the job by the same rules, asked of
+Conary rather than copied: `cn attest job --audience AUDIENCE` reads the
+token on stdin (never an argument, where any process could read it) and
+holds it to rules 1, 2, 4 and 5 under the machine's signer workflow and
+fresh runners, as `cn train step` takes them. There's no statement: the
+audience names what the job hands over, by its digest, in the door's own
+form (burrow's builds are `burrow-builds:v1:sha256:HEX`), and the door
+checks what it's handed against that digest. An attestation's
+`conary-attestation:v1` audience is refused, since its token counts only with
+its statement. Unlike evidence, the token is used to sign in at the door, so
+it has to be live: an `exp` not yet past and no `nbf` still to come, give or
+take a minute. Rule 2's "the token's repo is the change's repo" becomes
+one of the repos the door lists (`--repo`, once for each): anyone's repo can
+call the signer workflow. `cn` prints the token's repository, its
+visibility, event, ref and commit, the signer's commit and a self-hosted
+job's runner, for the door's own rules (burrow's refuses a private repo's),
+and exits 65 when the token doesn't hold.

@@ -143,8 +143,14 @@ fn train_ci_can_cover_missing_pr_ci_but_never_unknown_authorship() {
         Some("bot@example.org"),
     );
     assert_eq!(c.view(800).step, Step::JoinTrain);
-    c.hub.fail(crate::sim::Call::Commit);
-    assert_ne!(c.view(800).step, Step::JoinTrain);
+    // Provenance is read from the compare of base and head.
+    c.hub.fail(crate::sim::Call::CompareCommits);
+    let n = c.view(800);
+    assert_eq!(n.step, Step::Wait { until: None }, "{n:?}");
+    assert!(
+        n.description.contains("could not read its commits"),
+        "{n:?}"
+    );
 }
 #[test]
 fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
@@ -154,12 +160,12 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         let mut c = train();
         c.label(labels);
         if labels.contains(&"r2") {
-            c.judge("land");
-            assert_eq!(c.pass(800).step, Step::ListOwner);
+            c.judge("pass");
+            assert_eq!(c.pass(800).step, Step::ListOwner(Door::R2));
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
             c.label(&[]);
-            assert_eq!(c.pass(819).step, Step::ListOwner);
+            assert_eq!(c.pass(819).step, Step::ListOwner(Door::R2));
             c.approve();
             assert_eq!(c.pass(820).step, Step::JoinTrain);
         } else {
@@ -171,4 +177,50 @@ fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
         }
         assert!(!c.memory.raised.is_empty());
     }
+}
+#[test]
+fn a_train_pr_joins_or_keeps_its_seat_while_githubs_test_merge_is_stale() {
+    // remi#1323 (2026-11-15) and remi#1453 (2026-11-20, Conary#486): trunk
+    // moved after the push, GitHub's test merge still had the old tip as its
+    // parent, and the flow read "what its merge would change is not known"
+    // as a reason to leave the train, or never to join it. The train merges
+    // the head again in its candidate and takes an empty one out itself.
+    let mut c = train();
+    // GitHub's test merge of the old tip and the head, kept as trunk moves.
+    let merge = crate::api::Source::pull(&c.hub, REMI, 3)
+        .unwrap()
+        .merge_commit_sha
+        .unwrap();
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["merge_commit_sha"] = serde_json::json!(merge)
+    });
+    let newer = c.hub.add(super::TRUNK, "newer");
+    c.hub.set_branch(REMI, "main", &newer);
+    // Off the train, nothing else decides emptiness: it waits for GitHub.
+    c.settings.train = false;
+    let n = c.pass(700);
+    assert_eq!(
+        n.step,
+        Step::Retry {
+            kind: Failure::Empty,
+            at: 760
+        },
+        "{n:?}"
+    );
+    // On it, it joins, and the strikes of that wait go.
+    c.settings.train = true;
+    let n = c.pass(800);
+    assert_eq!(n.step, Step::JoinTrain, "{n:?}");
+    assert_eq!(n.stage, Stage::Train);
+    assert!(!c.memory.strikes.contains_key(&Failure::Empty));
+    seated(&mut c);
+    let n = c.view(900);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert_eq!(n.stage, Stage::Train);
+    assert!(n.description.starts_with("In the train"), "{n:?}");
+    // A candidate that came out empty holds the head out (the ledger's
+    // train tests prove Left::Empty holds it); the flow says so.
+    c.train.seat = None;
+    c.train.held = Some((c.scope().head, "empty after PRs ahead".into()));
+    assert!(c.view(1000).description.contains("empty after PRs ahead"));
 }

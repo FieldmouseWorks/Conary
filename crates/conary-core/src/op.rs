@@ -16,6 +16,11 @@ pub struct Repo {
 }
 
 impl Repo {
+    /// Its pull request `pr` on GitHub.
+    pub fn pull_url(&self, pr: u64) -> String {
+        format!("https://github.com/{self}/pull/{pr}")
+    }
+
     fn key(&self) -> (String, String) {
         (
             self.owner.to_ascii_lowercase(),
@@ -153,14 +158,23 @@ pub enum Left {
 }
 
 /// A producer's own word that a result came from its run on what it ran
-/// on, kept as it was checked (`docs/ci-attestation.md`), so it can be
-/// checked again for as long as its signer's key is published.
+/// on, kept as it was checked (`docs/ci-attestation.md`,
+/// `docs/service-attestation.md`), so it can be checked again for as long
+/// as its signer's key is published or trusted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Attest {
     /// A private repo's CI: the statement its job attested, and the job's
     /// GitHub OIDC token, whose audience names the statement's digest.
     GithubToken { statement: String, token: String },
+    /// A service on the machine (a reviewer, a proof, judge or negative
+    /// job): the statement it signed, the Ed25519 public key it signed
+    /// with and the signature over the statement's bytes, both base64url.
+    Service {
+        statement: String,
+        key: String,
+        signature: String,
+    },
 }
 
 /// How a candidate's gate ended (`docs/DESIGN.md` section 4.7).
@@ -188,6 +202,171 @@ pub enum Asked {
     /// Everything that landed on its repo's trunk after `since`
     /// (milliseconds since the Unix epoch, as the landings' ops say it).
     Since { since: i64 },
+}
+
+/// What half-worked (`docs/DESIGN.md` section 4.6): a path that went on
+/// without the answer it was for. Whatever came through it counts as its
+/// check's failure until a later [`Body::Restored`] says it works again.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "path", rename_all = "snake_case")]
+pub enum Degraded {
+    /// The flow's record of the change's work didn't read. Its workers were
+    /// taken as holding every proof slot, and none of its answers count.
+    Record,
+    /// The answer of the flow's worker `job`, doing `kind` of work, didn't
+    /// read, or isn't an answer to its kind of work, or the worker's stop
+    /// marker doesn't say why it was stopped: it was taken as still
+    /// running, holding its proof slot if it's a proof, and counts as no
+    /// answer.
+    Answer {
+        job: String,
+        kind: crate::plugin::Kind,
+    },
+    /// A lookup of `check`'s attested result couldn't tell whether it holds:
+    /// GitHub or the producer's attestation didn't answer.
+    Lookup { check: String },
+    /// A read of GitHub (or of the repository's pause) the flow's decision
+    /// for the change needed failed or stopped short of all it holds. What
+    /// it was for counts as failed: a check that can't be read is pending,
+    /// provenance that can't be read is unknown, and a decision whose reads
+    /// failed outright waits.
+    Read { read: Reading },
+    /// A mark one of the accounts the flow trusts for it left on the PR
+    /// doesn't parse: the PR waits on it, and what it would have said
+    /// counts for nothing.
+    Mark { mark: Mark },
+}
+
+/// Which mark a [`Degraded::Mark`] names: a closed set, one per mark the
+/// flow's decision reads from the PR's comments (`docs/flow.md`, "Degraded
+/// paths").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mark {
+    /// A judge's or the dependency sweep's sealed verdict.
+    Verdict,
+    /// The reviewer's summary of its review of the head.
+    Review,
+    /// Renovate's word that nothing in a lock refresh is old enough yet.
+    ReleaseAge,
+}
+
+impl std::fmt::Display for Mark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Verdict => "a sealed verdict",
+            Self::Review => "the reviewer's summary",
+            Self::ReleaseAge => "Renovate's release-age wait",
+        })
+    }
+}
+
+/// Which read a [`Degraded::Read`] names: a closed set, one per read the
+/// flow's decision takes (`docs/flow.md`, "Degraded paths").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// The PR itself: its REST read, or its GraphQL snapshot.
+    Pull,
+    /// The PR's GraphQL snapshot, which stopped short of its reviews,
+    /// comments, labels or threads.
+    Snapshot,
+    /// The repository's open PRs.
+    Pulls,
+    /// The base branch's tip.
+    Base,
+    /// The files the PR changes.
+    Files,
+    /// The head's check runs, suites and statuses.
+    Checks,
+    /// The base tip and merge base a docs lane's word is checked against.
+    Fork,
+    /// What became of a cancelled run: its suite, or its annotations.
+    Cancelled,
+    /// The pushes to the PR's branch.
+    Pushes,
+    /// The PR's reviews and comments.
+    Reviews,
+    /// The PR's commits, compared with its base.
+    Commits,
+    /// A commit's trailers, as git parses them.
+    Trailers,
+    /// GitHub's test merge: its commit and its tree beside the base tip's.
+    MergeTree,
+    /// The PR's diff, for the gates it edits.
+    Diff,
+    /// The default branch's CI, as the snapshot observes it.
+    DefaultBranch,
+    /// The head's checks, read again before permission is granted.
+    Observations,
+    /// The repository's pause.
+    Pause,
+    /// The head's tree, which a check's deadlines are counted on.
+    Tree,
+    /// The PR's timeline, for who put the owner label on.
+    OwnerLabel,
+    /// The repository's timed proofs, which size a proof's deadline.
+    Durations,
+}
+
+impl std::fmt::Display for Reading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pull => "the PR",
+            Self::Snapshot => "the PR's snapshot",
+            Self::Pulls => "the open PRs",
+            Self::Base => "the base branch",
+            Self::Files => "the PR's files",
+            Self::Checks => "the head's checks",
+            Self::Fork => "the docs lane's fork point",
+            Self::Cancelled => "a cancelled run",
+            Self::Pushes => "the branch's pushes",
+            Self::Reviews => "the PR's reviews",
+            Self::Commits => "the PR's commits",
+            Self::Trailers => "a commit's trailers",
+            Self::MergeTree => "GitHub's test merge",
+            Self::Diff => "the PR's diff",
+            Self::DefaultBranch => "the default branch's CI",
+            Self::Observations => "the head's checks before permission",
+            Self::Pause => "the repository's pause",
+            Self::Tree => "the head's tree",
+            Self::OwnerLabel => "who put the owner label on",
+            Self::Durations => "the repository's timed proofs",
+        })
+    }
+}
+
+impl std::fmt::Display for Degraded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Record => f.write_str("its flow record didn't read"),
+            Self::Answer { job, kind } => {
+                let kind = serde_json::to_value(kind).map_err(|_| std::fmt::Error)?;
+                write!(
+                    f,
+                    "{} worker {job}'s answer didn't read",
+                    kind.as_str().unwrap_or("a")
+                )
+            }
+            Self::Lookup { check } => write!(f, "{check}'s evidence lookup couldn't tell"),
+            Self::Read { read } => write!(f, "the read of {read} failed or stopped short"),
+            Self::Mark { mark } => write!(f, "{mark}'s mark didn't parse"),
+        }
+    }
+}
+
+/// The most bytes of a degradation's `why`: it's permanent, so it says
+/// what failed in a line, never a body read back from GitHub or a plugin.
+pub const DEGRADED_WHY: usize = 200;
+
+/// A new undo's operational reason, preserved verbatim. Callers must keep
+/// secrets, personal data and prompt text out of this permanent record.
+pub fn undo_reason(reason: &str) -> Result<String, &'static str> {
+    if reason.trim().is_empty() {
+        Err("an undo requires a nonblank reason")
+    } else {
+        Ok(reason.to_owned())
+    }
 }
 
 /// The body of an operation: what happened.
@@ -287,8 +466,15 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         raised: Vec<String>,
     },
-    /// The change left the train without landing.
-    Leave { change: ChangeId, why: Left },
+    /// The change left the train without landing. `trunk`, for an empty
+    /// merge with nothing merged before it, is the trunk commit its
+    /// candidate was built on: one that already does what it does.
+    Leave {
+        change: ChangeId,
+        why: Left,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trunk: Option<CommitId>,
+    },
     /// A train candidate, whole: `trunk`, the branch, at `base`, then each
     /// change's head merged onto it in order, ending at `commit`, on the
     /// candidate's train branch, where the gate runs. It lands onto that
@@ -321,12 +507,32 @@ pub enum Body {
         candidate: CandidateId,
         verdict: Verdict,
     },
+    /// The gate of a candidate red with one change passed after its
+    /// verdict, on that same commit: the change may join again. The verdict
+    /// stays red, and the change is gated afresh in the candidate it's
+    /// built into next.
+    Release { candidate: CandidateId },
     /// Every change in a green candidate landed, and trunk ended on `tree`,
     /// the last landing's. When that's the candidate's tree, the
     /// candidate's evidence is about that landing's tree.
     Finish {
         candidate: CandidateId,
         tree: TreeId,
+    },
+    /// A path that half-worked for this revision of the change: what
+    /// degraded and why (at most [`DEGRADED_WHY`] bytes). Recorded once while
+    /// it lasts, and never removed: a later [`Body::Restored`] clears it.
+    Degraded {
+        change: ChangeId,
+        revision: RevisionId,
+        what: Degraded,
+        why: String,
+    },
+    /// The path a [`Body::Degraded`] named works again for that revision.
+    Restored {
+        change: ChangeId,
+        revision: RevisionId,
+        what: Degraded,
     },
     /// `change` is an undo: its PR reverts `reverts`, landed changes in its
     /// repo, because `asked` asked for them. Once it lands they're
@@ -335,6 +541,10 @@ pub enum Body {
         change: ChangeId,
         reverts: Vec<ChangeId>,
         asked: Asked,
+        /// Why the undo was requested. Absent only in historical records:
+        /// omitting it keeps their signed bytes and ids unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 
@@ -352,11 +562,14 @@ impl Body {
             | Self::Reopen { change }
             | Self::Join { change, .. }
             | Self::Leave { change, .. }
+            | Self::Degraded { change, .. }
+            | Self::Restored { change, .. }
             | Self::Undo { change, .. } => Some(*change),
             Self::Outside { .. }
             | Self::Candidate { .. }
             | Self::CandidateEvidence { .. }
             | Self::Verdict { .. }
+            | Self::Release { .. }
             | Self::Finish { .. } => None,
         }
     }

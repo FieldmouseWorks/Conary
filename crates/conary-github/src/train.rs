@@ -14,21 +14,29 @@ use serde::Serialize;
 
 use conary_core::ledger::{Candidate, Held, Invalid, State};
 use conary_core::op::{Body, Left, Member, Repo, Verdict};
+use conary_core::reader::ReadError;
 use conary_core::store::StoreError;
 use conary_core::{CandidateId, ChangeId, Class, CommitId, Policy, Store, TreeId};
 
 use crate::api::{ApiError, Source};
-use crate::attest::{Actions, Signer};
+use crate::attest::{Actions, Trust};
 use crate::branches::{BRANCHES, Branches, Merged};
 use crate::class::{self, ClassError};
 use crate::ingest::{self, Config, IngestError};
 
 mod gate;
+mod held;
 mod land;
+mod message;
 mod negative;
+mod release;
+mod retry;
 use gate::{Gate, gate};
+pub use held::{drop_candidate, join, leave, step};
 use land::{land_next, open_landing, stopped_landing};
+pub use message::{Message, messages};
 pub use negative::{Negatives, verify as verify_negative};
+pub use release::Unread;
 
 /// Where a candidate is built, one merge at a time.
 pub fn build_branch(id: CandidateId) -> String {
@@ -84,8 +92,29 @@ pub trait Forge: Branches + Actions {
         description: &str,
         url: Option<&str>,
     ) -> Result<(), ApiError>;
-    /// Merges a PR at `head` the way the repo merges PRs, or not at all.
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<PrMerge, ApiError>;
+    /// Merges a PR at `head` the way the repo merges PRs, or not at all. A
+    /// squash or merge commit says `message`; a rebase keeps the PR's own
+    /// commits.
+    fn land(&self, repo: &str, pr: u64, head: &str, message: &Message)
+    -> Result<PrMerge, ApiError>;
+    /// Where GitHub Actions workflow run `run` is.
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<WorkflowRun, ApiError>;
+    /// Runs all of workflow run `run` again, as its next attempt.
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError>;
+}
+
+/// A workflow run as GitHub shows it: its latest attempt, and where that is.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WorkflowRun {
+    pub run_attempt: u64,
+    pub status: String,
+}
+
+impl WorkflowRun {
+    /// Its first attempt is over and it has had no other.
+    fn first_finished(&self) -> bool {
+        self.run_attempt == 1 && self.status == "completed"
+    }
 }
 
 #[derive(Debug)]
@@ -93,6 +122,8 @@ pub enum TrainError {
     Api(ApiError),
     Store(StoreError),
     Ingest(IngestError),
+    /// The ledger couldn't be read without its lock.
+    Read(ReadError),
     /// GitHub's answer isn't what it says.
     Malformed(String),
     /// No randomness for a new candidate id.
@@ -107,7 +138,7 @@ pub enum TrainError {
     /// That candidate isn't this repo's.
     NotHere(CandidateId),
     /// That PR's landing has started and no step has settled it: its merge
-    /// may be on trunk already, unseen.
+    /// may be on trunk already, not yet shown.
     Landing(u64),
     /// The trunk branch isn't there.
     NoTrunk(String),
@@ -122,6 +153,7 @@ impl std::fmt::Display for TrainError {
             Self::Api(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
+            Self::Read(e) => e.fmt(f),
             Self::Malformed(what) => write!(f, "GitHub sent {what}"),
             Self::Random(e) => write!(f, "no randomness for a candidate id: {e}"),
             Self::Unknown(pr) => write!(f, "#{pr} isn't in the ledger"),
@@ -144,6 +176,7 @@ impl std::error::Error for TrainError {
         match self {
             Self::Api(e) => Some(e),
             Self::Ingest(e) => Some(e),
+            Self::Read(e) => Some(e),
             _ => None,
         }
     }
@@ -173,6 +206,7 @@ impl From<ClassError> for TrainError {
             ClassError::Api(e) => Self::Api(e),
             ClassError::Ingest(e) => Self::Ingest(e),
             ClassError::Store(e) => Self::Store(e),
+            ClassError::Read(e) => Self::Read(e),
             ClassError::Moved { pr, head } => Self::Moved { pr, head },
         }
     }
@@ -214,21 +248,9 @@ pub enum Joined {
     Unproven(String),
 }
 
-/// Puts a PR in its repo's train at `head`, the head everything but the
-/// gate said can land, once the ledger holds the PR as GitHub shows it now
-/// and that is its head. Its class is the policy's ([`class::of`], which
-/// records it): an R2 change rides alone, in a candidate of its own, which
-/// lands only while trunk is still its base. With `negatives`, only once
-/// its revision's negative counts ([`Negatives`]).
-/// `settled` is the raise labels the steward settled it with, as `cn class`
-/// told it: it joins only when they're every raise its change has once
-/// it's classed with its labels now, since a raise the steward didn't
-/// settle it with, recorded by anyone, would land on a settlement made
-/// without it ([`Joined::Raised`]).
-/// Its head's train status goes to pending first, so a success left from an
-/// earlier time in the train can't let anything merge it.
+/// [`join`], under the ledger's lock.
 #[allow(clippy::too_many_arguments)]
-pub fn join(
+fn held_join(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
@@ -316,13 +338,8 @@ pub enum Leaving {
     Landing(u64),
 }
 
-/// Takes a PR out of its repo's train, its head's train status pending
-/// first. Not while a landing is open, its head saying it's landing with
-/// the candidate it's next in, its merge maybe on trunk unseen: then every
-/// change the candidate in flight has left to land stays, since leaving
-/// would stop the candidate, and of one that stopped while landing, the
-/// change it was landing. Only a step settles that.
-pub fn leave(
+/// [`leave`], under the ledger's lock.
+fn held_leave(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
@@ -349,7 +366,11 @@ fn out(
     said: &str,
 ) -> Result<Leaving, TrainError> {
     let change = change_of(store, repo, pr)?;
-    let body = Body::Leave { change, why };
+    let body = Body::Leave {
+        change,
+        why,
+        trunk: None,
+    };
     match store.ledger().check(&body) {
         Ok(()) => {}
         Err(Invalid::NotInTrain) => return Ok(Leaving::NotIn),
@@ -412,11 +433,8 @@ fn reseat(
     Ok((unready, reseated))
 }
 
-/// Drops a candidate whose gate won't finish, the stall watchdog's last
-/// word: its changes wait again as they joined. Green and red are the gate's
-/// word, which [`step`] reads, never a hand's. Not while a landing of it is
-/// open, its next head saying it's landing: that's a step's to settle.
-pub fn drop_candidate(
+/// [`drop_candidate`], under the ledger's lock.
+fn held_drop_candidate(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
@@ -474,6 +492,9 @@ fn dropped(
     Ok(())
 }
 
+/// The most changes a candidate holds when nothing says otherwise.
+pub const DEFAULT_SIZE: std::num::NonZeroUsize = std::num::NonZeroUsize::new(8).unwrap();
+
 /// What a step needs to know about the repo.
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -483,14 +504,10 @@ pub struct Settings {
     /// whose passes count only with their producer's attestation: the
     /// repo's gate, as its shared CI runs it.
     pub require: Vec<String>,
-    /// The workflow whose jobs' attestations of those passes count, at a
-    /// commit on its repo's default branch: the shared CI the machine
-    /// trusts to sign.
-    pub signer: Signer,
-    /// What the name of each self-hosted runner started fresh for one job
-    /// starts with, which only the launcher of such runners gives one. A
-    /// required pass counts only from such a runner or one of GitHub's.
-    pub fresh: Option<String>,
+    /// Whose attestations of those passes count: the shared CI the machine
+    /// trusts to sign, at a commit on its repo's default branch, and the
+    /// runners it counts from; and the services' producer keys.
+    pub trust: Trust,
 }
 
 /// A change to land, at the head its candidate merged.
@@ -593,6 +610,11 @@ pub struct Stepped {
     /// longer says they're settled, or settled them without a label that
     /// raises them.
     pub unready: Vec<u64>,
+    /// The PRs that may join again, each red alone in a candidate whose
+    /// gate has passed since.
+    pub released: Vec<u64>,
+    /// The PRs red alone it couldn't read for that, left held.
+    pub unread: Vec<Unread>,
     /// The PRs it put back in alone, classed R2 after they joined.
     pub reseated: Vec<u64>,
     /// Candidates whose landings all came through, with the tree trunk
@@ -601,18 +623,8 @@ pub struct Stepped {
     pub now: Now,
 }
 
-/// One step of a repo's train, the whole of what it does on an event. It
-/// finishes the candidates whose landings all came through, builds the next
-/// candidate when none is in flight, reads the gate of the one gating and
-/// says its verdict once its checks have, lands a green one's changes in
-/// order, and deletes the branches of every candidate that isn't in flight.
-/// It goes on until the train waits on something: a gate still running, a
-/// merge GitHub hasn't shown yet, or nothing to do. It holds the ledger's
-/// lock throughout, so two steps never build or land at once. Trunk is the
-/// repo's default branch as GitHub says it is when the step starts: the
-/// branch join, landing and ingest all mean, never a setting of its own. A
-/// step with no check required is refused before it does anything.
-pub fn step(
+/// [`step`], under the ledger's lock.
+fn held_step(
     store: &mut Store,
     forge: &dyn Forge,
     source: &dyn Source,
@@ -620,9 +632,7 @@ pub fn step(
     repo: &Repo,
     settings: &Settings,
 ) -> Result<Stepped, TrainError> {
-    if settings.require.is_empty() {
-        return Err(TrainError::NothingRequired);
-    }
+    let (released, unread) = release::release(store, forge, source, config, settings, repo)?;
     let mut stepped = Stepped {
         conflicts: Vec::new(),
         empty: Vec::new(),
@@ -631,6 +641,8 @@ pub fn step(
         landed: Vec::new(),
         refused: Vec::new(),
         unready: Vec::new(),
+        released,
+        unread,
         reseated: Vec::new(),
         finished: Vec::new(),
         now: Now::Idle,
@@ -661,7 +673,11 @@ pub fn step(
                 if forge.branch(&full, &branch)?.is_none() {
                     forge.create_branch(&full, &branch, c.commit.as_str())?;
                 }
-                match gate(store, forge, source, config, settings, &c)? {
+                let said = match gate(store, forge, source, config, settings, &c)? {
+                    Gate::Red(failures) => retry::second_try(forge, source, repo, failures)?,
+                    said => said,
+                };
+                match said {
                     Gate::Waiting(waiting) => {
                         break Now::Gating {
                             candidate: id,
@@ -678,7 +694,8 @@ pub fn step(
                         })?;
                         stepped.verdicts.push((id, Verdict::Green));
                     }
-                    Gate::Red(failed) => {
+                    Gate::Red(failures) => {
+                        let failed = failures.into_iter().map(|f| f.failed).collect();
                         // The PR red alone is told first: once the verdict
                         // is in, no step comes back to the candidate.
                         if let [alone] = c.changes.as_slice() {
@@ -750,12 +767,15 @@ fn in_flight_or_built(
                 base,
             } => {
                 let pr = pr_of(store, change);
+                // Empty with nothing merged before it: trunk at `base` already
+                // does what it does.
+                let trunk = (why == Left::Empty && onto.is_empty()).then(|| base.clone());
                 if why == Left::Empty {
                     stepped.empty.push(Empty { pr, onto, base });
                 } else {
                     stepped.conflicts.push(Conflict { pr, onto, base });
                 }
-                store.record(Body::Leave { change, why })?;
+                store.record(Body::Leave { change, why, trunk })?;
             }
         }
     }

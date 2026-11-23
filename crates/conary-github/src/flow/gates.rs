@@ -128,39 +128,47 @@ pub(super) fn edited(paths: &Paths, diff: impl FnOnce() -> Option<String>) -> bo
     !diff().is_some_and(|d| pins(&d))
 }
 
-pub(super) fn enabled(body: &str) -> bool {
-    regex::Regex::new(r"\*\*Automerge\*\*: Enabled\b")
-        .expect("constant regex")
-        .is_match(body)
-}
-pub(super) fn spent(body: &str) -> bool {
-    let states: Vec<_> = body
-        .lines()
-        .filter_map(|l| l.strip_prefix("🚦 **Automerge**: "))
-        .collect();
-    !states.is_empty()
-        && states
-            .iter()
-            .all(|s| s.starts_with("Disabled because a matching PR was automerged previously"))
-}
-pub(super) fn release(comments: &[crate::api::Comment], settings: &super::Settings) -> Option<u64> {
-    let login = settings.renovate_login.as_deref()?;
-    let body = comments
+/// When Renovate's release-age wait ends: the latest time its last
+/// artifact comment names, when every block of that comment ends in the
+/// wait. A block that ends in anything else is a real failure, so there's
+/// no wait. A block that ends in the wait's words with no time after them
+/// is a mark that didn't parse ([`super::degraded`]), whatever the other
+/// blocks say.
+pub(super) fn release(
+    comments: &[crate::api::Comment],
+    settings: &super::Settings,
+) -> Result<Option<u64>, super::degraded::Unparsed> {
+    const WAIT: &str = "lock-age: nothing in the refresh is old enough until ";
+    let Some(login) = settings.renovate_login.as_deref() else {
+        return Ok(None);
+    };
+    let Some(body) = comments
         .iter()
         .filter(|c| c.user.as_ref().is_some_and(|u| u.login == login))
         .filter_map(|c| c.body.as_deref())
-        .rfind(|b| b.contains("Artifact update problem"))?;
+        .rfind(|b| b.contains("Artifact update problem"))
+    else {
+        return Ok(None);
+    };
     let blocks = regex::Regex::new(r"(?ms)^```\n(.*?)^```").expect("constant regex");
-    let waiting = regex::Regex::new(
-        r"^lock-age: nothing in the refresh is old enough until (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)$",
-    )
-    .expect("constant regex");
+    let time = regex::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$").expect("constant regex");
     let mut latest = None;
+    let mut failed = false;
     for block in blocks.captures_iter(body) {
-        let last = block[1].lines().rfind(|l| !l.trim().is_empty())?;
-        let stamp = waiting.captures(last.trim())?;
-        let at = super::reviews::timestamp(&stamp[1]).ok()?;
+        let Some(last) = block[1].lines().rfind(|l| !l.trim().is_empty()) else {
+            failed = true;
+            continue;
+        };
+        let Some(until) = last.trim().strip_prefix(WAIT) else {
+            failed = true;
+            continue;
+        };
+        let at = time
+            .is_match(until)
+            .then(|| super::reviews::timestamp(until).ok())
+            .flatten()
+            .ok_or(super::degraded::Unparsed("its time isn't one"))?;
         latest = Some(latest.map_or(at, |t: u64| t.max(at)));
     }
-    latest
+    Ok(if failed { None } else { latest })
 }

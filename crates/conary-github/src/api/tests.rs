@@ -10,8 +10,10 @@ use super::*;
 
 /// Serves `answers` in turn, one per connection, and sends back each
 /// request's head (its request line and headers, lower-cased), then a blank
-/// line and its body as it came. The body is read before the answer goes
-/// out. An answer the client stops reading, past its size limit, is let go.
+/// line and its body as it came. The body is read, and the request sent
+/// back, before the answer goes out, so every request a client has an answer
+/// to is already on the channel when its call returns. An answer the client
+/// stops reading, past its size limit, is let go.
 fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -35,8 +37,8 @@ fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
                 .map_or(0, |n| n.trim().parse().unwrap());
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            _ = conn.write_all(answer.as_bytes());
             _ = tx.send(format!("{head}\r\n{}", String::from_utf8(body).unwrap()));
+            _ = conn.write_all(answer.as_bytes());
         }
     });
     (base, rx)
@@ -115,6 +117,85 @@ fn tells_github_unavailable_from_a_request_refused() {
     assert!(!error("403 Forbidden", "X-RateLimit-Remaining: 4999\r\n").unavailable);
     assert!(!error("401 Unauthorized", "").unavailable);
     assert!(!error("422 Unprocessable Entity", "").unavailable);
+}
+
+#[test]
+fn a_refusal_keeps_what_github_said_of_it() {
+    // A write GitHub won't take says which of its causes it was.
+    let invalid = r#"{"message":"Invalid tree info","errors":[{"resource":"Tree","field":"base_tree","code":"invalid"}],"documentation_url":"https://docs.github.com"}"#;
+    let (base, _heads) = github(vec![whole("422 Unprocessable Entity", invalid).leak()]);
+    let err = Api::new(&base, Tokens::given("t"))
+        .send::<serde_json::Value>(false, "/repos/o/r/git/trees", &serde_json::json!({}))
+        .unwrap_err();
+    assert!(!err.unavailable);
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "GitHub: {base}/repos/o/r/git/trees: http status: 422: Invalid tree info \
+             [{{\"code\":\"invalid\",\"field\":\"base_tree\",\"resource\":\"Tree\"}}]"
+        )
+    );
+    // Any refused status, a read's too, and GitHub's own trouble.
+    let said = r#"{"message":"Bad credentials"}"#;
+    assert!(
+        error_with("401 Unauthorized", "", said)
+            .to_string()
+            .ends_with("http status: 401: Bad credentials")
+    );
+    let said = r#"{"message":"Server Error"}"#;
+    let err = error_with("502 Bad Gateway", "", said);
+    assert!(err.unavailable);
+    assert!(err.to_string().ends_with("http status: 502: Server Error"));
+    // An answer that isn't GitHub's says nothing more than its status.
+    assert!(
+        error_with("422 Unprocessable Entity", "", "<html>")
+            .to_string()
+            .ends_with("http status: 422")
+    );
+    // A long or many-lined message comes on one line, cut short.
+    let long = format!(r#"{{"message":"one\ntwo  {}"}}"#, "x".repeat(1000));
+    let said = error_with("422 Unprocessable Entity", "", &long).to_string();
+    let said = said.split("http status: 422: ").nth(1).unwrap();
+    assert!(said.starts_with("one two xxx"), "{said}");
+    assert!(said.ends_with('…'), "{said}");
+    assert_eq!(said.chars().count(), MAX_SAID + 1);
+}
+
+#[test]
+fn a_rerun_and_a_rerequest_are_asked_as_github_takes_them_and_a_refusal_keeps_its_words() {
+    use crate::{flow::Write as _, train::Forge as _};
+    let refused = r#"{"message":"Unable to re-run this workflow run because it was created over a month ago"}"#;
+    let (base, heads) = github(vec![
+        whole("201 Created", "").leak(),
+        whole("403 Forbidden", refused).leak(),
+        whole("201 Created", "{}").leak(),
+    ]);
+    let api = Api::new(&base, Tokens::given("t"));
+    api.rerun("o/r", 42).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/actions/runs/42/rerun http/1.1")
+    );
+    let err = api.rerun("o/r", 43).unwrap_err();
+    assert!(!err.unavailable);
+    // GitHub's words, as it gave them, beside the error's own account.
+    assert_eq!(
+        err.said(),
+        Some("Unable to re-run this workflow run because it was created over a month ago")
+    );
+    assert!(err.to_string().contains("http status: 403"), "{err}");
+    heads.recv().unwrap();
+    api.rerequest("o/r", 9).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/check-suites/9/rerequest http/1.1")
+    );
+    // An error GitHub said nothing of has no words to quote.
+    assert_eq!(error("404 Not Found", "").said(), None);
 }
 
 #[test]
@@ -204,6 +285,31 @@ fn whole(status: &str, body: &str) -> String {
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+#[test]
+fn a_jobs_attempt_and_its_runs_are_read_as_github_says_them() {
+    use crate::{attest::Actions as _, train::Forge as _};
+    let (base, heads) = github(vec![
+        whole(
+            "200 OK",
+            r#"{"id":7,"run_id":42,"run_attempt":1,"runner_name":"fresh-1"}"#,
+        )
+        .leak(),
+        whole(
+            "200 OK",
+            r#"{"id":42,"run_attempt":2,"status":"in_progress"}"#,
+        )
+        .leak(),
+    ]);
+    let api = Api::new(&base, Tokens::given("t"));
+    let job = api.job("o/r", 7).unwrap().unwrap();
+    assert_eq!((job.run_id, job.run_attempt), (42, 1));
+    heads.recv().unwrap();
+    let run = api.workflow_run("o/r", 42).unwrap();
+    assert_eq!((run.run_attempt, run.status.as_str()), (2, "in_progress"));
+    let asked = heads.recv().unwrap();
+    assert!(asked.starts_with("get /repos/o/r/actions/runs/42 http/1.1"));
 }
 
 #[test]
@@ -411,9 +517,11 @@ fn the_trains_branches_are_read_made_and_deleted_by_name() {
 
 #[test]
 fn a_prs_merge_is_at_its_head_the_way_the_repo_merges_or_refused() {
-    use crate::train::{Forge, PrMerge};
+    use crate::train::{Forge, Message, PrMerge};
     let squash_only =
         r#"{"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}"#;
+    let rebase_only =
+        r#"{"allow_squash_merge":false,"allow_merge_commit":false,"allow_rebase_merge":true}"#;
     let answers: Vec<&'static str> = vec![
         whole("200 OK", squash_only).leak(),
         whole("200 OK", r#"{"merged":true}"#).leak(),
@@ -423,35 +531,49 @@ fn a_prs_merge_is_at_its_head_the_way_the_repo_merges_or_refused() {
             r#"{"message":"Required status check \"conary/train\" is expected."}"#,
         )
         .leak(),
+        whole("200 OK", rebase_only).leak(),
+        whole("200 OK", r#"{"merged":true}"#).leak(),
         whole("200 OK", squash_only).leak(),
         whole("502 Bad Gateway", "{}").leak(),
     ];
     let (base, heads) = github(answers);
     let api = Api::new(&base, Tokens::given("t"));
-    assert_eq!(api.land("o/r", 7, "h").unwrap(), PrMerge::Merged);
+    let message = Message::new("area: a change", 7, ["area: x\n\nCo-authored-by: A <a@b>"]);
+    let sent = |heads: &std::sync::mpsc::Receiver<String>| {
+        let merge = heads.recv().unwrap();
+        assert!(
+            merge.starts_with("put /repos/o/r/pulls/7/merge "),
+            "{merge}"
+        );
+        serde_json::from_str::<serde_json::Value>(merge.split("\r\n\r\n").last().unwrap()).unwrap()
+    };
+    assert_eq!(api.land("o/r", 7, "h", &message).unwrap(), PrMerge::Merged);
     assert!(heads.recv().unwrap().starts_with("get /repos/o/r "));
-    let merge = heads.recv().unwrap();
-    assert!(
-        merge.starts_with("put /repos/o/r/pulls/7/merge "),
-        "{merge}"
-    );
-    let body: serde_json::Value =
-        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
     assert_eq!(
-        body,
-        serde_json::json!({"sha": "h", "merge_method": "squash"})
+        sent(&heads),
+        serde_json::json!({"sha": "h", "merge_method": "squash",
+            "commit_title": "area: a change (#7)", "commit_message": "Co-authored-by: A <a@b>"})
     );
-    // A repo whose methods GitHub didn't say gets GitHub's default.
+    // A repo whose methods GitHub didn't say gets GitHub's default, a
+    // merge commit, which says the message too.
     assert_eq!(
-        api.land("o/r", 7, "h").unwrap(),
+        api.land("o/r", 7, "h", &message).unwrap(),
         PrMerge::Refused("Required status check \"conary/train\" is expected.".into())
     );
     heads.recv().unwrap();
-    let merge = heads.recv().unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(merge.split("\r\n\r\n").last().unwrap()).unwrap();
-    assert_eq!(body, serde_json::json!({"sha": "h"}));
-    assert!(api.land("o/r", 7, "h").unwrap_err().unavailable);
+    assert_eq!(
+        sent(&heads),
+        serde_json::json!({"sha": "h",
+            "commit_title": "area: a change (#7)", "commit_message": "Co-authored-by: A <a@b>"})
+    );
+    // A rebase makes no commit of its own to say it.
+    assert_eq!(api.land("o/r", 7, "h", &message).unwrap(), PrMerge::Merged);
+    heads.recv().unwrap();
+    assert_eq!(
+        sent(&heads),
+        serde_json::json!({"sha": "h", "merge_method": "rebase"})
+    );
+    assert!(api.land("o/r", 7, "h", &message).unwrap_err().unavailable);
 }
 
 #[test]
@@ -563,27 +685,22 @@ fn a_comparisons_files_are_read_with_where_renames_started_and_which_paths_are_n
             Touched {
                 path: "src/a.rs".into(),
                 from: None,
-                new: false,
             },
             Touched {
                 path: "CODEOWNERS.bak".into(),
                 from: Some("CODEOWNERS".into()),
-                new: true,
             },
             Touched {
                 path: "docs/new.md".into(),
                 from: None,
-                new: true,
             },
             Touched {
                 path: "docs/copy.md".into(),
                 from: Some("docs/a.md".into()),
-                new: true,
             },
             Touched {
                 path: "docs/gone.md".into(),
                 from: None,
-                new: false,
             }
         ]
     );
@@ -609,7 +726,7 @@ fn a_comparison_listing_as_many_files_as_github_lists_may_be_cut_short() {
 
 mod flow;
 
-mod carry;
-
 #[path = "tests/events.rs"]
 mod events;
+
+mod pages;

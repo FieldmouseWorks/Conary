@@ -8,15 +8,24 @@ pub use claims::{FixAnswer, FixClaim, FixResult, Unposted};
 mod decide;
 pub(crate) mod deferred;
 pub use deferred::{Deferral, DeferredConfig, DeferredFailure, Dispatch, Start};
+pub mod durations;
 mod gates;
 mod history;
 mod markers;
+mod priority;
+pub use degraded::{Degradation, Degraded, Mark, ReadError, Reading, Reads};
+pub use priority::{Level, RED_FIX_BRANCH, Rank, StallAfter, red_fix};
 mod proofs;
 mod read;
+mod recover;
+pub use recover::{Answer, Recovered, Recovery};
 mod state;
+#[cfg(test)]
+pub(crate) use approval::labeller;
+#[cfg(test)]
+pub(crate) use proofs::selected;
 pub use proofs::{
-    Derivation, Evaluation, InputBuild, ProofData, ProofHolder, ProofPlan, ProofRecord,
-    ProofWaiting,
+    Preparation, ProofData, ProofHolder, ProofPlan, ProofRecord, ProofWaiting, Reached, Readiness,
 };
 mod review;
 pub(crate) mod reviews;
@@ -27,7 +36,7 @@ pub use train::{Candidate, Seat, TrainState};
 pub use ci::{Suite, Workflow};
 pub use markers::SealKey;
 pub use read::{BaseObservation, Read, Snapshot, read};
-pub use reviews::fingerprint;
+pub use reviews::{Since, fingerprint};
 pub use state::next;
 pub use types::*;
 
@@ -38,24 +47,43 @@ pub mod jobs;
 mod write;
 pub use write::{SETTLED, Write, review_body};
 
+mod ask;
 mod execute;
-mod observe;
+pub(crate) mod observe;
 mod pass;
+pub mod schema;
+pub use ask::ReviewAsk;
 pub use pass::{Config, Pass, Plugins, Report};
+
+mod judging;
+pub use judging::{judging_context, read_judging_context, review_bodies};
 
 mod compare;
 pub use compare::{Beside, Decided, Said, Tally, beside};
 
 pub(crate) mod evidence;
-pub use evidence::{Evidence, judgment_receipt, major_receipt, receipt_digest, review_receipt};
+pub use evidence::{
+    Evidence, judgment_receipt, judgment_receipt_by, major_receipt, receipt_digest, recipe_digest,
+};
 
 mod scope;
 
+pub(crate) mod degraded;
 mod occupancy;
 
-mod ledger;
+pub mod pause;
+pub use pause::{Pause, Scope};
+
+pub(crate) mod switches;
+pub use switches::{DegradedPr, Held, Holding, InEffect, Status, Switch, status};
+
+pub(crate) mod ledger;
 
 mod approval;
-pub use approval::owner_approval;
+pub use approval::{Door, Labeller, Request, Subject, owner_approval};
 
 mod handoff;
+mod stuck;
+pub use stuck::{Disputed, ENDED as STUCK_ENDED, Handoff, Stuck, followup as stuck_followup};
+
+pub(crate) mod publish;

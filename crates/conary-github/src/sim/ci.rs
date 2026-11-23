@@ -6,7 +6,56 @@ use serde_json::{Value, json};
 use crate::attest::{ARTIFACT, FILE, testing};
 use crate::train::Mark;
 
-use super::{Hub, Posted, REMI, STEWARD, built, fixtures, parse};
+use super::{Hub, Posted, REMI, STEWARD, World, built, fixtures, parse};
+
+/// Workflow runs, as the check runs on a commit tell of them: a suite is
+/// one's, and each attempt a new run of each name in it.
+impl World {
+    /// The check run `id`, and the runs on its commit in its suite.
+    fn suite_runs(&self, id: u64) -> Option<(&Value, Vec<&Value>)> {
+        self.checks.values().find_map(|runs| {
+            let run = runs.iter().find(|r| r["id"] == id)?;
+            let suite = &run["check_suite"]["id"];
+            let all = runs.iter().filter(|r| r["check_suite"]["id"] == *suite);
+            Some((run, all.collect()))
+        })
+    }
+
+    /// The attempt check run `id` is of.
+    pub(super) fn attempt(&self, id: u64) -> u64 {
+        self.suite_runs(id).map_or(1, |(run, all)| {
+            let upto = all
+                .iter()
+                .filter(|r| r["name"] == run["name"] && r["id"].as_u64() <= Some(id));
+            upto.count() as u64
+        })
+    }
+
+    /// The workflow run of job `id`, as it stands.
+    pub(super) fn workflow_run(&self, id: u64) -> crate::train::WorkflowRun {
+        let all = self.suite_runs(id).map(|(_, all)| all).unwrap_or_default();
+        let attempts = all.iter().filter_map(|r| r["id"].as_u64());
+        let done = all.iter().all(|r| r["status"] == "completed");
+        crate::train::WorkflowRun {
+            run_attempt: attempts.map(|i| self.attempt(i)).max().unwrap_or(1),
+            status: if done { "completed" } else { "in_progress" }.into(),
+        }
+    }
+
+    /// The suite of workflow run `run`: one a flow's snapshot names, else
+    /// that of the job it's ten times the id of.
+    pub(super) fn suite_of(&self, repo: &str, run: u64) -> Option<u64> {
+        let named = self.repos.get(repo).and_then(|r| {
+            r.flow.values().flat_map(|s| &s.suites).find_map(|(id, s)| {
+                s.workflow
+                    .as_ref()
+                    .is_some_and(|w| w.run == Some(run))
+                    .then_some(*id)
+            })
+        });
+        named.or_else(|| self.suite_runs(run / 10)?.0["check_suite"]["id"].as_u64())
+    }
+}
 
 impl Hub {
     /// The steward settles `sha`: its `review-settled` status, a success.
@@ -140,11 +189,99 @@ impl Hub {
         self.attest_passes(sha);
     }
 
+    /// One more completed check run on `sha`, its job in a run of its own,
+    /// reporting `text` if anything, and attested by nothing yet: its id.
+    pub(crate) fn check_run(
+        &self,
+        sha: &str,
+        name: &str,
+        conclusion: &str,
+        text: Option<&str>,
+    ) -> u64 {
+        let id = self.run_id();
+        self.add_check(
+            sha,
+            built(
+                fixtures::check_run(),
+                &json!({"id": id, "name": name, "status": "completed",
+                        "conclusion": conclusion, "check_suite": {"id": id},
+                        "output": {"text": text}}),
+            ),
+        );
+        id
+    }
+
     /// The check runs on `sha` are `runs`, as a test writes GitHub's
     /// answer.
     pub(crate) fn put_checks(&self, sha: &str, runs: Value) {
         let runs = runs.as_array().unwrap().clone();
         self.world.borrow_mut().checks.insert(sha.into(), runs);
+    }
+
+    /// GitHub running a suite's runs that didn't pass again: each a new
+    /// run, queued, in the same suite, as a rerun is.
+    pub(crate) fn run_again(&self, suite: u64) {
+        let mut w = self.world.borrow_mut();
+        let mut id = w
+            .checks
+            .values()
+            .flatten()
+            .filter_map(|c| c["id"].as_u64())
+            .max()
+            .unwrap_or(0);
+        for runs in w.checks.values_mut() {
+            let again: Vec<Value> = runs
+                .iter()
+                .filter(|c| {
+                    c["check_suite"]["id"].as_u64() == Some(suite)
+                        && c["status"] == "completed"
+                        && !matches!(
+                            c["conclusion"].as_str(),
+                            Some("success" | "neutral" | "skipped")
+                        )
+                })
+                .map(|c| {
+                    id += 1;
+                    json!({
+                        "id": id, "name": c["name"], "status": "queued",
+                        "conclusion": null, "check_suite": {"id": suite},
+                        "html_url": c["html_url"],
+                    })
+                })
+                .collect();
+            runs.extend(again);
+        }
+        w.runs = w.runs.max(id);
+    }
+
+    /// The runs queued on `sha` end with `conclusion`.
+    pub(crate) fn finish_again(&self, sha: &str, conclusion: &str) {
+        let mut w = self.world.borrow_mut();
+        for c in w.checks.get_mut(sha).into_iter().flatten() {
+            if c["status"] == "queued" {
+                c["status"] = json!("completed");
+                c["conclusion"] = json!(conclusion);
+            }
+        }
+    }
+
+    /// Someone runs `sha`'s runs that didn't pass again, and they end with
+    /// `conclusion`.
+    pub(crate) fn rerun_again(&self, sha: &str, conclusion: &str) {
+        let suites: std::collections::BTreeSet<u64> = self
+            .checks_on(sha)
+            .iter()
+            .filter_map(|r| r.check_suite.as_ref().map(|s| s.id))
+            .collect();
+        for suite in suites {
+            self.run_again(suite);
+        }
+        self.finish_again(sha, conclusion);
+    }
+
+    /// What didn't pass on `sha` has had its second try and failed it.
+    pub(crate) fn fails_again(&self, sha: &str) {
+        self.rerun_again(sha, "failure");
     }
 
     /// One more check run on `sha`, as a test writes GitHub's answer.
@@ -206,6 +343,12 @@ impl Hub {
             Some(run) => _ = w.artifacts.remove(&run).unwrap(),
             None => w.artifacts.clear(),
         }
+    }
+
+    /// Job `run`'s artifacts are past their retention: GitHub still lists
+    /// them, as expired, and serves none.
+    pub(crate) fn expire_artifacts(&self, run: u64) {
+        self.world.borrow_mut().expired.insert(run);
     }
 
     /// Job `run` ran on `runner`, not a fresh one of its own.

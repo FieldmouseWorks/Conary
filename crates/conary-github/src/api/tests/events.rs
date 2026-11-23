@@ -35,7 +35,12 @@ fn status_echoes_before_and_after_write_responses_quiesce_without_hiding_externa
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        let mut receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+        let mut receiver = Receiver::open(
+            b"s".to_vec(),
+            Box::new(|| Ok(vec!["o/r".into()])),
+            dir.path(),
+        )
+        .unwrap();
         for (id, context, state) in [
             (1, "review-settled", "pending"),
             (2, "review-settled", "success"),

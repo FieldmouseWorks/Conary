@@ -1,7 +1,7 @@
 //! Event source regression tests are wired from the pre-existing sim test root,
 //! so the negative tree also discovers them.
 use crate::events::*;
-use crate::flow::{Next, Report, Stage, Step};
+use crate::flow::{Level, Next, Report, Stage, Step};
 use ring::hmac;
 use serde_json::json;
 
@@ -35,10 +35,17 @@ fn report(at: u64) -> Report {
             description: "waiting".into(),
             wait_until: Some(at),
             overdue_at: Some(at + 50),
+            queued: None,
+            recovery: None,
+            owner: None,
             proof: None,
+            deadline: None,
             wait_on: None,
             on_usage: false,
             owner_notice: None,
+            switches: vec![],
+            priority: Level::Medium,
+            degraded: Vec::new(),
         }),
         error: None,
         owner_approval: None,
@@ -49,7 +56,12 @@ fn report(at: u64) -> Report {
 fn signatures_reject_before_queueing() {
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"secret".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"secret".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body = payload();
     let good = signature(b"secret", &body);
     let wrong = signature(b"wrong", &body);
@@ -77,7 +89,12 @@ fn signatures_reject_before_queueing() {
 fn replay_survives_restart_and_size_and_allowlist_are_enforced() {
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body = payload();
     let sig = signature(b"s", &body);
     assert_eq!(
@@ -87,7 +104,12 @@ fn replay_survives_restart_and_size_and_allowlist_are_enforced() {
     let work = queue.take(1).unwrap().unwrap();
     queue.finish(&work, &[], 1).unwrap();
     drop(receiver);
-    let mut receiver = Receiver::open(b"s".to_vec(), ["o/r".into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec!["o/r".into()])),
+        dir.path(),
+    )
+    .unwrap();
     assert_eq!(
         receiver.receive(Some(&sig), "id", "pull_request", &body, 2, &queue),
         202
@@ -201,7 +223,12 @@ fn signed_pull_event_runs_flow_against_hub() {
     let c = Case::new();
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(dir.path()).unwrap();
-    let mut receiver = Receiver::open(b"s".to_vec(), [REPO.into()], dir.path()).unwrap();
+    let mut receiver = Receiver::open(
+        b"s".to_vec(),
+        Box::new(|| Ok(vec![REPO.into()])),
+        dir.path(),
+    )
+    .unwrap();
     let body =
         serde_json::to_vec(&json!({"repository":{"full_name":REPO}, "pull_request":{"number":3}}))
             .unwrap();
@@ -217,27 +244,37 @@ fn signed_pull_event_runs_flow_against_hub() {
         202
     );
     let now = crate::flow::jobs::now();
-    assert!(
+    assert_eq!(
         queue
-            .run_one(now, |work| {
-                assert_eq!(work.repo, REPO);
-                let reports = c.pass(now, false);
-                assert_eq!(
-                    reports[0].next.as_ref().unwrap().step,
-                    Step::QueueReview("reviewer".into())
-                );
-                assert_eq!(
-                    reports[0].next.as_ref().unwrap().wait_until,
-                    Some(c.record().jobs[0].deadline)
-                );
-                assert_eq!(
-                    c.deferred.0.borrow().len(),
-                    1,
-                    "the pass executed its plugin launch"
-                );
-                Ok(reports)
-            })
-            .unwrap()
+            .run_one(
+                || now,
+                |work| {
+                    assert_eq!(work.repo, REPO);
+                    let reports = c.pass(now, false);
+                    // The flow first sees the head now: it waits for the
+                    // connector's review of the push.
+                    let next = reports[0].next.as_ref().unwrap();
+                    assert_eq!(
+                        next.step,
+                        Step::Wait {
+                            until: Some(now + 1800)
+                        }
+                    );
+                    assert_eq!(next.wait_until, Some(now + 1800));
+                    assert_eq!(c.record().memory.seen, now, "the pass kept what it saw");
+                    // It wrote the PR's stage and status on the hub.
+                    assert_eq!(
+                        (
+                            c.hub.count(crate::sim::Call::FlowStage),
+                            c.hub.count(crate::sim::Call::FlowStatus)
+                        ),
+                        (1, 1)
+                    );
+                    Ok(reports)
+                }
+            )
+            .unwrap(),
+        Ran::Finished
     );
     assert!(queue.take(now).unwrap().is_none());
 }
@@ -283,4 +320,286 @@ fn sleeper_wakes_at_a_booked_time_and_on_a_new_kick() {
     queue.kick(kick()).unwrap();
     assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
     worker.join().unwrap();
+}
+
+fn runtime(dir: &std::path::Path, worker: &str) -> Runtime {
+    serde_json::from_value(json!({
+        "listen": "127.0.0.1:0",
+        "secret_path": dir.join("secret"),
+        "repos": ["o/r", "o/s"],
+        "data": dir,
+        "flow_config": dir.join("flow.json"),
+        "policy": dir.join("policy.json"),
+        "token_command": "true",
+        "anchor_repo": null,
+        "worker": worker,
+    }))
+    .unwrap()
+}
+/// A thread asleep on the mailbox, as conaryd's worker is, that sends the
+/// first work it's woken for.
+fn sleeper(
+    queue: &std::sync::Arc<Queue>,
+) -> (std::sync::mpsc::Receiver<Work>, std::thread::JoinHandle<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiting = std::sync::Arc::clone(queue);
+    let thread = std::thread::spawn(move || {
+        loop {
+            if let Some(work) = waiting.take(crate::flow::jobs::now()).unwrap() {
+                tx.send(work).unwrap();
+                break;
+            }
+            waiting.wait();
+        }
+    });
+    (rx, thread)
+}
+
+/// Only a pass reads a worker's answer, and most publish nothing GitHub
+/// sends an event for, so its exit wakes its repository's pass: answered,
+/// failed, or stopped by its cancel marker.
+#[test]
+fn a_workers_exit_wakes_its_repositorys_pass_however_it_ended() {
+    use crate::flow::jobs::Launch;
+    use std::time::Duration;
+    for (name, body) in [
+        ("answered", "exit 0"),
+        ("failed", "exit 1"),
+        // Runs until it finds its cancel marker, as the plugin runner does.
+        (
+            "cancelled",
+            r#"while [ ! -e "${2%.job}.cancel" ]; do sleep 0.05; done"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = tempfile::tempdir().unwrap();
+        let worker = crate::tokens::tests::script(scripts.path(), body);
+        let runtime = runtime(dir.path(), &worker);
+        let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
+        let (woken, thread) = sleeper(&queue);
+        let job = dir.path().join("3-1.job");
+        runtime.launcher("o/r", &queue).launch(&job).unwrap();
+        if name == "cancelled" {
+            assert!(
+                woken.recv_timeout(Duration::from_millis(500)).is_err(),
+                "a running worker woke the pass"
+            );
+            std::fs::write(job.with_extension("cancel"), b"obsolete\n").unwrap();
+        }
+        let work = woken
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a {name} worker's exit woke nothing"));
+        assert_eq!(work.repo, "o/r");
+        thread.join().unwrap();
+        queue.finish(&work, &[], crate::flow::jobs::now()).unwrap();
+        // Its kick was the only one.
+        assert!(queue.take(crate::flow::jobs::now()).unwrap().is_none());
+    }
+}
+
+/// A worker that answered while conaryd was down is read as it starts again.
+#[test]
+fn the_daemon_reads_every_repository_once_as_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = runtime(dir.path(), "/nonexistent");
+    let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
+    assert!(queue.take(1).unwrap().is_none());
+    runtime.restart(&queue).unwrap();
+    let now = crate::flow::jobs::now();
+    let mut repos = Vec::new();
+    while let Some(work) = queue.take(now).unwrap() {
+        repos.push(work.repo.clone());
+        queue.finish(&work, &[], now).unwrap();
+    }
+    assert_eq!(repos, ["o/r", "o/s"]);
+}
+
+/// A worker an earlier daemon launched, still running as the next one
+/// starts, wakes that daemon's pass as it exits: answered, failed, or
+/// cancelled by the new daemon. Only the earlier daemon reaped it, and it's
+/// gone.
+#[test]
+fn a_worker_that_outlives_its_daemon_wakes_the_next_ones_pass() {
+    use crate::flow::jobs::{Launch, Process};
+    use std::time::Duration;
+    for (name, body) in [
+        (
+            "answered",
+            r#"while [ ! -e "${2%.job}.go" ]; do sleep 0.05; done; echo '{"at":1,"result":null}' > "${2%.job}.answer""#,
+        ),
+        (
+            "failed",
+            r#"while [ ! -e "${2%.job}.go" ]; do sleep 0.05; done; exit 1"#,
+        ),
+        (
+            "cancelled",
+            r#"while [ ! -e "${2%.job}.cancel" ]; do sleep 0.05; done"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let scripts = tempfile::tempdir().unwrap();
+        let worker = crate::tokens::tests::script(scripts.path(), body);
+        let runtime = runtime(dir.path(), &worker);
+        let flow = dir.path().join("flow").join("o").join("r");
+        std::fs::create_dir_all(&flow).unwrap();
+        let job = flow.join("3-1.job");
+        std::fs::write(&job, b"{}").unwrap();
+        // A finished worker's invocation, already answered, isn't watched.
+        std::fs::write(flow.join("2-1.job"), b"{}").unwrap();
+        std::fs::write(flow.join("2-1.answer"), b"{}").unwrap();
+        // The earlier daemon, whose reaper died with it.
+        Process {
+            worker: worker.clone().into(),
+            ended: None,
+        }
+        .launch(&job)
+        .unwrap();
+        let queue = std::sync::Arc::new(Queue::open(dir.path()).unwrap());
+        runtime.restart(&queue).unwrap();
+        let now = crate::flow::jobs::now();
+        while let Some(work) = queue.take(now).unwrap() {
+            queue.finish(&work, &[], now).unwrap();
+        }
+        let (woken, thread) = sleeper(&queue);
+        assert!(
+            woken.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a running {name} worker woke the pass"
+        );
+        let release = if name == "cancelled" { "cancel" } else { "go" };
+        std::fs::write(job.with_extension(release), b"\n").unwrap();
+        let work = woken
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a {name} worker that outlived its daemon woke nothing"));
+        assert_eq!(work.repo, "o/r");
+        thread.join().unwrap();
+        queue.finish(&work, &[], crate::flow::jobs::now()).unwrap();
+        assert!(queue.take(crate::flow::jobs::now()).unwrap().is_none());
+    }
+}
+
+/// One conaryd lands two repositories, each under a flow configuration of
+/// its own: a pass reads its repository's file and no other, at the pass,
+/// so one repository's evidence, train or broken file never reaches the
+/// other's. The file that gives every repository one stays valid, and the
+/// events file is refused where its repositories and their files disagree.
+#[test]
+fn each_repository_passes_under_its_own_flow_configuration() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let ledger = root.join("ledger");
+    conary_core::log::load_or_create_key(&conary_core::log::key_path(&ledger)).unwrap();
+    std::fs::write(root.join("policy.json"), b"{}").unwrap();
+    let path = root.join("events.json");
+    let events = |repos: serde_json::Value, flow_config: serde_json::Value| {
+        let config = json!({
+            "listen": "127.0.0.1:0",
+            "secret_path": root.join("secret"),
+            "repos": repos,
+            "data": root.join("data"),
+            "flow_config": flow_config,
+            "policy": root.join("policy.json"),
+            "token_command": "true",
+            "anchor_repo": null,
+            "worker": "/nonexistent",
+            "api": "http://127.0.0.1:1",
+        });
+        std::fs::write(&path, config.to_string()).unwrap();
+    };
+    let flow = |name: &str, config: serde_json::Value| {
+        std::fs::write(root.join(name), config.to_string()).unwrap();
+    };
+    let evidence = json!({"evidence": {
+        "signer": "o/ci/.github/workflows/gate.yml",
+        "require": ["gate"],
+        "negative": "negative",
+    }});
+    let train = json!({"settings": {"train": true}});
+    let each = json!({"o/r": root.join("r.json"), "O/S": root.join("s.json")});
+    flow("r.json", evidence.clone());
+    flow("s.json", json!({}));
+    events(json!(["o/r", "o/s"]), each.clone());
+    let live = Live::open(&path).unwrap();
+    let queue = Arc::new(Queue::open(&root.join("data")).unwrap());
+    // Every pass here fails before GitHub, and its error says what its flow
+    // needs: one with evidence or the train on the anchor_repo none is
+    // given, one with neither on reading the ledger, never anchored.
+    let pass = |repo: &str| {
+        live.work(&ledger, &Work { repo: repo.into() }, &queue)
+            .unwrap_err()
+            .to_string()
+    };
+    let needs_anchor = |repo: &str| {
+        let error = pass(repo);
+        match (
+            error.contains("require anchor_repo"),
+            error.contains("no anchor for the op log"),
+        ) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => panic!("{repo}'s pass failed on neither: {error}"),
+        }
+    };
+
+    // o/r's evidence is its own: o/s, with none, needs no ledger.
+    assert!(needs_anchor("o/r"), "o/r's evidence needs the ledger");
+    assert!(!needs_anchor("o/s"), "o/r's evidence reached o/s");
+
+    // Each file is read at its repository's pass: the train turned on for
+    // o/s alone, and o/r's evidence taken away, swap them.
+    flow("r.json", json!({}));
+    flow("s.json", train.clone());
+    assert!(needs_anchor("o/s"), "o/s's train needs the ledger");
+    assert!(!needs_anchor("o/r"), "o/s's train reached o/r");
+
+    // A file that doesn't load fails its own repository's pass alone.
+    flow("s.json", json!({"nope": 1}));
+    let broken = pass("o/s");
+    assert!(broken.contains("doesn't declare"), "{broken}");
+    flow("r.json", evidence);
+    let other = pass("o/r");
+    assert!(other.contains("require anchor_repo"), "{other}");
+
+    // One file for every repository stays valid.
+    flow("flow.json", train);
+    events(json!(["o/r", "o/s"]), json!(root.join("flow.json")));
+    assert!(needs_anchor("o/r") && needs_anchor("o/s"));
+
+    // A listed repository with no file, a file for one not listed, one
+    // repository named twice and a key that isn't one are refused, by the
+    // daemon as it starts and at the next pass.
+    for (repos, flow_config, refused) in [
+        (
+            json!(["o/r", "o/s", "o/t"]),
+            each.clone(),
+            "flow_config gives o/t no file",
+        ),
+        (
+            json!(["o/r"]),
+            each.clone(),
+            "flow_config names a repository repos doesn't list",
+        ),
+        (
+            json!(["o/r", "o/s"]),
+            json!({"o/r": "/r", "o/s": "/s", "O/s": "/s"}),
+            "names o/s twice",
+        ),
+        (
+            json!(["o/r", "o/s"]),
+            json!({"o/r": "/r", "o/s": "/s", "o": "/t"}),
+            "a key that isn't OWNER/REPO",
+        ),
+    ] {
+        events(repos, flow_config);
+        let open = Live::open(&path).err().map(|e| e.to_string());
+        assert!(
+            open.as_deref().is_some_and(|e| e.contains(refused)),
+            "{open:?}"
+        );
+        let read = live.read().err().map(|e| e.to_string());
+        assert!(
+            read.as_deref().is_some_and(|e| e.contains(refused)),
+            "{read:?}"
+        );
+    }
 }

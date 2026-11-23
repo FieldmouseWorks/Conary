@@ -42,6 +42,8 @@ section 5](DESIGN.md#5-undo) says what it reads). An `at` reads the log on
 its own, holding up no other call. Their params, as JSON Schema, are in
 [`rpc.rs`](../crates/conary-core/src/rpc.rs) (`METHODS`), the one list every
 transport offers. A change that isn't in the ledger is `null`, not an error.
+`change.get` includes an undo's immutable `undo.reason`; it is `null` for
+historical undo operations recorded before reasons were required.
 Errors are JSON-RPC's own codes, and `-32000` for a call that was well formed
 and failed: the log didn't verify, say.
 
@@ -51,6 +53,16 @@ that checkout's config says to, as whoever runs git. So `why` is answered
 where the caller is: `cn why` blames in its own process, and the MCP server
 in its, asking conaryd only for the repository's `landings`, the
 [notes](notes.md) of its landed changes with nothing left out.
+
+## Gate reuse
+
+The optional `--gate-reuse-config PATH` (`CONARY_GATE_REUSE_CONFIG`) starts
+another HTTP listener, which answers whether CI already attested a pass of a
+gate on a tree ([gate reuse](gate-reuse.md) says what counts and how it's
+configured). It reads GitHub, as the train does, and the ledger, and
+records nothing. Its configuration is read again at each lookup, all but
+its address live. Its requests are bounded like the webhook's: a head of
+16 KiB, a body of 64 KiB, five seconds for the whole request, 16 at once.
 
 ## Verified flow events
 
@@ -75,11 +87,41 @@ The file is machine-owned JSON, with unknown fields rejected:
 }
 ```
 
-`flow_config` is the [pass configuration](flow.md). `worker` names the installed
+conaryd reads this file again at each delivery and each pass
+(`events::Live`), so a change to an option takes effect at the next one:
+adding a repository to `repos` takes its next event, and taking one off
+retires its mailbox without a pass. `listen`, `secret_path` and `data` are
+the exceptions: conaryd binds, reads and opens them once, as it starts, and
+keeps the values it started with until it restarts. A change to one of
+those is logged once, by its name, as waiting for a restart. The
+[settings schema](flow.md#the-settings-schema) declares them so, and
+`cn flow settings --events-config PATH` lists them apart.
+
+`flow_config` is the [pass configuration](flow.md): one file every listed
+repository's pass reads, as above, or an object giving each listed
+repository its own, so repositories with different evidence or trains land
+through one conaryd:
+
+```json
+"flow_config": {
+  "example/project": "/etc/conary/flow/example/project.json",
+  "example/other": "/etc/conary/flow/example/other.json"
+}
+```
+
+A pass reads its own repository's file, at the pass, through the loader
+`cn flow settings --config` uses, and no other: one repository's broken file
+fails only its passes. The events file is refused, as conaryd starts and at
+the next delivery or pass, when the object leaves a listed repository out,
+names one `repos` doesn't list, names one twice in any case, or has a key
+that isn't `OWNER/REPO`; `cn flow settings --events-config` refuses it the
+same way and lists which file each repository reads.
+
+`worker` names the installed
 `cn` executable that runs owned plugin jobs. `api` optionally overrides the
 GitHub API root. The token command has the same contract as `cn`'s token command.
-The ledger is the daemon's `--ledger`; `anchor_repo` may be null only when the
-flow does not require evidence or train operations. Keep data, policy, config
+The ledger is the daemon's `--ledger`; `anchor_repo` may be null only when no
+repository's flow requires evidence or train operations. Keep data, policy, config
 and the secret file private to the service user. The secret file contains the
 exact secret bytes, without a trailing newline; its value never appears in
 configuration. Put TLS termination in front of the configured HTTP address.
@@ -88,16 +130,21 @@ When a repository is ready to switch, its GitHub webhook uses the externally
 reachable receiver URL, content type **application/json**, and the secret from
 that file. Select pull requests (including labeled/unlabeled actions), pull
 request reviews, pull request review comments, pull request review threads,
-issue comments, check suites, check runs, commit statuses and pushes. GitHub's
+issue comments, check suites, check runs, workflow runs, workflow jobs, commit
+statuses and pushes. GitHub's
 `label` event changes label definitions; PR label attachments arrive through
 `pull_request`. Only pushes to the default branch kick the repo's open PRs.
 Issue comments without a PR and events outside this table are acknowledged
-without work. Check events without associated PR numbers and commit statuses
-kick the repository so the pass can correlate current PR heads. Status echoes
+without work. Check events and workflow runs without associated PR numbers
+(a train candidate's, among them), commit statuses and a workflow job's start
+(its stall clock's, [flow](flow.md#deadlines)) kick the repository so
+the pass can correlate current PR heads and step the train
+([flow](flow.md#the-train)). Status echoes
 are queued with their GitHub status ID. Before dispatch, the worker drops only
 IDs recorded from its own successful status-write responses, including both
 pending and success writes and train statuses. Delivery can precede the write
-response: the worker classifies echoes after its active pass finishes. Receipts
+response: the worker classifies a repository's echoes after its running pass
+finishes. Receipts
 survive restart and are retained for 24 hours. External writes, including writes
 to Conary's own status contexts, still kick a pass and recheck permission.
 Stage labels already present are read without posting them again.
@@ -112,13 +159,53 @@ accepted deliveries return 202 after durable enqueueing, without waiting for
 a GitHub read or pass. Delivery IDs are remembered for 24 hours, including
 across restart; replays are acknowledged and dropped.
 
-Kicks coalesce at repository scope because each pass observes shared occupancy
-and train state. A burst queued before a pass runs makes one pass; kicks during
-a running pass make one additional pass. The existing repository file lock
-still guards execution. A separate data-directory lock prevents two event
-workers from owning the same mailbox. In-flight work is recovered on restart.
-A fatal worker error stops the daemon with work still durable; the service
-manager can restart it. Errors never print webhook content.
+Passes of different repositories run at once, one at a time per repository:
+each repository's pass starts on a thread of its own as soon as it's due,
+whatever another repository's pass is doing, so one whose GitHub reads are
+slow or hang holds up only itself, but for the reads a merge or a train step
+makes under the ledger's writer lock ([flow](flow.md#state-and-workers)). Kicks coalesce at repository scope because
+each pass observes shared occupancy and train state. A burst queued before a
+pass runs makes one pass; kicks during a running pass make one additional
+pass, after it. A running repository's status events, due bookings and
+recovery likewise wait for its pass to end. The existing repository file lock still guards execution. A separate
+data-directory lock prevents two event workers from owning the same mailbox.
+Every pass running when conaryd stopped runs again as it starts.
+
+A flow worker's answer (a review's, fix's, judge's, preparation's or
+proof's) is read only by a pass, and most publish nothing GitHub sends an
+event for, so conaryd kicks the worker's repository as the worker exits, however it ended: answered, failed or cancelled. Starting, it
+kicks every listed repository once, so an answer saved while it was down is
+read by that first pass. A worker that outlives the daemon that launched it
+still wakes the next one: each worker holds a lock, taken before it starts,
+until it exits, and a starting daemon waits on the lock of each worker with
+no answer yet and kicks its repository once it's free, its own cancellation
+of that worker included. A worker's deadline stays booked as the backstop for
+one whose exit nobody saw.
+
+Each read of GitHub goes to the end of its data: a list a page of 100 at a
+time until GitHub has no more, and a PR's snapshot with every check suite on
+its head, the rest after its first query's page read a page at a time on
+that same head. No count of pages fails a read. Each call is cut off after a
+minute, and each read, all its pages, has a deadline of its own, five
+minutes (`READ_FOR` in [`api.rs`](../crates/conary-github/src/api.rs)), each
+page's call cut off at what's left of it. A read past its deadline fails as
+GitHub unavailable, like any other read that fails: what the flow does with
+one is [flow](flow.md#degraded-paths)'s, and its pass books its recovery as
+below.
+
+A whole-repository pass that fails before its reports (GitHub unavailable, a
+token command failing) books a durable recovery for that repository instead of
+stopping the worker: 60 seconds after the first failure, counted from when the
+pass gave up however long it ran, doubling per failure
+in a row up to 64 minutes, and cleared by the next pass that finishes. Until its
+recovery time the repository is held: kicks and status events arriving
+meanwhile stay queued, and its PR bookings stay unspent, and all of them run
+in that one retry. Other repositories go on advancing, and the ledger socket
+keeps answering. The recovery, the held kicks and the bookings survive restart.
+The log names the repository, its failures in a row and its retry time, never
+the error's text. Only a mailbox that can't be written stops the worker, once
+the passes running end, and the daemon with it, so the service manager can restart it. Errors never print
+webhook content.
 
 Each report's `Next.wait_until` names its explicit wait or owned worker deadline;
 `overdue_at` names the stall deadline. The mailbox books the earliest future
@@ -131,9 +218,10 @@ These are failure-triggered bookings, not periodic repository scans. Explicit
 waits name the first second their predicate permits progress (the quiet handoff
 requires the second after its inclusive quiet period).
 
-The worker sleeps on a condition variable until an incoming kick or that
-booked time, consumes the booking once, and runs a pass. There is no periodic
+The worker sleeps on a condition variable until a kick (a webhook's, a flow
+worker's exit, or its own start), a pass ending or that booked time, consumes
+the booking once, and starts a pass. There is no periodic
 scan or polling timer. Already elapsed deadlines are not rebooked by an
-unchanged report. The mailbox, status receipts, failure backoffs and delivery cache are mutable JSON files in
+unchanged report. The mailbox, status receipts, failure backoffs, repository recoveries and delivery cache are mutable JSON files in
 `data`, beside `flow/` memory, with atomic rename and file/directory sync;
 they are separate from the append-only ledger.

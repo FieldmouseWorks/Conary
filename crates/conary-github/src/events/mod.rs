@@ -2,9 +2,10 @@
 mod queue;
 mod runtime;
 use crate::flow::persist::{self, Result};
-pub use queue::{Queue, Work};
+pub use queue::{Queue, Ran, Recovery, Work};
 use ring::hmac;
-pub use runtime::Runtime;
+pub use runtime::{FlowConfig, Live, Runtime};
+pub(crate) use runtime::{repo_names, repos};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,9 @@ enum Target {
     Issue,
     Check(&'static str),
     Repository,
+    /// A job leaving the queue for a runner: the one event GitHub sends as
+    /// a check's run starts, which starts its stall clock.
+    Started,
     DefaultPush,
 }
 // The sole event-to-kick table. PR label actions arrive as pull_request events;
@@ -36,7 +40,11 @@ const EVENTS: &[(&str, Target)] = &[
     ("issue_comment", Target::Issue),
     ("check_suite", Target::Check("check_suite")),
     ("check_run", Target::Check("check_run")),
+    // A run finishing on a train's candidate, which belongs to no PR, kicks
+    // the repo: its pass steps the train.
+    ("workflow_run", Target::Check("workflow_run")),
     ("status", Target::Repository),
+    ("workflow_job", Target::Started),
     ("push", Target::DefaultPush),
 ];
 
@@ -74,6 +82,9 @@ pub fn kicks(event: &str, body: &Value, repos: &BTreeSet<String>) -> Vec<Kick> {
             if prs.is_empty() { vec![None] } else { prs }
         }
         Target::Repository => vec![None],
+        // Its queuing and its finish come as check runs already.
+        Target::Started if body["action"].as_str() == Some("in_progress") => vec![None],
+        Target::Started => vec![],
         Target::DefaultPush => {
             let default = body["repository"]["default_branch"].as_str();
             if default
@@ -119,18 +130,19 @@ pub fn verified(secret: &[u8], signature: Option<&str>, body: &[u8]) -> bool {
     hmac::verify(&hmac::Key::new(hmac::HMAC_SHA256, secret), body, &tag).is_ok()
 }
 
+/// Where a receiver reads the repositories it takes events for, at each
+/// delivery: conaryd's is [`Live::repos`], so a change to the list takes
+/// effect at the next one.
+pub type Listed = Box<dyn Fn() -> Result<Vec<String>> + Send>;
+
 pub struct Receiver {
     secret: Vec<u8>,
-    repos: BTreeSet<String>,
+    repos: Listed,
     deliveries: BTreeMap<String, u64>,
     path: PathBuf,
 }
 impl Receiver {
-    pub fn open(
-        secret: Vec<u8>,
-        repos: impl IntoIterator<Item = String>,
-        data: &Path,
-    ) -> Result<Self> {
+    pub fn open(secret: Vec<u8>, repos: Listed, data: &Path) -> Result<Self> {
         if secret.is_empty() {
             return Err("webhook secret is empty".into());
         }
@@ -138,7 +150,7 @@ impl Receiver {
         let path = data.join("deliveries.json");
         Ok(Self {
             secret,
-            repos: repos.into_iter().map(|r| r.to_lowercase()).collect(),
+            repos,
             deliveries: persist::load(&path)?,
             path,
         })
@@ -170,7 +182,11 @@ impl Receiver {
         let Ok(value) = serde_json::from_slice(body) else {
             return 400;
         };
-        for kick in kicks(event, &value, &self.repos) {
+        let Ok(repos) = (self.repos)() else {
+            return 503;
+        };
+        let repos = repos.into_iter().map(|r| r.to_lowercase()).collect();
+        for kick in kicks(event, &value, &repos) {
             let queued = if event == "status" && value["id"].as_u64().is_some() {
                 queue.status(&kick.repo, value["id"].as_u64().expect("checked above"))
             } else {

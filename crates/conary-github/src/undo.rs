@@ -9,6 +9,11 @@
 //! job to resolve like any PR's conflict. By session or time, a repo's
 //! changes take one PR: the newest one's revert is its base, and each older
 //! one's revert is merged in after, as `git revert` would lay them.
+//!
+//! Every request requires a nonblank `reason`, checked before any ledger
+//! refresh or GitHub call. It opens the PR body and is recorded permanently
+//! on the undo operation, including when ingestion recovers an interrupted
+//! request. Keep secrets, personal data and prompt text out of reasons.
 
 use std::collections::BTreeSet;
 
@@ -70,6 +75,10 @@ fn attempt_of(branch: &str) -> Option<(ChangeId, usize)> {
 pub(crate) struct Marker {
     pub reverts: Vec<ChangeId>,
     pub asked: Asked,
+    // Historical markers lack this field. Keep recognizing them as undos;
+    // ingestion requires a reason before recording any new undo from one.
+    #[serde(default)]
+    pub reason: String,
 }
 
 const MARKER: &str = "<!-- conary-undo: ";
@@ -80,21 +89,47 @@ impl Marker {
         format!("{MARKER}{json} -->")
     }
 
-    /// The marker of a PR from `branch` with `body`, if it's an undo's.
-    pub(crate) fn read(branch: &str, body: &str) -> Option<Self> {
+    /// The marker of a PR from `branch` with `body`, if it's an undo's:
+    /// `None` when the branch isn't an undo's or the body has no marker,
+    /// and an error when it has one that can't be read (a reason that's
+    /// null, not a string or given twice, say), so a malformed marker is
+    /// never taken for an ordinary PR.
+    pub(crate) fn read(branch: &str, body: &str) -> Option<Result<Self, String>> {
         attempt_of(branch)?;
         let line = body
             .lines()
             .rev()
             .find_map(|l| l.trim().strip_prefix(MARKER))?;
-        serde_json::from_str(line.strip_suffix("-->")?.trim()).ok()
+        let Some(json) = line.strip_suffix("-->") else {
+            return Some(Err("an undo marker with no end".into()));
+        };
+        Some(
+            serde_json::from_str(json.trim())
+                .map_err(|e| format!("an undo marker that doesn't parse: {e}")),
+        )
     }
 
-    /// The body without its marker: what the PR's author says, not what it
-    /// reverts or who asked for that. An actor's undo names its session in
-    /// its marker, and that session isn't the undo's author.
-    pub(crate) fn without(body: &str) -> String {
-        body.lines()
+    /// The body without its marker or the reason it opens with: what the
+    /// PR's author says, not what it reverts, who asked for that or why. An
+    /// actor's undo names its session in its marker, and its reason may
+    /// name it too (or an issue), and neither makes that session the undo's
+    /// author or that issue its task. `reasons` are the ones the body may
+    /// open with: its marker's and the one recorded, when they read. Both
+    /// are read the same way, line endings normalized and the whitespace
+    /// around them dropped, so whitespace a reason opens with doesn't keep
+    /// it from matching the trimmed body.
+    pub(crate) fn without(body: &str, reasons: &[&str]) -> String {
+        let body = body.replace("\r\n", "\n");
+        let body = body.trim_start();
+        let rest = reasons
+            .iter()
+            .map(|r| r.replace("\r\n", "\n"))
+            .find_map(|r| {
+                let r = r.trim();
+                (!r.is_empty()).then(|| body.strip_prefix(r)).flatten()
+            })
+            .unwrap_or(body);
+        rest.lines()
             .filter(|l| !l.trim().starts_with(MARKER))
             .collect::<Vec<_>>()
             .join("\n")
@@ -103,6 +138,8 @@ impl Marker {
 
 #[derive(Debug)]
 pub enum UndoError {
+    /// A new request needs a nonblank operational reason.
+    Reason,
     Api(ApiError),
     Store(StoreError),
     Ingest(IngestError),
@@ -151,6 +188,7 @@ impl UndoError {
 impl std::fmt::Display for UndoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Reason => f.write_str("an undo requires a nonblank reason"),
             Self::Api(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
@@ -335,7 +373,9 @@ pub fn undo(
     source: &dyn Source,
     config: &Config,
     change: ChangeId,
+    reason: &str,
 ) -> Result<Undone, Stopped> {
+    let reason = conary_core::op::undo_reason(reason).map_err(|_| UndoError::Reason)?;
     let repo = store
         .ledger()
         .change(change)
@@ -362,6 +402,7 @@ pub fn undo(
         &repo,
         &[change],
         &Asked::Change,
+        &reason,
         &mut Vec::new(),
     )?
     .ok_or(UndoError::Nothing(change))?;
@@ -379,7 +420,9 @@ pub fn undo_actor(
     source: &dyn Source,
     config: &Config,
     session: &str,
+    reason: &str,
 ) -> Result<Undid, Stopped> {
+    let reason = conary_core::op::undo_reason(reason).map_err(|_| UndoError::Reason)?;
     let asked = Asked::Actor {
         session: session.to_owned(),
     };
@@ -397,7 +440,9 @@ pub fn undo_actor(
         gone: Vec::new(),
     };
     for repo in repos {
-        match group(store, forge, source, config, &repo, &asked, &|c| by(c)) {
+        match group(store, forge, source, config, &repo, &asked, &reason, &|c| {
+            by(c)
+        }) {
             Ok(one) => {
                 got.undos.extend(one.undos);
                 got.gone.extend(one.gone);
@@ -422,13 +467,15 @@ pub fn undo_since(
     config: &Config,
     repo: &Repo,
     since: i64,
+    reason: &str,
 ) -> Result<Undid, Stopped> {
+    let reason = conary_core::op::undo_reason(reason).map_err(|_| UndoError::Reason)?;
     if !store.ledger().changes().any(|c| &c.repo == repo) {
         return Err(UndoError::Unkept(repo.clone()).into());
     }
     let asked = Asked::Since { since };
     let after = |c: &Change| c.landing.as_ref().is_some_and(|l| l.at > since);
-    let got = group(store, forge, source, config, repo, &asked, &after)?;
+    let got = group(store, forge, source, config, repo, &asked, &reason, &after)?;
     if got.undos.is_empty() && got.gone.is_empty() {
         return Err(UndoError::NoneLanded(asked).into());
     }
@@ -437,6 +484,7 @@ pub fn undo_since(
 
 /// The undos of `repo`'s landed changes that `asked` names (`pick`): the
 /// ones open already, found, and one opened for those that have none.
+#[allow(clippy::too_many_arguments)]
 fn group(
     store: &mut Store,
     forge: &dyn Reverts,
@@ -444,6 +492,7 @@ fn group(
     config: &Config,
     repo: &Repo,
     asked: &Asked,
+    reason: &str,
     pick: &dyn Fn(&Change) -> bool,
 ) -> Result<Undid, Stopped> {
     let picked = |store: &Store| -> Vec<ChangeId> {
@@ -477,7 +526,9 @@ fn group(
     }
     let mut gone = Vec::new();
     if !todo.is_empty() {
-        match open(store, forge, source, config, repo, &todo, asked, &mut gone) {
+        match open(
+            store, forge, source, config, repo, &todo, asked, reason, &mut gone,
+        ) {
             Ok(Some(opened)) => got.push(opened),
             Ok(None) => {}
             // What it found is told all the same.
@@ -540,6 +591,7 @@ fn open(
     repo: &Repo,
     changes: &[ChangeId],
     asked: &Asked,
+    reason: &str,
     gone: &mut Vec<ChangeId>,
 ) -> Result<Option<Undone>, Stopped> {
     let from = gone.len();
@@ -605,7 +657,9 @@ fn open(
         // the first; what conflicted with them is reverted on its own.
         forge.delete_branch(&full, &branch)?;
         gone.extend(reverts);
-        return open(store, forge, source, config, repo, &left, asked, gone);
+        return open(
+            store, forge, source, config, repo, &left, asked, reason, gone,
+        );
     }
     let x: Vec<&Change> = reverts
         .iter()
@@ -626,6 +680,7 @@ fn open(
     let marker = Marker {
         reverts: reverts.clone(),
         asked: asked.clone(),
+        reason: reason.to_owned(),
     };
     let body = body(
         &x,
@@ -791,6 +846,7 @@ fn record(
         change: got.change,
         reverts: marker.reverts.clone(),
         asked: marker.asked.clone(),
+        reason: Some(marker.reason.clone()),
     }) {
         Ok(_) => recorded += 1,
         Err(StoreError::Invalid(Invalid::Duplicate)) => {}
@@ -862,7 +918,7 @@ fn body(
              taking out what {prs} brought."
         );
     }
-    body + "\n\n" + &marker.line()
+    format!("{}\n\n{body}\n\n{}", marker.reason, marker.line())
 }
 
 #[cfg(test)]

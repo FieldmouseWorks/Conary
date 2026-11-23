@@ -23,7 +23,7 @@ fn owner_case(r2: bool) -> Case {
         c.config.settings.train = true;
         c.hub.label(REPO, 3, &["r2"]);
     }
-    c.judgment(1, if r2 { Judgment::Land } else { Judgment::Owner }, true);
+    c.judgment(1, if r2 { Judgment::Pass } else { Judgment::Owner }, true);
     c
 }
 #[test]
@@ -210,10 +210,10 @@ fn transient_discovery_failures_never_create_cancellable_jobs() {
         });
         let report = c.pass(jobs::now(), false);
         assert_eq!(report[0].error, None, "{:?}", report[0]);
-        assert_eq!(
-            report[0].next.as_ref().unwrap().step,
-            Step::QueueReview("reviewer".into())
-        );
+        // Its own decision: waiting on the connector's review of its push.
+        let next = report[0].next.as_ref().unwrap();
+        assert_eq!(next.stage, Stage::Review);
+        assert!(matches!(next.step, Step::Wait { .. }), "{:?}", next.step);
         assert!(c.record().memory.stopping.is_empty());
         c.pass(jobs::now() + 1, false);
         assert!(c.record().memory.stopping.is_empty());
@@ -256,21 +256,7 @@ fn retargeted_uncertain_intents_use_original_scope_and_allow_revalidated_progres
     );
     assert!(c.record().landing.as_ref().unwrap().retry);
     assert_eq!(c.record().landing.as_ref().unwrap().target, "main");
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 5);
-    let body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
-    c.sign_check(
-        &head(4),
-        "conary/review/reviewer",
-        Some(&review_receipt(&head(4), &body)),
-    );
+    c.hub.flow_review(REPO, 3, Verdict::Clean, 5);
     let root = c.dir.path().to_path_buf();
     c.hub.race(Call::Land, move |_| {
         let record = Data::read(&root, &REPO.parse().unwrap(), 3).unwrap();
@@ -352,10 +338,11 @@ fn persisted_capacity_cancellation_from_an_older_pass_is_recovered() {
     drop(data);
     let report = c.pass(now, false);
     assert_eq!(report[0].error, None);
-    assert_eq!(
-        report[0].next.as_ref().unwrap().step,
-        Step::QueueReview("reviewer".into())
-    );
+    // Its own decision: the head has gone unreviewed since the record began,
+    // so the connector is asked for a look.
+    let next = report[0].next.as_ref().unwrap();
+    assert_eq!(next.stage, Stage::Review);
+    assert!(matches!(next.step, Step::AskReview(_)), "{:?}", next.step);
     assert!(c.record().memory.stopping.is_empty());
 }
 
@@ -399,7 +386,14 @@ fn fresh_authorization_observations_cannot_drop_blocking_or_missing_checks() {
                 ledger: None,
             };
             assert!(
-                crate::flow::evidence::authorize(&pass, &c.hub, &facts).is_err(),
+                crate::flow::evidence::authorize(
+                    &pass,
+                    &c.hub,
+                    &facts,
+                    &Step::Merge,
+                    &mut Default::default()
+                )
+                .is_err(),
                 "{machine} {state}"
             );
         }
@@ -438,6 +432,92 @@ fn configured_machine_proofs_cannot_be_replaced_by_neutral_or_skipped_runs() {
             dry_run: true,
             ledger: None,
         };
-        assert!(crate::flow::evidence::authorize(&pass, &c.hub, &facts).is_err());
+        assert!(
+            crate::flow::evidence::authorize(
+                &pass,
+                &c.hub,
+                &facts,
+                &Step::Merge,
+                &mut Default::default()
+            )
+            .is_err()
+        );
     }
+}
+
+/// What `authorize` says of PR 3 as GitHub shows it now.
+fn authorized(c: &Case) -> std::result::Result<(), String> {
+    let facts = read(
+        &c.hub,
+        &REPO.parse().unwrap(),
+        3,
+        &c.policy,
+        c.config.settings.clone(),
+        &c.config.trusted_authors,
+    )
+    .unwrap();
+    let pass = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: jobs::now(),
+        dry_run: true,
+        ledger: None,
+    };
+    crate::flow::evidence::authorize(&pass, &c.hub, &facts, &Step::Merge, &mut Default::default())
+        .map_err(|e| e.to_string())
+}
+
+/// A green check of a PR's own CI: its token names GitHub's merge commit,
+/// not the head, so nothing on it can attest the head's tree.
+fn unattested(c: &Case, name: &str) {
+    let id = c.hub.run_id();
+    c.hub.add_check(
+        &head(3),
+        json!({"id":id,"name":name,"status":"completed",
+        "conclusion":"success","started_at":"2026-11-01T00:00:00Z"}),
+    );
+}
+
+#[test]
+fn only_required_checks_and_proofs_need_a_producers_attestation() {
+    // Green checks the machine doesn't name as evidence count green alone:
+    // a PR job's run, and a status, which can't attest at all.
+    let c = Case::new();
+    c.clean_review();
+    unattested(&c, "check / commits");
+    c.hub
+        .post_status(&head(3), json!({"context":"house/rules","state":"success"}));
+    assert_eq!(authorized(&c), Ok(()));
+
+    // A required check still needs its attestation.
+    let mut c = Case::new();
+    c.clean_review();
+    unattested(&c, "check / commits");
+    c.config.evidence.as_mut().unwrap().require = vec!["check / commits".into()];
+    let why = authorized(&c).unwrap_err();
+    assert!(why.starts_with("check / commits: "), "{why}");
+
+    // So does a configured proof.
+    let mut c = Case::new();
+    c.clean_review();
+    unattested(&c, "machine");
+    c.config
+        .settings
+        .proofs
+        .insert("machine".into(), Recipe::Run(vec!["check".into()]));
+    let why = authorized(&c).unwrap_err();
+    assert!(why.starts_with("machine: "), "{why}");
+
+    // And none of it waives green: a red check the machine doesn't require
+    // still keeps permission back.
+    let c = Case::new();
+    c.clean_review();
+    c.hub
+        .post_status(&head(3), json!({"context":"house/rules","state":"failure"}));
+    assert_eq!(
+        authorized(&c),
+        Err("Blocking or changed CI observations before permission".into())
+    );
 }

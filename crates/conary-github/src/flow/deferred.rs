@@ -18,26 +18,35 @@ use std::collections::{BTreeMap, BTreeSet};
 /// repository, run from `ref` (the default branch if omitted). The workflow
 /// gets the inputs `pr`, `head`, `base`, `check` and `nonce`; see
 /// docs/flow.md for what it must do with them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Start {
+    /// The workflow file (or id) dispatched to run the check.
+    #[schemars(extend("x-spender" = false))]
     pub workflow: String,
+    /// The ref the workflow is dispatched on; the default branch if unset.
     #[serde(rename = "ref", default)]
+    #[schemars(extend("x-spender" = false))]
     pub git_ref: Option<String>,
 }
 
 /// Machine-owned. No checks means off.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeferredConfig {
-    /// Check name -> how to start it.
+    /// The deferred checks, by check name: the workflow each is dispatched
+    /// through once review is ready. None, the default, defers nothing.
+    #[schemars(extend("x-spender" = true))]
     pub checks: BTreeMap<String, Start>,
     /// Seconds a dispatch may stay unseen (or a finished run without its
     /// evidence) before it counts as lost and may be sent again.
+    #[schemars(extend("x-spender" = false))]
     pub start_timeout: u64,
     /// Seconds a started run may take before it is cancelled and lost.
+    #[schemars(extend("x-spender" = false))]
     pub run_timeout: u64,
     /// Dispatches per check and head before giving up.
+    #[schemars(extend("x-spender" = false))]
     pub attempts: u32,
 }
 
@@ -222,9 +231,15 @@ pub(super) fn hydrate<G: Write>(
     f: &mut Facts,
     evidence: Option<&Evidence>,
     now: u64,
-) -> std::result::Result<Observation, ApiError> {
-    let seen = observe(github, f, now, &|p| match evidence {
-        Some(e) => super::evidence::deferred(github, f, e, p).map(|r| r.is_ok()),
+) -> Result<Observation> {
+    // Who may attest, read once: a trust that doesn't load is the pass's
+    // error, never a rejected proof that would spend an attempt.
+    let trust = match evidence {
+        Some(e) if !f.settings.deferred.checks.is_empty() => Some(e.trust()?),
+        _ => None,
+    };
+    let seen = observe(github, f, now, &|p| match &trust {
+        Some(trust) => super::evidence::deferred(github, f, trust, p).map(|r| r.is_ok()),
         None => Ok(false),
     })?;
     f.deferred.clone_from(&seen.deferrals);
@@ -274,7 +289,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
     let mut run_of: BTreeMap<&str, Option<crate::api::WorkflowRun>> = BTreeMap::new();
     for d in &f.dispatches {
         let run = match d.run {
-            Some(id) => github.workflow_run(&repo, id)?,
+            Some(id) => github.dispatched_run(&repo, id)?,
             None => listed
                 .get(d.workflow.as_str())
                 .and_then(|l| l.iter().find(|r| titled(r, &d.nonce)))
@@ -513,9 +528,9 @@ pub(super) fn without_reviewer(f: &Facts, red: bool, decision: &Decision) -> Opt
         && !f.changes_requested
         && !red
         && matches!(decision.1, Step::Wait { .. })
-        && matches!(decision.0, Stage::Review | Stage::Reviewer))
-    .then(|| start(f))
-    .flatten()
+        && decision.0 == Stage::Review)
+        .then(|| start(f))
+        .flatten()
 }
 
 /// Landing waits for evidence from every deferred check.

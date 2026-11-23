@@ -72,6 +72,87 @@ Section 12 is where it's going and how far it has got.
   produce it.
 - Windows.
 
+### Properties
+
+What the pipeline Conary replaces taught is kept in the
+[lessons register](lessons.toml), one entry per lesson with its source and
+status. Conary is built to these properties from the start: M6's slices and
+M7's setup path are held to them, and nothing in `steward.py` is ported as it
+is where one says otherwise. This index says where each is held and who
+delivers it. A property no other section holds is stated here; the rest link
+to their section.
+
+The register declares the components an entry may apply to and the
+milestones that ship each. The gate checks it against the rules in its
+header (`cn lessons check`), and an open entry passes that check. It holds a milestone instead: `cn lessons exit
+M6` fails while an open entry applies to a component M6 ships, and each
+milestone's exit check in the [roadmap](#12-roadmap) includes it.
+
+| Entry | Where it's held | Delivered by |
+| --- | --- | --- |
+| `no-pinned-engines`, `fresh-judge` | [Section 6.1](#61-execution-choices-and-independent-judging) | [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330), then M6 slice 5c's plugins ([m6-plugins.md](m6-plugins.md)) |
+| `same-inputs-same-verdict` | [Section 4.3](#43-evidence), rule 3 | [#291](https://github.com/FieldmouseWorks/Conary/issues/291) for a gate's pass; [#293](https://github.com/FieldmouseWorks/Conary/issues/293) for a judge's verdict, by a rule of its own; [#320](https://github.com/FieldmouseWorks/Conary/issues/320) for a batch's gate, on #291's lookup |
+| `heavy-work-waits-for-settled-inputs` | [Finish line](#12-roadmap), item 9 | [#292](https://github.com/FieldmouseWorks/Conary/issues/292) (its tasks #296 to #302), then M6 slice 8 ([#320](https://github.com/FieldmouseWorks/Conary/issues/320)) |
+| `reusable-modules` | [Finish line](#12-roadmap), item 7 | Every slice, and M7's setup path; [#378](https://github.com/FieldmouseWorks/Conary/issues/378) for the flow's defaults |
+| `no-model-in-mechanical-step` | A proof, build, replay or poll is a program ([a proof is a program](plugins.md#versions)). A model is a `fix` asked to read a failed proof's log, never what runs it, so the flow sends no model-run check to a proof plugin | The contract and its conformance test: [#295](https://github.com/FieldmouseWorks/Conary/issues/295) (landed in #330, continued by C1 in #377). The flow and the plugin: M6 slice 5c, tasks C3 ([#375](https://github.com/FieldmouseWorks/Conary/issues/375)) and P ([m6-plugins.md](m6-plugins.md)). wend's model-run check: [#315](https://github.com/FieldmouseWorks/Conary/issues/315) |
+| `degraded-counts-as-failed` | A degraded outcome (a fallback taken, a cache or evidence lookup that half-worked, an unreadable record read conservatively) is recorded as an op naming what degraded, and counts as its check's failure, never as a pass. The flow's status names it. The op is [section 4.6](#46-op-log)'s; the flow's paths are [flow.md](flow.md#degraded-paths)'s | [FP5](m6-properties.md#fp5-ledger-and-flow-record-a-degraded-outcome-and-count-it-failed) (landed in #449, #517 and #519) |
+| `spenders-off-by-default` | Every setting that starts paid work (a plugin, an admission like a drain, proof slots) defaults to off or zero, and a test holds every such default to that. M7's setup path turns each on explicitly | [#378](https://github.com/FieldmouseWorks/Conary/issues/378) (landed in #381), held through the schema by [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions), M7's setup path ([below](#m7s-setup-path)) |
+| `one-settings-source` | Conary's settings publish a self-describing schema: each setting's name, type, allowed values, default, description, and whether it's live. A settings source such as [burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655) imports it rather than declaring it again; a machine's configuration is generated from that source or written by hand against the schema, and nothing reads a setting the schema doesn't declare | [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions) for the schema; burrow for its import and the configuration it renders ([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724)), which [#313](https://github.com/FieldmouseWorks/Conary/issues/313) consumes; M7's setup path ([below](#m7s-setup-path)) |
+| `live-settings` | Every setting is read at the next decision, as the flow's configuration is on each pass ([flow.md](flow.md)), so changing one needs no release, restart or deploy. A setting that does need one says so in the schema, and Conary's status shows it as that exception | [FP1](m6-properties.md#fp1-flow-publish-the-configurations-schema-and-its-live-exceptions), M7's setup path ([below](#m7s-setup-path)) |
+| `off-switch-independent` | Conary's pause and hold take effect at the next decision through a write that needs none of what they stop: no pass, CI run, merge or deploy. Turning work off is always allowed and immediate | [FP2](m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `pause-vacates` | A pause or a hold frees at once every slot, lane and proof its work holds, and keeps the branch, PR and flow state, so lifting it resumes without redoing anything | [FP2](m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `switches-show-their-effect` | A pause, a hold or a per-repository switch shows in the flow's status and in `cn flow` output as in effect, with what it's holding | [FP3](m6-properties.md#fp3-flow-report-every-switch-in-effect-and-what-it-holds), [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `explicit-priority` | Admission and proof slots go by an explicit priority, the levels [burrow#652](https://github.com/FieldmouseWorks/burrow/issues/652) gives the drain, with age as the tiebreak. The steward's binary `first` queue isn't the order | [FP4](m6-properties.md#fp4-flow-order-admission-and-proof-slots-by-explicit-priority-then-age) |
+| `one-question-per-decision` | When the flow needs a person ([person approval](flow.md#person-approval)), it asks once per decision, under that decision's subject key, and a later wait on the same decision joins the open question | [FP10](m6-properties.md#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision) |
+| `limits-are-design-bugs` | A check that hits its deadline twice on the same tree is a stall to fix, not a retry: it's reported as one and not started again on that tree. A proof's deadline is sized from that proof's own history | [FP6](m6-properties.md#fp6-flow-a-second-deadline-on-the-same-tree-is-a-stall-not-a-retry) for the stall ([flow.md](flow.md#deadlines)), and [FP12](m6-properties.md#fp12-flow-size-a-proofs-deadline-from-its-own-history) |
+| `spend-only-where-needed` | Work starts only when its result can decide something, by the cheapest path that's enough, and stops once it can't: the flow stops work answering for an earlier head before it starts more, a gate's pass is reused on its exact tree, heavy checks wait until review settles, a batch is gated once, and a pause stops what it holds | [#291](https://github.com/FieldmouseWorks/Conary/issues/291), [#292](https://github.com/FieldmouseWorks/Conary/issues/292), [#320](https://github.com/FieldmouseWorks/Conary/issues/320) and [FP2](m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline) ([m6-properties.md](m6-properties.md#where-each-property-stands)) |
+| `owner-only-for-doors` | The flow lists the owner only for a door from a closed set: an R2 change, an outside contribution, a judge's `owner` verdict, and the owner label set by a person. Every other call it makes itself, records and shows; a hold past its deadline is a stall, not an owner listing | [FP10](m6-properties.md#fp10-flow-ask-the-owner-only-for-a-named-one-way-door-and-once-per-decision), then [#314](https://github.com/FieldmouseWorks/Conary/issues/314) and [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
+| `waiting-costs-nothing` | A PR waiting on CI starts no plugin and books no timed wake for it, and the check's completion event ends the wait only with the verdict it named. A check's stall clock starts when its run starts; time queued for a runner shows as capacity | [FP7](m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall), then [#317](https://github.com/FieldmouseWorks/Conary/issues/317) |
+| `read-sized-to-data` | A read of GitHub pages to the end of what it reads, with a deadline of its own. One that fails, is refused or overruns delays only its repository's pass and leaves the last facts in place, recorded as degraded | [FP9](m6-properties.md#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) |
+| `recover-by-kind` | At an expired stage the flow tries, once per stall, the recovery GitHub allows: a head behind its base is updated, and a cancelled check is brought back the way its kind permits, never one GitHub won't rerun. A refused recovery isn't tried again in that stall, and the status quotes GitHub's error | [FP8](m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) |
+| `scope-below-a-repo` | Not yet stated | [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
+| `publish-only-news` | A published list of what's stuck is one issue whose body is edited in place. A comment, and with it a job's turn, goes up only for a new item someone can act on; a cleared or reworded item edits the body and posts nothing. The job reads the list from the machine, never from the body's edit history | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s task U5 ([m6-upkeep.md](m6-upkeep.md#u5-upkeep-the-owner-and-stuck-issues-kept-in-place-notifying-only-for-news)) |
+| `repair-ahead-of-red` | Not yet stated | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
+
+#### Acceptance, lesson by lesson
+
+Every remaining M6 task names the entries it's held to, and the steward
+habits none may port ([m6.md](m6.md#lessons-each-task-is-held-to)). M7's
+setup path is held to those whose `applies` names `M7 standalone setup` or
+a component M7 ships ([below](#m7s-setup-path)). A task's PR moves each of
+its entries forward: a plan to `designed`, stated where this index links;
+an implementation to `built`, with the test that holds it in the entry's
+`where`. An entry that doesn't apply, or that the task leaves where it was,
+gets a sentence in the PR's body saying why. A finished slice owes nothing
+more.
+
+Each milestone's exit runs the executable check, `cn lessons exit M6` in
+[#321](https://github.com/FieldmouseWorks/Conary/issues/321)'s report and
+`cn lessons exit M7` in M7's exit check. It fails only on `open` entries,
+so #321's report also lists each entry still `designed` for a component M6
+ships, with the task that builds it.
+
+#### M7's setup path
+
+M7's setup path ([roadmap](#12-roadmap)) is where spenders are turned on
+and settings are first written, so it owes these:
+
+- **It enables each spender explicitly** (`spenders-off-by-default`). A
+  fresh ledger starts no paid work. The setup turns each plugin, admission
+  and proof slot on by name, and reports what it turned on.
+- **It consumes Conary's settings schema** (`one-settings-source`,
+  `live-settings`). The configuration it writes is checked against the
+  schema Conary publishes (#312's task delivers it), never a copy of it, and
+  every value is live unless the schema says otherwise.
+- **It names no engine of its own** (`no-pinned-engines`) and needs no
+  machine's own pieces (`reusable-modules`, finish-line item 7).
+
+burrow's side isn't M7's. burrow imports the schema into its settings
+source ([burrow#655](https://github.com/FieldmouseWorks/burrow/issues/655))
+and generates its machines' configuration from it
+([burrow#724](https://github.com/FieldmouseWorks/burrow/issues/724) for the
+flow's). M7 builds neither, and burrow keeps no definition of its own.
+
 ## 2. Gates, and what replaces them
 
 Each gate below exists because a mistake used to be expensive. For each one,
@@ -152,9 +233,11 @@ tree, parents and message, so the revision ID changes with anything about the
 revision: a reworded commit, new ancestry, a rebase or a retarget all give a
 new revision, and none of them overwrites an old one. A head pushed back to
 one Conary already saw is that revision again, and the PR's revision now.
-Evidence binds to the revision. Trees are named by their own git IDs, and two
-revisions sharing a tree is a fact Conary can report, never a reason to count
-one's evidence for the other.
+Evidence binds to the revision that produced it, and that record is never
+rewritten. Trees are named by their own git IDs, and two revisions sharing a
+tree is a fact Conary can report. Equal trees let a check result count for a
+landing with that exact tree (section 4.3, rule 3); they never merge two
+revisions, and never carry a review or a judgment from one to the other.
 
 For a GitHub PR the base is the merge base of the head and the base branch:
 the tree its diff and its review are against, which trunk moving doesn't
@@ -183,34 +266,62 @@ Three rules make it trustworthy:
 
 1. **Agents don't grade their own work.** Evidence counts only when it was
    produced outside the authoring session's sandbox and carries its
-   producer's attestation: CI on a configured runner, the steward's
-   reviewers, or a proof or judge job Conary started. conaryd's signature on
-   the op that records a result doesn't stand in for that attestation.
-   Anything the authoring session posts itself is feedback, not evidence.
+   producer's attestation: CI on a configured runner, or a proof or judge
+   job Conary started. conaryd's signature on the op that records a result
+   doesn't stand in for that attestation. Anything the authoring session
+   posts itself is feedback, not evidence.
+
+   **A reviewer's word is a gate, not evidence.** The reviewer is Codex's
+   GitHub connector, another party's App. It attests nothing, and anyone
+   with write access to the repo can edit what it posts. A service of
+   remi's that signed what it read there would attest only that read, which
+   the flow makes itself, so it would be a signature standing in for an
+   attestation. So, in every class:
+   - The flow waits for the reviewer's clean word on the head before it
+     lands, as [section 2](#2-gates-and-what-replaces-them) sets out for
+     each class, and refuses permission when that word changed since the
+     decision.
+   - The ledger records each finished word as a `review` result with no
+     attestation (clean passes, findings fail), which never counts.
+   - What a landing counts is attested CI and negative evidence, the
+     receipts of whatever judged it, and for R2 a person's scoped approval
+     and evidence for the exact candidate tree. A revert undoes what an R0
+     or R1 review missed. An R2 change waits for a person, who reads the
+     review.
 2. **New tests must fail on the old code.** A change that adds a test needs a
    `negative` record: the new test run against the base's code, failing. A
    test is a file, by its path (`tests/**`, `**/tests.rs`, `**/test_*.py`
    and the like), so a change adds one when it adds or changes a test file
    and changes anything else too: a change of tests alone has the base's
-   code as its own.
+   code as its own. A test file that only moved, its mode and blob
+   unchanged from a test path the change deletes, adds none, so code
+   changed beside a pure move is code changed with no test; an identical
+   file that reads differently at its new path is the limit of that
+   ([the rule](ci-attestation.md#negative-runs)).
    The record comes from burrow's shared CI, which builds the checks that
    read those files on the base with the head's test files, and attests
    whether they failed ([how](ci-attestation.md#negative-runs)). A test
    inside a code file, such as an inline Rust `#[cfg(test)]` module, is
    code here, so tests go in files of their own.
-3. **Evidence is about the tree it ran on, and says so.** A PR's evidence
-   proves its revision: that head on that base. Landing squashes it onto a
-   newer trunk, and the default branch is never required to be up to date
-   first ([why](https://github.com/FieldmouseWorks/burrow/blob/main/docs/repo-baseline.md#settings-the-steward)).
-   So Conary never records a PR's pre-land evidence as proof of the landed
-   tree. The landed tree gets its own: its train's candidate's, when trunk's
-   tree after the landing is the candidate's (section 4.7), and otherwise
-   trunk's CI's, recorded against the landing. A red result there starts an
-   undo or a fix (section 6). That is the owner's call for R0 and R1, where
-   a revert undoes the damage. R2 is different: undo can't help, so an R2
-   change lands only on evidence for the candidate tree itself (its head
-   merged onto the trunk commit it lands on), and if trunk moves before the
-   merge, that evidence no longer counts and the checks run again.
+3. **Evidence is about the tree it ran on, and says so.** A result proves the
+   tree it actually ran on, and counts for a landing whose tree is exactly
+   that tree: same tree ID, same check identity and definition, and the
+   attestation of rule 1. The record stays on the revision (or candidate)
+   that produced it, with its provenance untouched; counting it for another
+   landing is a read of that record, never a copy or a rewrite. A different
+   tree gets no reuse. A PR's evidence proves its head on that base, and
+   landing squashes it onto a newer trunk, so a PR's pre-land evidence is
+   not the landed tree's unless the trees are equal. Otherwise the landed
+   tree gets its own: its train's candidate's, when trunk's tree after the
+   landing is the candidate's (section 4.7), and otherwise trunk's CI's,
+   recorded against the landing. A red result there starts an undo or a fix
+   (section 6). That is the owner's call for R0 and R1, where a revert
+   undoes the damage. R2 is different: undo can't help, so an R2 change
+   lands only on evidence for the candidate tree itself (its head merged
+   onto the trunk commit it lands on), and if trunk moves before the merge,
+   that evidence no longer counts and the checks run again. Equal trees
+   never authorize carrying a `review` or `judge` result: whether those
+   carry is a separate rule of its own, not this one.
 
 ### 4.4 Class
 
@@ -226,12 +337,7 @@ per-repo settings, moved into Conary (M5), and grows rules only when a real
 change needs one. It's a JSON file the machine gives Conary (`CONARY_POLICY`,
 `Policy` in [`policy.rs`](../crates/conary-core/src/policy.rs)): path
 regexes that make a change R2, that name its docs and that are never docs,
-what reviewers are never shown (`hidden`, never docs either, matched the way
-their snapshot hides a path: the path, its name without a final newline, or
-a directory holding it, with a trailing slash; where anything is hidden, a
-path new to the tree, added, renamed or copied, isn't docs, since the
-snapshot may pair it with a hidden source the comparison doesn't name), and whether landing goes
-live, for the machine and per repo. A repo's lists only add to the
+and whether landing goes live, for the machine and per repo. A repo's lists only add to the
 machine's, so no repo takes a path off R2. A change whose
 paths can't all be read (GitHub lists 300 files of a comparison and says
 nothing of the rest) is R2.
@@ -304,8 +410,9 @@ Op {
   at:      timestamp
   body:    what happened (`Body` in crates/conary-core/src/op.rs): observe,
            intent, revision, evidence, land, outside, close, reopen; the
-           train's join, leave, candidate, candidate_evidence, verdict and
-           finish (section 4.7); undo (section 5); classify (section 4.4)
+           train's join, leave, candidate, candidate_evidence, verdict,
+           release and finish (section 4.7); undo (section 5); classify
+           (section 4.4); degraded and restored (below)
   sig:     the ledger key's signature over the id
 }
 ```
@@ -316,12 +423,30 @@ op the ledger can't apply is refused before it's written. Nothing in the log
 is ever edited or deleted. A correction is a new op that supersedes the old
 one.
 
+A path that half-worked is recorded too: a `degraded` op names the change,
+its revision, what degraded (`what`: the flow's record of the change's work,
+a worker's answer with the job and the kind of work it answers for, an
+evidence lookup that couldn't tell, with the check it was for, a read of
+GitHub the flow's decision took that failed or stopped short, with which
+read, from a closed set, or a mark on the PR that doesn't parse, with which
+mark, from a closed set) and `why`, a
+line of at most 200 bytes built from the failure's kind, never from text a
+file, a plugin or GitHub put in it. Whatever came through it counts as its
+check's failure, never a pass. The ledger holds a path degraded for a
+revision once: the same op again, while it lasts, is refused. A later
+`restored` op clears it when the same path works again for that revision;
+the `degraded` op stays, and the change keeps every degradation, cleared or
+not (`degradations` in `change_get`). What counts is the change's current
+revision: one degraded on an earlier revision stays as its last op left it.
+[flow.md](flow.md#degraded-paths) says which paths the flow records.
+
 The log is refused whole if any line fails its id, its signature, its
 parent or its schema, the last line included. A last line with no newline is
 kept if it verifies. Only a line whose JSON stops short is a write that never
 finished (its caller was never told it succeeded), so the next writer cuts it.
-A writer whose append fails partway stops until the log is reopened and
-verified again. A log cut short by whole lines still chains, so its head is
+A writer whose append fails partway appends nothing more until it takes the
+lock again or opens the log again. Either way it reads on from the last op
+it holds, keeps a line written whole and cuts one left half written. A log cut short by whole lines still chains, so its head is
 anchored off the box, at `refs/conary/anchor` in a repository the machine
 names. Each move is a commit naming the ledger's key and its newest op.
 
@@ -330,10 +455,19 @@ names. Each move is a commit naming the ledger's key and its newest op.
   ref already there it takes only the key that ref names, so a lost key or
   directory is refused until the key is back, never replaced by a new
   ledger. A writer never makes a key.
-- Each write takes the ledger's lock, then reads the ref, and refuses another
-  key's ref or a log that doesn't hold the ref's op, before it changes a byte
-  of the log. After writing it moves the ref on, fast-forward only, and keeps
-  a copy beside the log.
+- A writer opens by taking the ledger's lock, then reads the ref, and
+  refuses another key's ref or a log that doesn't hold the ref's op, before
+  it changes a byte of the log. Then it lets the lock go. Each write after
+  that takes the lock again, catches up on what other writers appended and
+  appends, without reading the ref; which writes hold the lock across more
+  than one is [flow.md](flow.md#state-and-workers)'s. When it's done
+  writing, it takes the lock again, reads the ref as it stands now and
+  checks it as it did on opening, then moves it on, fast-forward only, and keeps a
+  copy beside the log. A writer that opens once and writes in several
+  turns, letting the lock go between them (`cn sync`, a turn per
+  repository), checks the ref that way each time it takes the lock back
+  for a turn, after catching up and before it appends, and moves it on
+  at the end of each turn.
 - The copy names the ref's commit it was checked against. Every move on the
   ref since that commit, and the commit itself, must name the ledger's key,
   have one parent, go forward and be held by the log, so a ref moved back, by
@@ -379,20 +513,30 @@ so the wait is one run, however many are waiting.
   and its PR is told so, as a conflict is today. So does one whose merge
   leaves the tree as it was: what it does is there already, through trunk
   or a change ahead of it, and landing it would add an empty merge. The
-  steward closes its PR once trunk has what it does.
+  steward closes its PR once trunk has what it does. With nothing merged
+  before it, the `leave` op names the trunk commit it was empty on, and
+  while trunk is still that commit and the hold stands, that says so even
+  when GitHub's own test merge of the PR is stale.
 - **Its evidence.** The gate runs on the candidate's commit: the repo's CI,
   on the train branch's creation, and the steward's proof jobs. Evidence on a
   candidate is about that commit's tree, and counts by its producer's
   attestation like any other (section 9), and only for the commit the train
   recorded: whatever else is pushed to its branch counts for nothing. The
-  gate is red once any check's latest result failed, which takes no
-  attestation. It's green once every check on that commit has passed and the
+  gate is red once any check's latest result failed and has had its
+  second try (Red, below), which takes no attestation. It's green once
+  every check on that commit has passed and the
   ones the repo requires are among them, each required one's latest run a
   success its job attests on a runner started fresh for it
   ([CI attestations](ci-attestation.md)), checked as it's recorded and kept
   in the candidate's evidence. A status carries no
   attestation, so a required check is a job of the repo's CI until remi's
   proof jobs sign theirs, and a train that requires nothing doesn't step.
+  A required CI result that says it skipped checks (its predicate's
+  `skipped`, a check its runner can't build) counts only once each of them
+  is a required check of the same name whose pass on that commit a service
+  on the machine attests ([service attestations](service-attestation.md)):
+  a machine proof of the same commit and tree covers what CI didn't build.
+  Anything it skipped that no such proof covers leaves the gate waiting.
   No check at all is no pass, and a required pass with no attestation that
   holds waits, so a gate that never attests is a stall, never a landing. A
   green whose evidence holds no attestation at all, said before passes
@@ -412,8 +556,8 @@ so the wait is one run, however many are waiting.
   green candidate is dropped, ahead of the ledger each time, and once it has
   landed, before the next head is marked or another candidate built, so a PR
   opened again at a landed head lands only through the train. While a landing
-  is open (its head says so, and its merge may be on trunk unseen), nothing
-  leaves the candidate and nothing drops it: a step settles that first. That
+  is open (its head says so, and its merge may be on trunk, not yet
+  shown), nothing leaves the candidate and nothing drops it: a step settles that first. That
   holds for a candidate stopped mid-landing too (a change of it left, closed
   or has a new head): before another is built, a merge GitHub shows is
   recorded through it, one it doesn't show yet is waited for, and only a merge
@@ -441,15 +585,31 @@ so the wait is one run, however many are waiting.
   landed tree's evidence, as it is without a train. A merge GitHub refuses
   partway puts the changes after it back in the train, and the refused PR's
   train status becomes an error, so nothing else lands it.
-- **Red.** The failed check gets the one second try every failed test gets.
+- **Red.** The failed check gets the one second try every failed test gets,
+  and the train makes it, since a gate that died can't make its own and
+  concludes as a failing test does. What it attests isn't read for this,
+  an [`error`](ci-attestation.md#predicate) included: a gate that died may
+  sign nothing, and a change that breaks its gate has to go red and be
+  split out like any bad one. It asks GitHub to run the failure's workflow
+  run again, all of it (a rerun of the failed jobs alone gives the passes copies
+  their attestations don't name), once that run's first attempt has ended,
+  and waits. The run's attempt is the only record of the try. A failure with
+  no try to have (a status, another App's run, a rerun GitHub refuses) is
+  red as it stands, and so is one past its timeout, as it is to the flow,
+  so a change that hangs the gate is split out like any bad one. A check run
+  that ends with no verdict (cancelled short of its timeout, or stale) and
+  has no try left is never red: its gate waits, a stall, until it's dropped.
   Red again, the candidate splits in two: its older half goes first, as a
   candidate of its own on trunk as it stands, then the rest, so a half
   that's green lands without waiting on the other. A change red on its own
   leaves the train and gets the fix job red CI gets today. One bad change in
-  eight costs up to seven runs, still fewer than the eight it stands for, and
-  `size` is the knob if the ledger shows red candidates costing more. The
+  eight costs up to seven candidates, each red one gated twice, and `size`
+  is the knob if the ledger shows red candidates costing more. The
   change red on its own gets the train's status as a failure, naming the
-  checks, which is how the steward knows to start that job.
+  checks, which is how the steward knows to start that job. If that
+  candidate's gate is green later, by the same rule and on the same commit,
+  a step puts that status to pending and records a `release` op: the change
+  may join again at that head and is gated afresh. The verdict stays red.
 - **R2.** An R2 change rides in a candidate of its own, and lands only while
   trunk is still that candidate's base: on evidence for exactly the tree it
   makes. It joins `alone`, and the changes before it go without it. Right
@@ -484,7 +644,8 @@ landing, or a red candidate it was alone in. One leaving a candidate in
 flight stops the candidate there, and its other changes wait again as they
 were. A change that left red alone, on a conflict, on an empty merge or on
 a refused merge is held: it can't join again at that revision, so it never
-rebuilds the candidate it failed in. A new head lets it go, and for a
+rebuilds the candidate it failed in. A new head lets it go, for one red
+alone a `release` too, and for a
 conflict, an empty merge or a refusal so does trunk moving, or, for a
 conflict or an empty merge, one of the changes it was merged after leaving. A candidate's `verdict` is green, red or dropped:
 dropped is a gate that never finished, the stall watchdog's last word, a
@@ -526,9 +687,9 @@ trunk.
 
 | Call | What it does |
 | --- | --- |
-| `undo <change>` | Opens a PR that reverts one landed change. |
-| `undo --actor <session>` | Reverts every change one agent session landed, newest first, one PR per repo. |
-| `undo --since <time> --repo <repo>` | Reverts everything that landed on one repo's trunk after that time. |
+| `undo <change> --reason <reason>` | Opens a PR that reverts one landed change. |
+| `undo --actor <session> --reason <reason>` | Reverts every change one agent session landed, newest first, one PR per repo. |
+| `undo --since <time> --repo <repo> --reason <reason>` | Reverts everything that landed on one repo's trunk after that time. |
 | `at <time> <query>` | Answers any read-only query as the ledger stood at that time: `log`, `why` and `train show` in `cn`, and every other call of conaryd's. |
 
 A revert that doesn't apply cleanly, because later work built on what it
@@ -581,7 +742,20 @@ ledger itself: the notes hold what's landed now.
 
 The ledger records each undo as an op on its revert change: the changes it
 reverts, all landed in its repo, and what asked for it (a change, a session
-or a time, which each of them has to match). Once the undo lands, what it
+or a time, which each of them has to match), with the reason it was requested.
+Every new request through the library or CLI requires a nonblank reason,
+checked before any ledger refresh or GitHub work. The PR body opens with
+that reason, verbatim; for a red run it names the run's URL, failing checks
+and first error line. Reasons are operational explanations, never secrets,
+personal data or prompt text: they enter permanent history. The marker
+keeps the reason too, so ingestion or recovery of an opened but unrecorded
+PR records its original reason, even if a retry supplies another. An
+existing undo's reason is immutable. Historical signed undo operations
+without a reason still replay unchanged; new operations require one.
+An already recorded undo still follows the undo landing rules when its
+historical PR marker lacks a reason. An unrecorded marker without a
+nonblank reason is refused, so it cannot be ingested as an ordinary PR.
+Once the undo lands, what it
 reverts is `reverted`; undone in turn, they're landed again. A change takes
 one undo at a time, and once one has landed it's the only one: the change
 goes back and forth by undoing that undo, and undoing that, so no undo can
@@ -621,6 +795,33 @@ The executable [plugin contract](plugins.md) owns the interface for work
 requested by a flow step. The [explicit pass runner](flow.md) connects reads, decisions, GitHub effects
 and asynchronous plugin work; deployment and event-driven passes remain later slices.
 
+### 6.1 Execution choices and independent judging
+
+Conary's execution policy comes from its caller's declared configuration.
+No review, fix, judge or job engine, model or effort is pinned in conaryd or
+the runner. A deployment can change these choices for subsequent requests
+without changing code. The [flow configuration](flow.md) is the interface;
+burrow-managed deployments generate it from their shared settings source,
+while standalone deployments supply it directly. Plugin offers constrain
+valid choices, not machine policy. Conary owns no second settings authority.
+
+"The author never grades its own head" means independent sessions, on any
+engine. Every initial judge starts fresh with no resumed, forked or shared
+writer/reviewer context. A judge may continue its own validated session for
+the same task and job while that session has exclusively judged that task.
+Intervening nonjudge context, including failed or concurrent work, cannot
+preserve judging eligibility. Its verdict retains the actual engine and
+model, separately from the requested choices. The
+[plugin contract](plugins.md#independence-and-execution-failures) owns the
+request boundary, including the trusted plugin's duty to honor fresh context;
+[producer receipts](flow.md#producer-evidence) bind execution provenance into
+authenticated judgments without treating plugin proposals as attestations.
+
+The corresponding [lesson entries](lessons.toml), `no-pinned-engines` and
+`fresh-judge`, are built for the configuration, runner and provenance
+interfaces and their tests. Deploying real engine plugins is still M6's
+[slice 5c](m6.md), not a claim made by these interface tests.
+
 ## 7. Interfaces
 
 | Interface | Used by | Notes |
@@ -646,7 +847,7 @@ change.get(id | repo#pr) / change.list(repo?, session?, status?, class?, since?)
 evidence.add / evidence.query(change | revision)
 train.join(change) / train.step(repo)   // M3: the train (section 4.7)
 land(change)                      // M6; until then the steward lands and reports
-undo(change | actor | since) / at(time, query)
+undo(change | actor | since, reason) / at(time, query)
 log.query(repo?, path?, symbol?, session?, intent~text?, since?, class?)
 why(repo, path, line | symbol)    // the change, its intent, session and evidence
 events.subscribe(land | outside | red | undo | owner)
@@ -710,15 +911,19 @@ Targets on remi, warm cache, a year of ledger across every repo:
     can say only what that run's check run concluded. Root on a self-hosted
     runner's machine can still change what a job does, as it can read the
     steward's key (below).
-  - Jobs on remi (reviewers, proof and judge jobs, negative runs): a signature
+  - Jobs on remi (proof and judge jobs, negative runs): a signature
     by that runner service's own key, which no authoring session or sandbox
     can read, over the result, the revision and the run's log hash.
+    [Service attestations](service-attestation.md) defines the signed format
+    and the machine's trusted public-key configuration.
   - Anything without a valid attestation doesn't count, whatever its source:
     a missing or unverifiable one fails closed.
 - The steward acts on GitHub as its own GitHub App, never as the owner's
   login ([#14](https://github.com/FieldmouseWorks/Conary/issues/14)).
-  `review-settled` and the reviewers' reviews count only from the App's bot
-  (`cn --reviewer SLUG[bot]`), and the repos' rules require that status, and
+  `review-settled` counts only from the App's bot
+  (`cn --reviewer SLUG[bot]`), the reviewer's word only from its own
+  (Codex's GitHub connector, `cn --review-author`), and the repos' rules
+  require that status, and
   in a train repo `conary/train`, from the App's integration ID, so a session holding the owner's token can't post
   one that counts, to Conary or to GitHub. The App's key reaches only the
   steward's units on the machine; a Claude running there as the machine
@@ -841,6 +1046,6 @@ it pointed at the finish line:
 | M3 | The train (section 4.7) on remi, with the evidence verifier it counts candidates by and the negative check for new tests | For a day of remi's PRs: fewer gate runs than PRs landed, every candidate's last landing on its evidence, and trunk's own CI green after every candidate landed | Live on remi. The first criterion isn't met: remi's PRs arrive too slowly to batch ([#48](https://github.com/FieldmouseWorks/Conary/issues/48)). Signed proof verdicts ([#218](https://github.com/FieldmouseWorks/Conary/issues/218)) let PSIV's queue ride a train |
 | M4 | `undo` by change, session and time, through the landing flow, and `at` | A deliberately bad session's changes in two repos are reverted by `undo --actor` and land with no person involved | Done ([#173](https://github.com/FieldmouseWorks/Conary/issues/173)) |
 | M5 | Class policy in Conary, from the paths and the kind of edit (section 4.4); the steward reads each change's class and the evidence it needs from conaryd | `oneWay` is gone from burrow's autoland config, and a docs-only change lands on green CI with no review round | Done ([#226](https://github.com/FieldmouseWorks/Conary/issues/226)): `cn class` records each revision's class, raised by its PR's labels and held to what the steward settled; a join rides alone by it. #236 landed docs-only on green CI with no review round, and `oneWay` is gone from burrow |
-| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job | |
-| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone; the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in | Event-source tie cut (#278); repository cutover and setup path remain |
+| M6 | conaryd runs the landing flow. Its first slice is a simulated GitHub, in memory, that the train and the flow are tested against, with delays, errors, races and stale reads injected and recorded GitHub responses as its fixtures, so a change to either is proved without remi. Then the flow itself, R0 landing before review, a red trunk bisected to the change that broke it and undone, and batches (item 9): the work in flight grouped by what it touches, proposed, and gated once | `steward.py` is deleted; a week of PRs across every repo lands through conaryd, R0 ones with no wait on a reviewer, with fewer gate runs than PRs landed, the PRs' own runs counted; a deliberately broken landing is found and undone with no Claude job; and `cn lessons exit M6` passes: no open lesson applies to what M6 ships ([Properties](#properties)) | Slices 1 to 4, 5a and 5b done, and 5c under way; 5a's comparison runs in shadow on remi, acting on nothing. What's left, who delivers it, what it waits on and the lessons each task is held to: [M6 delivery plan](m6.md) |
+| M7 | Setup by an agent: one path from a clone to a working ledger, with the steward or without one, that an agent follows for someone, turning each spender on explicitly and writing configuration against Conary's settings schema ([M7's setup path](#m7s-setup-path)); the box's specifics (Nix, systemd, remi) as configuration on top. The three ties to burrow above, cut: attested evidence and the negative check from a workflow any repository's CI can call, its signer configured rather than fixed, and a PR-event source of Conary's own | A fresh agent session, given this repository, a Linux machine with no Nix and no burrow, and a token, sets up a ledger, records a repo's PRs, lands one on that repo's own attested CI and answers `why` and `undo`, with no person stepping in; and `cn lessons exit M7` passes ([Properties](#properties)) | Event-source tie cut (#278); repository cutover and setup path remain |
 | M8 | A written decision on each parked idea, from ledger data | The decisions, and with them the finish line | |

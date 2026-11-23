@@ -14,6 +14,7 @@ pub mod events;
 pub mod flow;
 pub mod ingest;
 pub mod notes;
+pub mod reuse;
 #[cfg(test)]
 pub(crate) mod sim;
 pub mod tokens;
@@ -22,5 +23,5 @@ pub mod undo;
 
 pub use api::{Api, ApiError, Source};
 pub use etags::Etags;
-pub use ingest::{Config, IngestError, Ingested};
+pub use ingest::{Config, IngestError, Ingested, Synced};
 pub use tokens::Tokens;

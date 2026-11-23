@@ -2,9 +2,13 @@
 //! ref on GitHub naming the ledger's key and the newest op its writer
 //! published. A hash chain can't show whole ops cut from its end, or a log
 //! removed and started over, so the writer checks the log against this ref
-//! before it writes anything and moves the ref on after, all under the
-//! ledger's lock. Each move is a commit on the one before it, so the ref's
-//! history is the anchor's.
+//! before it writes anything, and checks it again as the ref stands when it
+//! moves the ref on after, each under the ledger's lock. Between those it
+//! holds the lock only while it writes, so a writer's reads of GitHub never
+//! hold up another writer. What either check found the ref at is kept beside
+//! the log before that lock is let go, so every writer's next check starts
+//! there. Each move is a commit on the one before it, so the ref's history is
+//! the anchor's.
 //!
 //! The ref is the ledger's identity: one ledger per repository, set up once
 //! by [`init`]. A writer never makes a key, so losing the ledger's directory
@@ -15,7 +19,8 @@ use std::path::Path;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 use conary_core::Store;
-use conary_core::log::{self, Anchor, Lock, LogError};
+use conary_core::log::{self, Anchor, Checked, Lock, LogError};
+use conary_core::op::Op;
 use conary_core::store::StoreError;
 
 use crate::api::ApiError;
@@ -171,9 +176,9 @@ fn same_ledger(repo: &str, remote: &Remote, key: &VerifyingKey) -> Result<(), An
 
 /// The checkpoints the log must hold besides `tip`'s: every move on the ref
 /// since `checked`, the commit the copy beside the log says the writer last
-/// checked it against (it keeps the copy only once the log was checked and
-/// the ref moved), or back to the move that set the ledger up when there's
-/// none. Every move walked, `checked`'s included, must name this ledger's
+/// checked it against (it keeps that only once the log was checked: `keep`),
+/// or back to the move that set the ledger up when there's none. Every move
+/// walked, `checked`'s included, must name this ledger's
 /// key, have one parent, and come before the one after it, so a ref moved
 /// back, by however many moves and whatever ops they name, or a longer
 /// history in place of one the log acknowledged, is refused; checking each
@@ -210,7 +215,7 @@ fn checkpoints(
         if newer.is_some_and(|n| seq >= n) {
             return Err(lost(format!("went back at commit {}", at.commit)));
         }
-        // The store checks the tip's when it opens.
+        // The tip's is its caller's to check.
         if newer.is_some() {
             held.extend(r.anchor);
         }
@@ -232,19 +237,29 @@ fn checkpoints(
     }
 }
 
-/// Reads the log at `dir`, checked against the ref's `tip` and the
-/// `checkpoints` before it.
-fn read_holding(
-    dir: &Path,
-    key: &VerifyingKey,
-    tip: Option<Anchor>,
-    checkpoints: &[Anchor],
-) -> Result<(), AnchorError> {
-    let ops = log::read(dir, key, tip)?;
+/// Refuses `ops`, a whole log, unless it holds every one of the ref's
+/// `checkpoints`.
+fn check_held(ops: &[Op], checkpoints: &[Anchor]) -> Result<(), AnchorError> {
     for a in checkpoints {
-        a.check(&ops)?;
+        a.check(ops)?;
     }
     Ok(())
+}
+
+/// Keeps `tip` as the move the ref was last checked at, once the log is found
+/// to hold it and before `lock`, which the ref was read under, is let go: a
+/// ref put back behind it is then refused to every writer. A copy that already
+/// names it is left alone, since readers watch the file. One with no commit
+/// can name a newer op than a ref put back, so the newer op stays.
+fn keep(lock: &Lock, checked: &Checked, tip: &Kept, remote: &Remote) -> Result<(), LogError> {
+    if checked.at.as_deref() == Some(tip.commit.as_str()) {
+        return Ok(());
+    }
+    let newest = [checked.anchor, remote.anchor]
+        .into_iter()
+        .flatten()
+        .max_by_key(|a| a.seq);
+    log::save_anchor(lock, newest, &tip.commit)
 }
 
 /// Sets up the ledger at `dir`, its key at `key_path`, anchored in `repo`,
@@ -274,7 +289,7 @@ pub fn init(
             // Setting up again is how a ledger is recovered, so it takes
             // nothing from the box but the log and checks every move.
             let held = checkpoints(anchors, repo, &tip, &remote, None)?;
-            read_holding(dir, &remote.key, remote.anchor, &held)?;
+            check_held(&log::read(dir, &remote.key, remote.anchor)?, &held)?;
             (remote, tip.commit)
         }
         None => {
@@ -295,12 +310,14 @@ pub fn init(
 /// The ledger, open for writing, once the anchor on GitHub is found to be
 /// its own, every move on it since the copy beside the log goes forward, and
 /// the log holds each of them. The anchor is read under the ledger's lock and
-/// the log isn't touched until it's checked against it.
+/// the log isn't touched until it's checked against it. A ref found past the
+/// copy is kept there. Then the lock is let go: the store takes it for each
+/// write, [`Anchored::hold`] for a batch of them, which checks the ref again
+/// first, and [`Anchored::publish`] for the move.
 pub struct Anchored {
     pub store: Store,
     repo: String,
-    kept: Kept,
-    remote: Remote,
+    key: VerifyingKey,
 }
 
 pub fn open(
@@ -314,33 +331,94 @@ pub fn open(
     same_ledger(repo, &remote, &key.verifying_key())?;
     let checked = log::load_checked(dir)?;
     let held = checkpoints(anchors, repo, &kept, &remote, checked.at.as_deref())?;
-    // The store checks the tip's when it opens.
-    if !held.is_empty() {
-        read_holding(dir, &remote.key, None, &held)?;
+    // The store lets the lock go as it opens, so a tip the copy doesn't name
+    // is checked and kept first. One it names, the store checks.
+    if checked.at.as_deref() != Some(kept.commit.as_str()) {
+        let ops = log::read_marked(dir, &remote.key, None)?;
+        check_held(&ops, &held)?;
+        if let Some(a) = remote.anchor {
+            a.check(&ops).map_err(StoreError::Log)?;
+        }
+        keep(&lock, &checked, &kept, &remote)?;
     }
     let store = Store::open(lock, key, remote.anchor)?;
     Ok(Anchored {
         store,
         repo: repo.to_owned(),
-        kept,
-        remote,
+        key: remote.key,
     })
 }
 
 impl Anchored {
+    /// Takes the ledger's lock again, for a writer that let it go after
+    /// [`open`] or its last hold, and holds it until [`Anchored::release`]:
+    /// it catches up on what other writers appended since, then reads the
+    /// ref as it stands and checks it as [`Anchored::publish`] does, before
+    /// anything is written under it. A check that fails lets the lock go.
+    pub fn hold(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
+        let Self { store, repo, key } = self;
+        store.hold()?;
+        let checked = store
+            .writer()
+            .map_err(AnchorError::from)
+            .and_then(|writer| check(&writer, anchors, repo, key).map(drop));
+        if checked.is_err() {
+            store.release();
+        }
+        checked
+    }
+
+    /// Lets go the lock [`Anchored::hold`] took.
+    pub fn release(&mut self) {
+        self.store.release();
+    }
+
     /// Moves the anchor on GitHub to the log's head, and keeps a copy beside
-    /// the log for readers. Nothing to move when nothing was written.
-    pub fn publish(&self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
-        let head = self.store.head();
-        let at = if head == self.remote.anchor {
-            self.kept.commit.clone()
+    /// the log for readers, all under the ledger's lock. Other writers may
+    /// have written and moved the ref since this one checked it, so the ref
+    /// is read again as it stands: its tip and every move since the newest
+    /// check any writer kept beside the log must name this ledger, go
+    /// forward and be held by the log. That tip is kept as checked, and the
+    /// move is made on it, only if it's still there. Nothing to move when the
+    /// ref already names the log's head.
+    pub fn publish(&mut self, anchors: &dyn Anchors) -> Result<(), AnchorError> {
+        let Self { store, repo, key } = self;
+        let writer = store.writer()?;
+        let (tip, remote) = check(&writer, anchors, repo, key)?;
+        let head = writer.head();
+        let at = if head == remote.anchor {
+            tip.commit
         } else {
-            let msg = message(&self.remote.key, head);
-            anchors.set(&self.repo, REF, Some(&self.kept.commit), &msg)?
+            let message = message(key, head);
+            anchors.set(repo, REF, Some(&tip.commit), &message)?
         };
-        log::save_anchor(self.store.lock(), head, &at)?;
+        log::save_anchor(writer.lock(), head, &at)?;
         Ok(())
     }
+}
+
+/// Reads the ref as it stands, under `writer`'s lock, and refuses it unless
+/// its tip and every move since the newest check any writer kept beside the
+/// log name this ledger, go forward and are held by the log. Then keeps the
+/// tip as checked, and returns it.
+fn check(
+    writer: &conary_core::store::Writer<'_>,
+    anchors: &dyn Anchors,
+    repo: &str,
+    key: &VerifyingKey,
+) -> Result<(Kept, Remote), AnchorError> {
+    let checked = log::load_checked(writer.lock().dir())?;
+    let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
+    same_ledger(repo, &remote, key)?;
+    for a in checkpoints(anchors, repo, &tip, &remote, checked.at.as_deref())?
+        .into_iter()
+        .chain(remote.anchor)
+    {
+        writer.check(a)?;
+    }
+    // Before the move, which can fail.
+    keep(writer.lock(), &checked, &tip, &remote)?;
+    Ok((tip, remote))
 }
 
 /// Checks the log at `dir` against the anchor on GitHub: the remote check,
@@ -358,7 +436,7 @@ pub fn verify(
     let (tip, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, key)?;
     let held = checkpoints(anchors, repo, &tip, &remote, None)?;
-    read_holding(dir, key, remote.anchor, &held)?;
+    check_held(&log::read(dir, key, remote.anchor)?, &held)?;
     Ok(remote.anchor)
 }
 

@@ -11,9 +11,11 @@ use crate::id::{CandidateId, ChangeId, CommitId, OpId, RevisionId};
 use crate::op::{Actor, Attest, Authority, Body, CheckKind, Op, Outcome, Repo};
 use crate::policy::Class;
 
+mod degraded;
 mod train;
 mod undo;
 
+pub use degraded::Degradation;
 pub use train::{Candidate, CandidateEvidence, Held, Plan, State, Train};
 pub use undo::Undo;
 
@@ -110,6 +112,10 @@ pub struct Change {
     /// What the class policy said of its revisions, oldest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub classes: Vec<Classed>,
+    /// Every path that half-worked for one of its revisions, oldest first,
+    /// cleared or not (design 4.6).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub degradations: Vec<Degradation>,
     pub landing: Option<Landing>,
     /// What it reverts, when it's an undo.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +128,9 @@ pub struct Change {
     pub reverted_by: Option<ChangeId>,
     #[serde(skip)]
     closed: bool,
+    /// The last op recorded about it: [`Change::last`].
+    #[serde(skip)]
+    last: Option<OpId>,
 }
 
 impl Change {
@@ -136,7 +145,7 @@ impl Change {
 
     /// The change's pull request on GitHub.
     pub fn url(&self) -> String {
-        format!("https://github.com/{}/pull/{}", self.repo, self.pr)
+        self.repo.pull_url(self.pr)
     }
 
     pub fn revision(&self, id: RevisionId) -> Option<&Revision> {
@@ -146,6 +155,14 @@ impl Change {
     /// What the class policy last said of a revision, if it's been asked.
     pub fn class_of(&self, revision: RevisionId) -> Option<&Classed> {
         self.classes.iter().rev().find(|c| c.revision == revision)
+    }
+
+    /// The last op recorded about it. Every op names its parent, so no two
+    /// are the same, and while a change's last op is the same no op about
+    /// it has been recorded since, even one that set it back as it was:
+    /// a title edited and then put back, say.
+    pub fn last(&self) -> Option<OpId> {
+        self.last
     }
 
     /// Every label that has raised the change, at any revision, sorted. A
@@ -195,10 +212,18 @@ pub enum Invalid {
     NotGating,
     /// Not every change in the candidate has landed through it.
     NotLanded,
+    /// That candidate isn't holding a change out as red alone.
+    NotHolding,
     /// The change left its train and can't join again as it is.
     Held(Held),
     /// An undo that reverts nothing.
     NothingToUndo,
+    /// A degradation's `why` is blank or longer than its bound.
+    DegradedWhy,
+    /// A restore of a path that isn't degraded for that revision.
+    NotDegraded,
+    /// A new undo lacks its nonblank operational reason.
+    UndoReason,
     /// The change is an undo already.
     AlreadyUndo,
     /// An undo can't revert itself, or a change twice.
@@ -247,8 +272,18 @@ impl std::fmt::Display for Invalid {
             Self::NotLanded => {
                 f.write_str("not every change in that candidate has landed through it")
             }
+            Self::NotHolding => {
+                f.write_str("that candidate isn't holding a change out as red alone")
+            }
             Self::Held(why) => write!(f, "the change can't join its train again: {why}"),
             Self::NothingToUndo => f.write_str("the undo reverts nothing"),
+            Self::DegradedWhy => write!(
+                f,
+                "a degradation needs a nonblank why of at most {} bytes",
+                crate::op::DEGRADED_WHY
+            ),
+            Self::NotDegraded => f.write_str("that path isn't degraded for that revision"),
+            Self::UndoReason => f.write_str("an undo requires a nonblank reason"),
             Self::AlreadyUndo => f.write_str("the change is an undo already"),
             Self::UndoRepeats(id) => write!(f, "the undo names {id} twice, or itself"),
             Self::OtherRepo(id) => write!(f, "change {id} is in another repo than its undo"),
@@ -340,6 +375,7 @@ impl Ledger {
     pub fn admit(&self, body: &Body) -> Result<(), Invalid> {
         self.check(body)?;
         match body {
+            Body::Undo { reason: None, .. } => Err(Invalid::UndoReason),
             Body::Join {
                 change,
                 revision,
@@ -494,20 +530,40 @@ impl Ledger {
                 attest.as_ref(),
             )?,
             Body::Verdict { candidate, verdict } => self.check_verdict(*candidate, *verdict)?,
+            Body::Release { candidate } => self.check_release(*candidate)?,
             Body::Finish { candidate, .. } => self.check_finish(*candidate)?,
             Body::Undo {
                 change,
                 reverts,
                 asked,
-            } => self.check_undo(*change, reverts, asked)?,
+                reason,
+            } => self.check_undo(*change, reverts, asked, reason.as_deref())?,
+            Body::Degraded {
+                change,
+                revision,
+                what,
+                why,
+            } => self.check_degraded(*change, *revision, what, why)?,
+            Body::Restored {
+                change,
+                revision,
+                what,
+            } => self.check_restored(*change, *revision, what)?,
         }
         Ok(())
     }
 
     /// Applies an op [`Ledger::check`] has accepted.
     pub(crate) fn apply(&mut self, op: &Op) {
-        let at = op.op.at;
         self.head = Some(op.id);
+        self.apply_body(op);
+        if let Some(c) = op.op.body.change().and_then(|id| self.changes.get_mut(&id)) {
+            c.last = Some(op.id);
+        }
+    }
+
+    fn apply_body(&mut self, op: &Op) {
+        let at = op.op.at;
         if self.apply_train(&op.op.body, at) || self.apply_undo(&op.op.body, at) {
             return;
         }
@@ -549,11 +605,13 @@ impl Ledger {
                             current: None,
                             evidence: Vec::new(),
                             classes: Vec::new(),
+                            degradations: Vec::new(),
                             landing: None,
                             undo: None,
                             undone_by: Vec::new(),
                             reverted_by: None,
                             closed: false,
+                            last: None,
                         },
                     );
                 }
@@ -654,6 +712,13 @@ impl Ledger {
             }
             Body::Close { .. } => c.closed = true,
             Body::Reopen { .. } => c.closed = false,
+            Body::Degraded {
+                revision,
+                what,
+                why,
+                ..
+            } => Self::apply_degraded(c, *revision, what, why, at),
+            Body::Restored { revision, what, .. } => Self::apply_restored(c, *revision, what, at),
             Body::Observe { .. } | Body::Outside { .. } => {
                 unreachable!("check refuses observing a change twice; outside names none")
             }
@@ -662,6 +727,7 @@ impl Ledger {
             | Body::Candidate { .. }
             | Body::CandidateEvidence { .. }
             | Body::Verdict { .. }
+            | Body::Release { .. }
             | Body::Finish { .. } => unreachable!("apply_train applies the train's ops"),
             Body::Undo { .. } => unreachable!("apply_undo applies undo"),
         }

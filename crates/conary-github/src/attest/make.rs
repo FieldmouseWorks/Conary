@@ -13,12 +13,13 @@ use ureq::tls::{RootCerts, TlsConfig};
 use super::{AUDIENCE, hex, is_commit};
 use crate::api::{ApiError, passing_status, read, unreachable};
 
-/// A gate's result: `pass` when it succeeded, otherwise `fail`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// A gate's result, as `docs/ci-attestation.md`'s "Predicate" defines them.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gate {
     Pass,
     Fail,
+    /// The gate broke, and why, on one line: the predicate's `error`.
+    Error(String),
 }
 
 /// What a negative run's new tests did on the old code
@@ -37,14 +38,40 @@ pub enum Negative {
     None,
 }
 
-impl std::str::FromStr for Gate {
-    type Err = String;
+impl Gate {
+    /// The result a job names `word`, with why it broke when that's `error`.
+    pub fn named(word: &str, error: Option<&str>) -> Result<Self, String> {
+        match (word, error) {
+            ("pass", None) => Ok(Self::Pass),
+            ("fail", None) => Ok(Self::Fail),
+            ("error", Some(why)) => Ok(Self::Error(why.to_owned())),
+            ("error", None) => Err("a gate that broke says why".into()),
+            ("pass" | "fail", Some(_)) => {
+                Err(format!("only an error says why it broke, not a {word}"))
+            }
+            _ => Err(format!(
+                "a gate's result is pass, fail or error, not {word:?}"
+            )),
+        }
+    }
 
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "pass" => Ok(Self::Pass),
-            "fail" => Ok(Self::Fail),
-            _ => Err(format!("a gate's result is pass or fail, not {s:?}")),
+    /// Its word, the predicate's `result`.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Error(_) => "error",
+        }
+    }
+
+    /// Why it broke, if it did. Refused unless that's one line of something.
+    fn error(&self) -> Result<Option<&str>, String> {
+        match self {
+            Self::Pass | Self::Fail => Ok(None),
+            Self::Error(why) if why.trim().is_empty() || why.contains(['\n', '\r']) => {
+                Err(format!("why a gate broke is one line, not {why:?}"))
+            }
+            Self::Error(why) => Ok(Some(why)),
         }
     }
 }
@@ -137,11 +164,13 @@ struct Revision<'a> {
 
 #[derive(Serialize)]
 struct GatePredicate<'a> {
-    result: Gate,
+    result: &'static str,
     revision: Option<Revision<'a>>,
     tree: &'a str,
     skipped: &'a [String],
     log: &'a Log,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -187,8 +216,9 @@ pub const NEGATIVE_TYPE: &str =
     "https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation.md#negative-v1";
 
 /// The claim's statement. Refused when a commit or tree isn't a lowercase
-/// object id, or a negative's tree doesn't match its result: `none` has no
-/// tree and nothing in its lists, and every other result has a tree.
+/// object id, why a gate broke isn't one line, or a negative's tree doesn't
+/// match its result: `none` has no tree and nothing in its lists, and every
+/// other result has a tree.
 pub fn statement(claim: &Claim) -> Result<Statement, String> {
     let ids = |ids: &[&str]| {
         ids.iter().find(|id| !is_commit(id)).map_or(Ok(()), |id| {
@@ -205,11 +235,12 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
         } => {
             ids(&[commit, tree])?;
             let predicate = GatePredicate {
-                result: *result,
+                result: result.word(),
                 revision: None,
                 tree,
                 skipped,
                 log,
+                error: result.error()?,
             };
             (
                 "conary-commit",
@@ -231,11 +262,12 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
                 return Err(format!("{nonce:?} isn't a dispatch nonce"));
             }
             let predicate = GatePredicate {
-                result: *result,
+                result: result.word(),
                 revision: None,
                 tree,
                 skipped,
                 log,
+                error: result.error()?,
             };
             (
                 "conary-deferred",
@@ -254,11 +286,12 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
         } => {
             ids(&[base, head, tree])?;
             let predicate = GatePredicate {
-                result: *result,
+                result: result.word(),
                 revision: Some(Revision { base, head }),
                 tree,
                 skipped,
                 log,
+                error: result.error()?,
             };
             (
                 "conary-revision",

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::{AttestCommand, GateArgs, Out};
 use crate::{Cli, Result};
-use conary_github::attest::ci;
+use conary_github::attest::ci::{self, removal};
 
 #[derive(Args)]
 pub struct RevisionArgs {
@@ -67,8 +67,51 @@ pub fn prepare(args: &RevisionArgs) -> Result<()> {
     let plan = ci::plan(&args.repo, &args.base, &args.head)?;
     println!(
         "{}",
-        json!({"base": plan.base, "tree": plan.tree, "tests": plan.tests})
+        json!({"base": plan.base, "tree": plan.tree, "tests": plan.tests, "judging": plan.judging})
     );
+    Ok(())
+}
+
+#[derive(Args)]
+pub struct JudgeArgs {
+    /// What `prepare-negative` printed.
+    #[arg(long)]
+    plan: PathBuf,
+    /// Runs the negative command on the tree it's given, exiting 0 where
+    /// it passed and 1 where it failed; anything else attests nothing.
+    #[arg(long)]
+    run: PathBuf,
+}
+
+#[derive(serde::Deserialize)]
+struct Prepared {
+    tree: String,
+    judging: Option<removal::Judging>,
+}
+
+/// Run the negative command on the negative tree and, where a failure there
+/// can be the tree's own, on the trees that tell. Prints `pass` or `fail`;
+/// a failure the tests can't be told to have made attests nothing.
+pub fn judge(args: &JudgeArgs) -> Result<()> {
+    let plan: Prepared = serde_json::from_slice(&std::fs::read(&args.plan)?)?;
+    let outcome = removal::judge(&plan.tree, plan.judging.as_ref(), |tree| {
+        eprintln!("running the negative command on tree {tree}");
+        // Its output is never this command's, which is the result.
+        let status = std::process::Command::new(&args.run)
+            .arg(tree)
+            .stdout(std::io::stderr())
+            .status()?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(format!("the negative command's run broke on tree {tree}: {status}").into()),
+        }
+    })?;
+    match outcome {
+        removal::Outcome::Pass => println!("pass"),
+        removal::Outcome::Fail => println!("fail"),
+        removal::Outcome::Unsure(why) => return Err(format!("can't tell: {why}").into()),
+    }
     Ok(())
 }
 
@@ -127,7 +170,8 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
                 base: plan.base,
                 head: head.clone(),
                 gate: GateArgs {
-                    result,
+                    result: result.word().to_owned(),
+                    error: None,
                     tree,
                     skipped: vec![],
                 },
@@ -138,7 +182,8 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
         AttestCommand::Commit {
             commit: args.commit.clone(),
             gate: GateArgs {
-                result,
+                result: result.word().to_owned(),
+                error: None,
                 tree,
                 skipped: vec![],
             },

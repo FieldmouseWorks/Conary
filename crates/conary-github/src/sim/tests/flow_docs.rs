@@ -61,7 +61,7 @@ fn docs_waiver_rejects_gate_edits_renames_cut_files_and_another_app() {
         }
         let f = s.read(&[r], &["proof"]);
         assert_eq!(f.proof, Proof::Needed, "case {case}");
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove, "case {case}");
+        assert!(at_proof(&next(&f, &s.memory, 4000).0), "case {case}");
     }
     let s = Scenario::new();
     s.hub.fail(Call::Files);
@@ -71,8 +71,8 @@ fn docs_waiver_rejects_gate_edits_renames_cut_files_and_another_app() {
             &s.hub,
             &REMI.parse().unwrap(),
             3,
-            &conary_core::Policy::parse(b"{}").unwrap(),
-            Settings::default(),
+            &docs_policy(),
+            crate::sim::settings(),
             &["owner".into()]
         )
         .is_err()
@@ -89,13 +89,19 @@ fn docs_runs_for_another_fork_or_base_never_prove_this_pr() {
         let fork = if missing { TRUNK.to_owned() } else { head(99) };
         let f = s.read(&[Run::docs(1, &fork, "success")], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
+        // A fork point that doesn't read is a degraded read.
+        let fork = Degraded::Read {
+            read: Reading::Fork,
+        };
+        assert_eq!(f.reads.met.iter().any(|d| d.what == fork), missing);
+        assert_eq!(f.reads.answered.contains(&fork), !missing);
     }
     for verdict in ["success", "failure"] {
         let s = Scenario::new();
         s.hub.set_branch(REMI, "next", TRUNK);
         s.hub.retarget(REMI, 3, "next");
         s.hub.refresh_flow(REMI, 3);
-        s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+        s.hub.flow_review(REMI, 3, Verdict::Clean, 600);
         let f = s.read(&[Run::docs(1, TRUNK, verdict)], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
         assert!(f.checks.iter().all(|c| c.state != Ci::Red));
@@ -107,7 +113,7 @@ fn on_base(base: &str) -> Scenario {
     s.hub.set_branch(REMI, base, TRUNK);
     s.hub.retarget(REMI, 3, base);
     s.hub.refresh_flow(REMI, 3);
-    s.hub.flow_review(REMI, 3, "reviewer", Verdict::Clean, 600);
+    s.hub.flow_review(REMI, 3, Verdict::Clean, 600);
     s
 }
 fn twin(r: Run) -> Run {
@@ -196,7 +202,7 @@ fn fresh_retarget_runs_replace_only_the_same_workflows_stale_base() {
         let s = on_base(base);
         let f = s.read(&runs, &["proof"]);
         assert_eq!(
-            next(&f, &s.memory, 4000).0.step == Step::Prove,
+            at_proof(&next(&f, &s.memory, 4000).0),
             ready,
             "{base} {f:?}"
         );
@@ -217,18 +223,21 @@ fn a_retargets_own_docs_or_whole_gate_decides_proofs_and_red() {
         Run::whole(2, "next", "success").going(),
     ] {
         let s = on_base("next");
+        s.hub.touch(&head(3), &["docs/guide.md"]);
         let f = s.read(&[Run::docs(1, TRUNK, "success"), extra], &["proof"]);
         assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
     }
     for old in ["success", "failure"] {
         let s = on_base("next");
+        s.hub.touch(&head(3), &["docs/guide.md"]);
         let f = s.read(
             &[Run::docs(1, TRUNK, old), Run::whole(2, "next", "success")],
             &["proof"],
         );
-        assert_eq!(next(&f, &s.memory, 4000).0.step, Step::Prove);
+        assert!(at_proof(&next(&f, &s.memory, 4000).0));
     }
     let s = on_base("next");
+    s.hub.touch(&head(3), &["docs/guide.md"]);
     let f = s.read(
         &[
             Run::docs(1, TRUNK, "success"),

@@ -10,15 +10,16 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use conary_core::ledger::{Change, Invalid, Ledger, Status};
+use conary_core::ledger::{Change, Invalid, Status};
 use conary_core::op::{Actor, ActorKind, Authority, Body, CheckKind, Outcome, Repo};
 use conary_core::store::StoreError;
 use conary_core::{ChangeId, CommitId, RevisionId, Store};
 
 use crate::api::{
-    ApiError, CheckRun, Commit, Event, PullRequest, Pulls, Review, Source, Status as CommitStatus,
+    ApiError, CheckRun, Comment, Commit, Event, PullRequest, Pulls, Review, Source,
+    Status as CommitStatus,
 };
-use crate::bases::{BasesError, MergeBases};
+use crate::bases::BasesError;
 use crate::undo::Marker as Undo;
 
 /// What ingest trusts, from the machine's configuration. Both are needed:
@@ -26,13 +27,20 @@ use crate::undo::Marker as Undo;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// The steward's logins, as REST spells them: its GitHub App's bot,
-    /// `SLUG[bot]`, which no user's login can be. Their review markers are
-    /// recorded as reviews, and only their own statuses are its word.
-    /// Anyone else's marker is text in a comment.
+    /// `SLUG[bot]`, which no user's login can be. The review markers it put
+    /// on the reviews it posted, before the reviewer posted its own, are
+    /// recorded as reviews, and only its own statuses are its word. Anyone
+    /// else's marker is text in a comment.
     pub reviewers: Vec<String>,
+    /// The reviewer's logins: Codex's GitHub connector's bot. What they say
+    /// of a head is recorded as a review, never attested (DESIGN.md 4.3).
+    /// None records no reviewer's word.
+    pub review_authors: Vec<String>,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a
-    /// landing only on a head it settled.
+    /// landing only on a head it settled. The train's own status is neither,
+    /// whether it's listed or not: [`Config::settles`] and
+    /// [`Config::is_check`] each leave it out.
     pub own_contexts: Vec<String>,
 }
 
@@ -43,11 +51,24 @@ impl Config {
         !self.own_contexts.iter().any(|c| c == context) && context != crate::train::CONTEXT
     }
 
-    fn check(&self) -> Result<(), IngestError> {
+    /// Whether `status` is the steward's word on whether its commit may land:
+    /// in one of its own contexts and posted by one of its logins. Anyone who
+    /// can push can post its context; only the steward's own logins say it.
+    /// The train's status never is, listed or not: it says where the train
+    /// is, not whether the steward settled the head, and its pending, newer
+    /// than the success a PR joined on, would unsettle every PR in the train.
+    /// So every writer reads one merge alike, whatever its list holds.
+    pub(crate) fn settles(&self, status: &CommitStatus) -> bool {
+        status.context != crate::train::CONTEXT
+            && self.own_contexts.contains(&status.context)
+            && (status.creator.as_ref()).is_some_and(|u| self.reviewers.contains(&u.login))
+    }
+
+    pub(crate) fn check(&self) -> Result<(), IngestError> {
         if self.reviewers.is_empty() {
             return Err(IngestError::Config("no reviewer logins: the steward's"));
         }
-        if self.own_contexts.is_empty() {
+        if !(self.own_contexts.iter()).any(|c| c != crate::train::CONTEXT) {
             return Err(IngestError::Config(
                 "no own status contexts: the steward's settled status",
             ));
@@ -68,6 +89,19 @@ pub enum IngestError {
     Config(&'static str),
     /// The merge-base cache beside the ledger can't be read or added to.
     Cache(std::io::Error),
+    /// An unrecorded PR on one of the repo's own undo branches that can't
+    /// be read as the undo it says it is. It's never read as an ordinary
+    /// PR, and a sync refuses it alone ([`Synced::refused`]).
+    Undo(Refusal),
+}
+
+/// Why an undo PR was refused, before anything of it was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// Its marker can't be read.
+    Marker(String),
+    /// Its marker gives no reason.
+    Reason,
 }
 
 impl std::fmt::Display for IngestError {
@@ -79,6 +113,8 @@ impl std::fmt::Display for IngestError {
             Self::Random(e) => write!(f, "no randomness for a change id: {e}"),
             Self::Config(what) => write!(f, "{what} isn't configured"),
             Self::Cache(e) => write!(f, "merge-base cache: {e}"),
+            Self::Undo(Refusal::Marker(what)) => write!(f, "an undo's marker: {what}"),
+            Self::Undo(Refusal::Reason) => f.write_str("an undo with no reason"),
         }
     }
 }
@@ -117,6 +153,8 @@ impl From<BasesError> for IngestError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ingested {
     pub change: ChangeId,
+    /// The change's PR's number.
+    pub pr: u64,
     /// The PR's head on its base as GitHub shows it now.
     pub revision: RevisionId,
     /// Ops written; 0 when the ledger already held everything.
@@ -146,9 +184,11 @@ pub(crate) fn pulled(
     number: u64,
 ) -> Result<(Ingested, PullRequest), IngestError> {
     config.check()?;
-    let pr = source.pull(&repo.to_string(), number)?;
+    let full = repo.to_string();
+    let pr = source.pull(&full, number)?;
     let base = base(source, repo, &pr)?;
-    Ok((record(store, source, config, repo, &pr, base)?, pr))
+    let read = Read::of(source, &full, &pr)?;
+    Ok((record(store, source, config, repo, &pr, base, read)?, pr))
 }
 
 mod submission;
@@ -163,15 +203,9 @@ pub(crate) fn submitted(
     submissions: &[Submission],
 ) -> Result<Ingested, IngestError> {
     config.check()?;
-    record_with_submission(
-        store,
-        source,
-        config,
-        repo,
-        pr,
-        base(source, repo, pr)?,
-        submissions,
-    )
+    let base = base(source, repo, pr)?;
+    let read = Read::of(source, &repo.to_string(), pr)?;
+    record_with_submission(store, source, config, repo, pr, base, read, submissions)
 }
 
 /// Where the head branched from the base branch: the tree the PR's diff and
@@ -180,88 +214,34 @@ fn base(source: &dyn Source, repo: &Repo, pr: &PullRequest) -> Result<CommitId, 
     commit(&source.merge_base(&repo.to_string(), &pr.base.sha, &pr.head.sha)?)
 }
 
-/// Ingests every PR in the repo, oldest first.
+/// Ingests every PR in the repo, oldest first. An undo PR it can't read is
+/// refused alone, as a [`sync`] refuses one.
 pub fn backfill(
     store: &mut Store,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
-) -> Result<Vec<Ingested>, IngestError> {
+) -> Result<Synced, IngestError> {
     config.check()?;
-    source
-        .pulls(&repo.to_string(), Pulls::All)?
-        .iter()
-        .map(|pr| {
-            let base = base(source, repo, pr)?;
-            record(store, source, config, repo, pr, base)
-        })
-        .collect()
-}
-
-/// Brings the ledger up to date with what's happening in a repo: every open
-/// PR, since its checks and reviews come and go, and every recently closed
-/// one the ledger doesn't hold as it finished yet. The merge base of a
-/// PR's base and head never changes, so it comes from the cache beside the
-/// ledger, and a closed PR the ledger already holds as GitHub shows it
-/// costs no calls.
-pub fn sync(
-    store: &mut Store,
-    source: &dyn Source,
-    config: &Config,
-    repo: &Repo,
-) -> Result<Vec<Ingested>, IngestError> {
-    config.check()?;
-    let full = repo.to_string();
-    let mut bases = MergeBases::load(store.lock()).map_err(IngestError::Cache)?;
-    let mut got = Vec::new();
-    for pr in source.pulls(&full, Pulls::Open)? {
-        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
-        got.push(record(store, source, config, repo, &pr, base)?);
-    }
-    for pr in source.pulls(&full, Pulls::RecentlyClosed)?.iter().rev() {
-        let base = commit(&bases.get(source, &full, &pr.base.sha, &pr.head.sha)?)?;
-        let revision = RevisionId::new(&base, &commit(&pr.head.sha)?);
-        let ledger = store.ledger();
-        let settled = ledger
-            .by_pr(repo, pr.number)
-            .is_some_and(|c| settled(ledger, c, pr, revision));
-        if !settled {
-            got.push(record(store, source, config, repo, pr, base)?);
-        }
+    let mut got = Synced::default();
+    for pr in source.pulls(&repo.to_string(), Pulls::All)? {
+        let base = base(source, repo, &pr)?;
+        let read = Read::of(source, &repo.to_string(), &pr)?;
+        got.take(
+            pr.number,
+            record(store, source, config, repo, &pr, base, read),
+        )?;
     }
     Ok(got)
 }
 
-/// Whether the ledger already holds a closed PR as GitHub shows it: how it
-/// finished, the revision it's at and its intent. A PR reopened, retargeted or
-/// pushed to (back to an older head or base too) and closed again, or
-/// reopened and merged, between two syncs is read again.
-fn settled(ledger: &Ledger, c: &Change, pr: &PullRequest, revision: RevisionId) -> bool {
-    let finished = match c.status() {
-        Status::Open => false,
-        Status::Landed | Status::Reverted => pr.is_merged(),
-        // Closed without landing, or merged without a landing: into another
-        // branch, or pushed to trunk outside a merge.
-        Status::Closed => {
-            !pr.is_merged()
-                || !pr.targets_trunk()
-                || pr.merge_commit_sha.as_deref().is_some_and(|sha| {
-                    ledger
-                        .outside()
-                        .iter()
-                        .any(|o| o.repo == c.repo && o.after.as_str() == sha)
-                })
-        }
-    };
-    let body = pr.body.as_deref().unwrap_or_default();
-    finished
-        && c.current == Some(revision)
-        && c.intent
-            .as_ref()
-            .is_some_and(|i| i.summary == pr.title && i.body == body)
-}
+mod sync;
+pub use sync::{Gathered, Refused, Synced, gather, sync};
 
-fn commit(sha: &str) -> Result<CommitId, IngestError> {
+mod pass;
+pub use pass::{Ended, Stopped, Target, sync_all};
+
+pub(crate) fn commit(sha: &str) -> Result<CommitId, IngestError> {
     sha.parse()
         .map_err(|_| IngestError::Malformed(format!("{sha:?} as a commit id")))
 }
@@ -301,6 +281,7 @@ impl Writer<'_> {
             change,
             reverts: marker.reverts.clone(),
             asked: marker.asked.clone(),
+            reason: Some(marker.reason.clone()),
         };
         let refused = |e: &IngestError| matches!(e, IngestError::Store(StoreError::Invalid(_)));
         match self.record(undo()) {
@@ -430,15 +411,71 @@ fn open_at(pr: &PullRequest, timeline: &[Event], at: &str) -> bool {
     last.is_none_or(|(_, open)| open)
 }
 
-fn record(
+/// What ingest reads about a PR besides the PR itself: its [`Results`],
+/// and its timeline, read after them so that every retarget before any of
+/// them is in it.
+pub(crate) struct Read {
+    timeline: Vec<Event>,
+    results: Results,
+}
+
+/// A PR's check runs, statuses and reviews, read by its number and its
+/// head: right before it's recorded, or by a sync before it takes the
+/// ledger's lock ([`gather`]).
+struct Results {
+    check_runs: Vec<CheckRun>,
+    statuses: Vec<CommitStatus>,
+    reviews: Vec<Review>,
+    comments: Vec<Comment>,
+}
+
+impl Results {
+    fn of(source: &dyn Source, repo: &str, pr: &PullRequest) -> Result<Self, IngestError> {
+        let head = commit(&pr.head.sha)?;
+        Ok(Self {
+            check_runs: source.check_runs(repo, head.as_str())?,
+            statuses: source.statuses(repo, head.as_str())?,
+            reviews: source.reviews(repo, pr.number)?,
+            comments: source.comments(repo, pr.number)?,
+        })
+    }
+}
+
+impl Read {
+    pub(crate) fn of(
+        source: &dyn Source,
+        repo: &str,
+        pr: &PullRequest,
+    ) -> Result<Self, IngestError> {
+        let results = Results::of(source, repo, pr)?;
+        Self::after(source, repo, pr, results)
+    }
+
+    /// `results` read earlier, with the PR's timeline as it is now: a
+    /// result from before a retarget made since is left out by it.
+    fn after(
+        source: &dyn Source,
+        repo: &str,
+        pr: &PullRequest,
+        results: Results,
+    ) -> Result<Self, IngestError> {
+        Ok(Self {
+            timeline: source.timeline(repo, pr.number)?,
+            results,
+        })
+    }
+}
+
+pub(crate) fn record(
     store: &mut Store,
     source: &dyn Source,
     config: &Config,
     repo: &Repo,
     pr: &PullRequest,
     base: CommitId,
+    read: Read,
 ) -> Result<Ingested, IngestError> {
-    record_with_submission(store, source, config, repo, pr, base, &[])
+    record_with_submission(store, source, config, repo, pr, base, read, &[])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -449,9 +486,19 @@ fn record_with_submission(
     repo: &Repo,
     pr: &PullRequest,
     base: CommitId,
+    read: Read,
     submissions: &[Submission],
 ) -> Result<Ingested, IngestError> {
-    let full = repo.to_string();
+    let Read {
+        timeline,
+        results:
+            Results {
+                check_runs,
+                statuses,
+                reviews,
+                comments,
+            },
+    } = read;
     let mut w = Writer {
         store,
         recorded: 0,
@@ -462,14 +509,42 @@ fn record_with_submission(
     let body = pr.body.clone().unwrap_or_default();
     // `cn undo` marks what its PR reverts, so the PR is read as an undo
     // whatever reads it first. A fork's branch is anyone's to name.
-    let undo = own_head(pr, repo)
+    let marked = own_head(pr, repo)
         .then(|| Undo::read(&pr.head.name, &body))
         .flatten();
-    // Who wrote it and what for are the author's words, not the marker's.
-    let said = if undo.is_some() {
-        Undo::without(&body)
-    } else {
-        body.clone()
+    // A legacy, blank or malformed marker must never turn an undo into an
+    // ordinary PR that could evade the undo landing rules. Recorded undos
+    // already hold their immutable record; a new one needs a marker that
+    // reads and a reason before any ops.
+    let held = w
+        .store
+        .ledger()
+        .by_pr(repo, pr.number)
+        .and_then(|c| c.undo.as_ref());
+    let recorded = held.is_some();
+    let held_reason = held.and_then(|u| u.reason.clone());
+    let undo = match &marked {
+        None => None,
+        Some(_) if recorded => None,
+        Some(Err(what)) => return Err(IngestError::Undo(Refusal::Marker(what.clone()))),
+        Some(Ok(marker)) => {
+            conary_core::op::undo_reason(&marker.reason)
+                .map_err(|_| IngestError::Undo(Refusal::Reason))?;
+            Some(marker.clone())
+        }
+    };
+    // Who wrote it and what for are the author's words, not the marker's
+    // nor its reason's.
+    let said = match &marked {
+        None => body.clone(),
+        Some(m) => {
+            let reasons: Vec<&str> = held_reason
+                .as_deref()
+                .into_iter()
+                .chain(m.as_ref().ok().map(|m| m.reason.as_str()))
+                .collect();
+            Undo::without(&body, &reasons)
+        }
     };
 
     let change = match w.store.ledger().by_pr(repo, pr.number) {
@@ -507,17 +582,16 @@ fn record_with_submission(
     // retargeted, so they're bound to this revision only when they came
     // after the last retarget and aren't bound to another revision of this
     // head already. One whose revision can't be told is left out.
-    let since = retargeted(&source.timeline(&full, pr.number)?);
+    let since = retargeted(&timeline);
     let current = |at: Option<&str>| since.as_deref().is_none_or(|s| at.is_some_and(|t| t >= s));
     let mut evidence = Vec::new();
-    for run in source.check_runs(&full, head.as_str())? {
+    for run in check_runs {
         // Started after the retarget, so it can't have run on the old base.
         if current(run.started_at.as_deref()) {
             evidence.extend(run_result(&run).map(|f| f.evidence(change, revision)));
         }
     }
     // Newest first from GitHub; recorded in the order they happened.
-    let statuses = source.statuses(&full, head.as_str())?;
     for status in statuses.iter().rev() {
         if config.is_check(&status.context) && current(status.created_at.as_deref()) {
             evidence.extend(status_result(status).map(|f| f.evidence(change, revision)));
@@ -525,21 +599,15 @@ fn record_with_submission(
     }
     // Newest first: the steward's latest word on this head since the last
     // retarget and before it merged, so a merge it hadn't settled yet (an
-    // administrator's) stays a bypass whatever it says after. Anyone who can
-    // push can post its context; only the steward's own logins say it. An
-    // open PR's is its latest, which the train lands on.
+    // administrator's) stays a bypass whatever it says after. An open PR's is
+    // its latest, which the train lands on.
     let before_merge = |at: Option<&str>| match pr.merged_at.as_deref() {
         Some(m) => at.is_some_and(|t| t <= m),
         None => !pr.is_merged(),
     };
     let mut settled = statuses
         .iter()
-        .filter(|s| config.own_contexts.contains(&s.context))
-        .filter(|s| {
-            s.creator
-                .as_ref()
-                .is_some_and(|u| config.reviewers.contains(&u.login))
-        })
+        .filter(|s| config.settles(s))
         .filter(|s| before_merge(s.created_at.as_deref()))
         .find(|s| current(s.created_at.as_deref()))
         .filter(|s| s.state == "success")
@@ -558,11 +626,20 @@ fn record_with_submission(
             submissions,
         )?;
     }
-    for review in source.reviews(&full, pr.number)? {
+    for review in &reviews {
         if current(review.submitted_at.as_deref()) {
-            evidence.extend(review_marker(config, pr, change, revision, &review));
+            evidence.extend(review_marker(config, pr, change, revision, review));
         }
     }
+    evidence.extend(reviewer(
+        config,
+        pr,
+        change,
+        revision,
+        &reviews,
+        &comments,
+        since.as_deref(),
+    )?);
     for body in evidence {
         let c = w.store.ledger().change(change).expect("observed above");
         if !bound_elsewhere(c, revision, &head, &body) {
@@ -589,6 +666,7 @@ fn record_with_submission(
 
     Ok(Ingested {
         change,
+        pr: pr.number,
         revision,
         recorded: w.recorded,
         settled: is_settled,
@@ -849,61 +927,8 @@ pub(crate) fn status_result(status: &CommitStatus) -> Option<Found> {
     })
 }
 
-static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<!-- (\w+)-review:v1 (\{.*?\}) -->").unwrap());
-
-#[derive(serde::Deserialize)]
-struct Marker {
-    commit_sha: String,
-    base: String,
-    findings: u64,
-}
-
-/// A reviewer's verdict, from the marker the steward puts on each review it
-/// posts: `<!-- codex-review:v1 {"commit_sha":…,"base":…,"findings":N} -->`.
-/// Only a marker on this head, against this base branch, counts as being
-/// about this revision: a retargeted PR is another change on the same head.
-fn review_marker(
-    config: &Config,
-    pr: &PullRequest,
-    change: ChangeId,
-    revision: RevisionId,
-    review: &Review,
-) -> Option<Body> {
-    let login = &review.user.as_ref()?.login;
-    if !config.reviewers.contains(login) {
-        return None;
-    }
-    let body = review
-        .body
-        .as_deref()?
-        .replace("&#123;", "{")
-        .replace("&#125;", "}");
-    let m = MARKER.captures(&body)?;
-    let said: Marker = serde_json::from_str(&m[2]).ok()?;
-    if said.commit_sha != pr.head.sha
-        || said.base != pr.base.name
-        || review.commit_id.as_deref() != Some(pr.head.sha.as_str())
-    {
-        return None;
-    }
-    Some(Body::Evidence {
-        change,
-        revision,
-        kind: CheckKind::Review,
-        check: m[1].to_owned(),
-        result: if said.findings == 0 {
-            Outcome::Pass
-        } else {
-            Outcome::Fail
-        },
-        source: review
-            .html_url
-            .clone()
-            .unwrap_or_else(|| format!("{} review by {login}", &m[1])),
-        attest: None,
-    })
-}
+mod review;
+use review::{review_marker, reviewer};
 
 #[cfg(test)]
 mod tests;

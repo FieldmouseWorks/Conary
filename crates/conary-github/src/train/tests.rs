@@ -11,6 +11,11 @@ fn head(pr: u64) -> String {
     format!("{pr:0>40}")
 }
 
+/// A landing message, for a merge a test makes itself.
+fn message() -> Message {
+    Message::new("remi: a change", 3, ["remi: a change"])
+}
+
 fn repo() -> Repo {
     "FieldmouseWorks/remi".parse().unwrap()
 }
@@ -18,6 +23,7 @@ fn repo() -> Repo {
 fn config() -> Config {
     Config {
         reviewers: vec![STEWARD.into()],
+        review_authors: vec![],
         own_contexts: vec!["review-settled".into()],
     }
 }
@@ -31,8 +37,11 @@ fn settings() -> Settings {
     Settings {
         size: 8,
         require: vec!["check / check".into()],
-        signer: testing::signer(),
-        fresh: Some(FRESH.into()),
+        trust: crate::attest::Trust {
+            signer: testing::signer(),
+            fresh: Some(FRESH.into()),
+            producers: Default::default(),
+        },
     }
 }
 
@@ -143,6 +152,9 @@ mod empty;
 mod gate;
 mod land;
 mod negative;
+mod second;
+mod service;
+mod skipped;
 
 #[test]
 fn a_ready_pr_joins_at_its_head_as_github_shows_it() {
@@ -276,6 +288,7 @@ fn red_alone_leaves_with_the_trains_failure_and_stays_out_until_its_head_moves()
         &commit_of(&store, id),
         &[("check / check", "failure"), ("lint", "success")],
     );
+    hub.fails_again(&commit_of(&store, id));
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(id, Verdict::Red)]);
     let url = "https://github.com/FieldmouseWorks/remi/actions/runs/0".to_owned();
@@ -319,6 +332,7 @@ fn red_with_others_splits_and_builds_the_older_half_in_the_same_step() {
     join_all(&mut store, &hub, &[3, 4, 5]);
     let (whole, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, whole), &[("check / check", "failure")]);
+    hub.fails_again(&commit_of(&store, whole));
     let stepped = step_once(&mut store, &hub);
     assert_eq!(stepped.verdicts, [(whole, Verdict::Red)]);
     assert!(stepped.red.is_empty() && hub.marked().is_empty());
@@ -335,6 +349,7 @@ fn red_alone_is_recorded_only_once_its_head_has_the_failure() {
     join_all(&mut store, &hub, &[3]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "failure")]);
+    hub.fails_again(&commit_of(&store, id));
     hub.fail(unmarked(Mark::Red));
     assert!(step(&mut store, &hub, &hub, &config(), &repo(), &settings()).is_err());
     assert_eq!(store.ledger().candidate(id).unwrap().state, State::Gating);

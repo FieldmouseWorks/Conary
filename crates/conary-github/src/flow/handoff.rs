@@ -1,86 +1,77 @@
 //! v1 can carry located findings, red checks and conflicts. Other blockers
 //! must wait for a protocol which can express their source and repair.
+//!
+//! A finding is an open review thread, whoever opened it: the reviewer's
+//! (Codex's GitHub connector) or anyone's, as burrow's steward hands them.
+//! It's handed with the thread's id, since its answer is a reply on that
+//! thread, which is then resolved ([`super::publish::answers`]).
 use super::*;
-use conary_core::plugin::Problem;
+use conary_core::plugin::{Finding, Problem, Severity};
+use std::sync::LazyLock;
 
-pub(crate) fn problems<G: Read>(
-    github: &G,
-    f: &Facts,
-    memory: &Memory,
-    kind: Kind,
-) -> Result<Vec<Problem>, String> {
+/// The severity badge the connector opens each finding with.
+static BADGE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"!\[P([0-3]) Badge\]").expect("pattern"));
+
+/// The severity a finding opens with. A thread without the connector's
+/// badge, a person's, blocks landing as a P1 does.
+pub(super) fn severity(body: &str) -> Severity {
+    match BADGE.captures(body).map(|c| c[1].to_owned()) {
+        Some(p) if p == "0" => Severity::P0,
+        Some(p) if p == "2" => Severity::P2,
+        Some(p) if p == "3" => Severity::P3,
+        _ => Severity::P1,
+    }
+}
+
+/// Open thread `id` as a finding: where it is, its severity, and all it
+/// says, each comment under its author.
+fn thread(id: &str, t: &ReviewThread) -> Result<Problem, String> {
+    let first = t
+        .comments
+        .first()
+        .ok_or("v1 fixer lacks a review thread's comments")?;
+    let line = t
+        .line
+        .ok_or("v1 fixer cannot represent a review thread on no line")?;
+    let severity = severity(&first.body);
+    let said: Vec<_> = t
+        .comments
+        .iter()
+        .map(|c| {
+            format!(
+                "{}: {}",
+                c.author.as_deref().unwrap_or("(deleted account)"),
+                c.body.trim_end()
+            )
+        })
+        .collect();
+    let finding = Finding {
+        path: t.path.clone(),
+        line,
+        severity,
+        text: format!("GitHub review thread {id}:\n\n{}", said.join("\n\n")),
+    };
+    if !finding.valid() {
+        return Err("v1 fixer cannot represent a review thread outside the repository".into());
+    }
+    Ok(Problem::Finding { finding })
+}
+
+pub(crate) fn problems(f: &Facts, kind: Kind) -> Result<Vec<(Problem, Option<String>)>, String> {
     match kind {
         Kind::Findings => {
-            if memory.lost_on.iter().any(|(role, bases)| {
-                f.reviewers.contains_key(role) && bases.contains_key(&f.revision.base)
-            }) {
-                return Err("v1 fixer lacks the carried findings source lost from GitHub".into());
+            if f.changes_requested {
+                return Err("v1 fixer cannot represent native review requests".into());
             }
-            if f.changes_requested || f.open_threads > 0 {
-                return Err(
-                    "v1 fixer cannot represent blocking GitHub threads or native review requests"
-                        .into(),
-                );
-            }
-            let records = github
-                .reviews(&f.repo.to_string(), f.number)
-                .map_err(|e| e.to_string())?;
-            let mut problems = Vec::new();
-            for (role, reviewer) in &f.reviewers {
-                if !reviewer
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.verdict == Verdict::Findings)
-                    || reviewer.findings_answered
-                {
-                    continue;
-                }
-                let body = reviewer
-                    .record_id
-                    .and_then(|id| records.iter().find(|r| r.id == Some(id)))
-                    .and_then(|r| r.body.as_deref())
-                    .ok_or("v1 fixer lacks the current GitHub findings source")?;
-                let prefix = format!("<!-- {role}-review:v2 ");
-                let marker = body
-                    .trim_end()
-                    .lines()
-                    .last()
-                    .and_then(|l| l.strip_prefix(&prefix))
-                    .and_then(|l| l.strip_suffix(" -->"))
-                    .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-                    .ok_or("v1 fixer cannot represent the current GitHub review")?;
-                let observed = reviewer.review.as_ref().expect("findings selected above");
-                if marker["commit_sha"].as_str() != reviewer.reviewed_head.as_deref()
-                    || marker["base"].as_str() != Some(f.revision.base.as_str())
-                    || marker["scope"].as_str() != Some(f.revision.description.as_str())
-                    || marker["reviewed_at"].as_u64() != Some(observed.at)
-                {
-                    return Err("v1 fixer GitHub findings changed during handoff".into());
-                }
-                let findings: Vec<conary_core::plugin::Finding> =
-                    serde_json::from_value(marker["problems"].clone())
-                        .map_err(|_| "v1 fixer cannot represent unstructured GitHub findings")?;
-                if findings.is_empty()
-                    || findings.iter().any(|f| !f.valid())
-                    || marker["findings"].as_u64() != Some(findings.len() as u64)
-                {
-                    return Err("v1 fixer lacks complete current GitHub findings".into());
-                }
-                problems.extend(findings.into_iter().map(|mut finding| {
-                    finding.text = format!(
-                        "GitHub review {} ({role}, head {}): {}",
-                        reviewer.record_id.unwrap(),
-                        reviewer
-                            .reviewed_head
-                            .as_deref()
-                            .unwrap_or(&f.revision.head),
-                        finding.text
-                    );
-                    Problem::Finding { finding }
-                }));
-            }
+            let problems: Vec<_> = f
+                .threads
+                .iter()
+                .filter(|(_, t)| !t.resolved)
+                .map(|(id, t)| Ok((thread(id, t)?, Some(id.clone()))))
+                .collect::<Result<_, String>>()?;
             if problems.is_empty() {
-                return Err("v1 fixer lacks the current or carried GitHub findings source".into());
+                return Err("v1 fixer lacks an open GitHub review thread".into());
             }
             Ok(problems)
         }
@@ -89,16 +80,22 @@ pub(crate) fn problems<G: Read>(
                 .checks
                 .iter()
                 .filter(|c| c.state == Ci::Red)
-                .map(|c| Problem::RedCheck {
-                    check: c.name.clone(),
-                    text: "GitHub check failed".into(),
+                .map(|c| {
+                    let problem = Problem::RedCheck {
+                        check: c.name.clone(),
+                        text: "GitHub check failed".into(),
+                    };
+                    (problem, None)
                 })
                 .collect();
-            problems.extend(f.deferred_failures.iter().map(|(name, failure)| Problem::RedCheck {
-                check: name.clone(),
-                text: format!("Owned deferred workflow run {} ended with {}; diagnostics: https://github.com/{}/actions/runs/{}{}",
-                    failure.run, failure.conclusion, f.repo, failure.run,
-                    failure.check_run.map_or(String::new(), |id| format!(" (check run {id})"))),
+            problems.extend(f.deferred_failures.iter().map(|(name, failure)| {
+                let problem = Problem::RedCheck {
+                    check: name.clone(),
+                    text: format!("Owned deferred workflow run {} ended with {}; diagnostics: https://github.com/{}/actions/runs/{}{}",
+                        failure.run, failure.conclusion, f.repo, failure.run,
+                        failure.check_run.map_or(String::new(), |id| format!(" (check run {id})"))),
+                };
+                (problem, None)
             }));
             if problems.is_empty() {
                 Err("v1 fixer lacks the blocking check".into())
@@ -106,13 +103,80 @@ pub(crate) fn problems<G: Read>(
                 Ok(problems)
             }
         }
-        Kind::Conflict => Ok(vec![Problem::Conflict {
-            base: f
-                .base_tip
-                .clone()
-                .ok_or("conflict base commit is unavailable")?,
-            text: "GitHub reports a merge conflict".into(),
-        }]),
+        Kind::Conflict => Ok(vec![(
+            Problem::Conflict {
+                base: f
+                    .base_tip
+                    .clone()
+                    .ok_or("conflict base commit is unavailable")?,
+                text: "GitHub reports a merge conflict".into(),
+            },
+            None,
+        )]),
         _ => Err("v1 fixer cannot represent judgment or description failures".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(line: Option<u64>, comments: &[(&str, &str)]) -> ReviewThread {
+        ReviewThread {
+            resolved: false,
+            path: "src/lib.rs".into(),
+            line,
+            comments: comments
+                .iter()
+                .map(|(a, b)| ThreadComment {
+                    author: Some((*a).into()),
+                    body: (*b).into(),
+                })
+                .collect(),
+        }
+    }
+
+    fn finding(t: &ReviewThread) -> Finding {
+        match thread("T1", t).unwrap() {
+            Problem::Finding { finding } => finding,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_thread_is_handed_as_its_place_badge_and_whole_conversation() {
+        // As the connector opens one (burrow#1217), and a reply on it.
+        let badge = "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Title**\n\nWhy.";
+        let f = finding(&at(
+            Some(186),
+            &[
+                ("chatgpt-codex-connector[bot]", badge),
+                ("person", "Agreed."),
+            ],
+        ));
+        assert_eq!(
+            (f.path.as_str(), f.line, f.severity),
+            ("src/lib.rs", 186, Severity::P2)
+        );
+        assert!(f.text.starts_with("GitHub review thread T1:"));
+        assert!(
+            f.text
+                .contains(&format!("chatgpt-codex-connector[bot]: {badge}"))
+        );
+        assert!(f.text.ends_with("person: Agreed."));
+        // A person's thread has no badge: it blocks as a P1 does.
+        assert_eq!(
+            finding(&at(Some(3), &[("person", "P0 this")])).severity,
+            Severity::P1
+        );
+    }
+
+    #[test]
+    fn a_thread_with_nothing_to_place_it_is_refused() {
+        assert!(thread("T1", &at(None, &[("person", "this file")])).is_err());
+        assert!(thread("T1", &at(Some(1), &[])).is_err());
+        let mut outside = at(Some(1), &[("person", "x")]);
+        outside.path = "../etc/passwd".into();
+        assert!(thread("T1", &outside).is_err());
     }
 }

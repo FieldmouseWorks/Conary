@@ -18,6 +18,7 @@ fn repo() -> Repo {
 fn config() -> Config {
     Config {
         reviewers: vec![STEWARD.into()],
+        review_authors: vec![],
         own_contexts: vec!["review-settled".into()],
     }
 }
@@ -114,7 +115,14 @@ fn land(store: &mut Store, change: ChangeId, before: &str, after: &str) {
 }
 
 fn undo_of(store: &mut Store, hub: &Hub, x: ChangeId) -> Result<Undone, Stopped> {
-    undo(store, hub, hub, &config(), x)
+    undo(
+        store,
+        hub,
+        hub,
+        &config(),
+        x,
+        "The landed change broke the health check",
+    )
 }
 
 #[test]
@@ -148,7 +156,7 @@ fn an_undo_reverts_the_landing_alone_brings_trunk_in_and_is_recorded() {
     assert_eq!(pull["title"], title);
     let body = pull["body"].as_str().unwrap();
     assert!(body.starts_with(&format!(
-        "Undoes #5, which landed as {AFTER} (Conary change `{x}`)"
+        "The landed change broke the health check\n\nUndoes #5, which landed as {AFTER} (Conary change `{x}`)"
     )));
     assert!(!body.contains("conflicts"));
     let head = hub.branch_at(REMI, &branch).unwrap();
@@ -302,6 +310,7 @@ fn stopped_at(hub: &Hub, x: ChangeId, attempt: usize) -> u64 {
     hub.create_branch(REMI, &undo_branch(x, attempt), &revert)
         .unwrap();
     let marker = Marker {
+        reason: "The original request found a broken health check".into(),
         reverts: vec![x],
         asked: Asked::Change,
     };
@@ -541,7 +550,11 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
         hub.reopen(REMI, second);
         let again = hub.steward_lands(REMI, second);
         match read_first {
-            Some(true) => _ = ingest::sync(&mut store, &hub, &config(), &repo()).unwrap(),
+            Some(true) => {
+                let dir = store.dir().to_owned();
+                let gathered = ingest::gather(&hub, &config(), &repo(), &dir).unwrap();
+                _ = ingest::sync(&mut store, &hub, gathered).unwrap();
+            }
             Some(false) => _ = ingest::pull(&mut store, &hub, &config(), &repo(), second).unwrap(),
             None => {}
         }
@@ -566,3 +579,4 @@ fn a_stopped_run_that_merged_after_its_rival_landed_is_trunk_moving_outside() {
 }
 
 mod group;
+mod reason;

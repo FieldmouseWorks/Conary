@@ -33,37 +33,23 @@ fn bot(renovate: bool, major: bool) -> Case {
     c
 }
 #[test]
-fn automerge_configuration_gives_only_the_documented_batches_to_the_steward() {
-    // deps.py:59,63,74,83: batch labels and configuration, including conflicting quoted statuses.
+fn renovate_automerge_configuration_never_hands_the_merge_to_renovate() {
+    // Renovate merges nothing in a repository conaryd lands, so whatever
+    // its automerge says and whatever batch it's in, the flow merges.
     let spent = "🚦 **Automerge**: Disabled because a matching PR was automerged previously.";
-    for (label, body, expected) in [
-        (false, "🚦 **Automerge**: Enabled.", Step::Settle),
-        (true, "🚦 **Automerge**: Enabled.", Step::Merge),
-        (true, "🚦 **Automerge**: Disabled by config.", Step::Settle),
-        (false, spent, Step::Merge),
-        (true, spent, Step::Merge),
-    ] {
-        let c = bot(true, false);
-        if label {
-            c.label(&["upstream batch"]);
+    for label in [false, true] {
+        for body in [
+            "🚦 **Automerge**: Enabled.",
+            "🚦 **Automerge**: Disabled by config.",
+            spent,
+        ] {
+            let c = bot(true, false);
+            if label {
+                c.label(&["upstream batch"]);
+            }
+            c.description(body, 0);
+            assert_eq!(c.view(8000).step, Step::Merge, "{label} {body}");
         }
-        c.description(body, 0);
-        assert_eq!(c.view(8000).step, expected);
-    }
-    for enabled in [false, true] {
-        let c = bot(true, false);
-        c.description(
-            &format!(
-                "### Release Notes\n\n{spent}\n\n---\n\n### Configuration\n\n🚦 **Automerge**: {}.",
-                if enabled {
-                    "Enabled"
-                } else {
-                    "Disabled by config"
-                }
-            ),
-            0,
-        );
-        assert_eq!(c.view(8000).step, Step::Settle);
     }
 }
 #[test]
@@ -84,7 +70,7 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
                 Some(if changed_author { "person" } else { email }),
                 Some(if changed_author { email } else { "person" }),
             );
-            assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+            assert!(matches!(c.view(8000).step, Step::AskReview(_)));
             c.review("reviewer", Verdict::Clean, 700);
             assert_eq!(c.view(8000).step, Step::Merge);
         }
@@ -96,7 +82,8 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
     c.settings.renovate_email = None;
     assert_eq!(c.facts().bot_edited, None);
     // Unknown/misconfigured provenance never gets the CI-only shortcut.
-    assert_eq!(c.view(8000).step, Step::QueueReview("reviewer".into()));
+    c.hub.remove_flow_reviews(REMI, 3);
+    assert!(matches!(c.view(8000).step, Step::AskReview(_)));
     c.review("reviewer", Verdict::Clean, 700);
     assert_eq!(c.view(8000).step, Step::Merge); // current trusted reviewer covers the complete claim
 }
@@ -104,22 +91,27 @@ fn dependency_edits_are_reviewed_for_both_author_and_committer_changes() {
 fn majors_threads_and_security_use_their_own_gates() {
     // deps.py:41,45,59,126,136,144,149,259,265,270,282.
     let c = bot(false, true);
-    assert_eq!(c.view(8000).step, Step::Judge);
+    assert_eq!(
+        c.view(8000).step,
+        Step::Judge(vec![Trigger::MajorDependency])
+    );
     let mut c = bot(true, true);
     c.settings.renovate_sweep = true;
     assert_eq!(c.view(8000).stage, Stage::Review);
     c.threads(1);
     assert!(matches!(c.view(8000).step, Step::Wait { .. }));
     c.sweep("held");
-    assert_eq!(c.view(8000).step, Step::ListOwner);
+    let n = c.view(8000);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert!(n.description.starts_with("Major update held"), "{n:?}");
     c.sweep("ok");
     assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));
     c.label(&["needs-peter"]);
-    assert_eq!(c.view(8000).step, Step::ListOwner);
+    assert_eq!(c.view(8000).step, Step::ListOwner(Door::Label));
     c.label(&["security"]);
     c.threads(0);
     assert_eq!(c.facts().dependency, Some(Dependency::Minor));
-    assert_eq!(c.view(8000).step, Step::Settle);
+    assert_eq!(c.view(8000).step, Step::Merge);
     let c = bot(false, false);
     c.threads(1);
     assert_eq!(c.view(8000).step, Step::HandFix(Kind::Findings));

@@ -22,7 +22,7 @@ pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joi
 /// Lands a green candidate's next change, through its PR's merge at the head
 /// the candidate holds. The PR is read first, so a merge made since the last
 /// step is recorded rather than tried again, and so is one GitHub took but
-/// doesn't show yet ([`merge_unseen`]): the step waits for it. A candidate
+/// doesn't show yet ([`merge_unshown`]): the step waits for it. A candidate
 /// alone lands only while trunk is still its base: once trunk has moved
 /// it's dropped, to be built again on trunk as it is. A PR that targets
 /// another branch than trunk now is refused, since its merge would land
@@ -68,7 +68,7 @@ pub(super) fn land_next(
     let at = forge
         .branch(&full, trunk)?
         .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-    if merge_unseen(source, &full, pr, head.as_str(), c, &at)? {
+    if merge_unshown(source, &full, pr, head.as_str(), c, &at)? {
         return Ok(Some(landing(store, c)));
     }
     let drop = if c.green_unattested() {
@@ -92,6 +92,7 @@ pub(super) fn land_next(
         store.record(Body::Leave {
             change: next.change,
             why: Left::Unready,
+            trunk: None,
         })?;
         stepped.unready.push(pr);
         return Ok(None);
@@ -109,6 +110,7 @@ pub(super) fn land_next(
         store.record(Body::Leave {
             change: next.change,
             why: Left::Below,
+            trunk: None,
         })?;
         stepped.reseated.push(pr);
         return Ok(None);
@@ -123,51 +125,62 @@ pub(super) fn land_next(
     } else {
         None
     };
-    let (why, description) = if let Some(why) = elsewhere {
-        (why.clone(), why)
-    } else {
-        forge.mark(
-            &full,
-            head.as_str(),
-            Mark::Landing,
-            &landing_with(c.id),
-            None,
-        )?;
-        // Read again with the mark up, for a retarget or a label since the
-        // read above: GitHub's merge pins the head, not the base or the
-        // labels, so this is the last the train can look before the merge
-        // lands somewhere. One raised (`r2`, `review`) by a label it didn't
-        // join with, recorded or only on its PR yet, leaves as an unsettled
-        // one does, its landing mark gone first: the steward settled it
-        // without the label, and settles it again with it before it joins
-        // again.
-        let last = source.pull(&full, pr)?;
-        if raised_since_join(store, repo, next.change, &last) {
-            forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
-            store.record(Body::Leave {
-                change: next.change,
-                why: Left::Unready,
-            })?;
-            stepped.unready.push(pr);
-            return Ok(None);
-        }
-        let base = last.base.name;
-        if base != trunk {
-            let why = format!("it targets {base}, not {trunk}");
-            (why.clone(), why)
-        } else {
-            match forge.land(&full, pr, head.as_str())? {
-                PrMerge::Merged => {
-                    stepped.landed.push(pr);
-                    ingest::pull(store, source, config, repo, pr)?;
-                    if moved(store) {
-                        return Ok(None);
+    // One that may land here: the commits its merge squashes, read before
+    // the mark goes up, as their trailers go in the landing commit's
+    // message, which the merge's head pins. One whose trailers can't all be
+    // read isn't landed without them.
+    let messages = match elsewhere {
+        Some(why) => Err(why),
+        None => messages(&source.compare_commits(&full, &at, head.as_str())?),
+    };
+    let (why, description) = match messages {
+        Err(why) => (why.clone(), why),
+        Ok(messages) => {
+            forge.mark(
+                &full,
+                head.as_str(),
+                Mark::Landing,
+                &landing_with(c.id),
+                None,
+            )?;
+            // Read again with the mark up, for a retarget or a label since the
+            // read above: GitHub's merge pins the head, not the base or the
+            // labels, so this is the last the train can look before the merge
+            // lands somewhere. One raised (`r2`, `review`) by a label it didn't
+            // join with, recorded or only on its PR yet, leaves as an unsettled
+            // one does, its landing mark gone first: the steward settled it
+            // without the label, and settles it again with it before it joins
+            // again.
+            let last = source.pull(&full, pr)?;
+            if raised_since_join(store, repo, next.change, &last) {
+                forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
+                store.record(Body::Leave {
+                    change: next.change,
+                    why: Left::Unready,
+                    trunk: None,
+                })?;
+                stepped.unready.push(pr);
+                return Ok(None);
+            }
+            let base = last.base.name;
+            if base != trunk {
+                let why = format!("it targets {base}, not {trunk}");
+                (why.clone(), why)
+            } else {
+                let message = Message::new(&last.title, pr, messages.iter().map(String::as_str));
+                match forge.land(&full, pr, head.as_str(), &message)? {
+                    PrMerge::Merged => {
+                        stepped.landed.push(pr);
+                        ingest::pull(store, source, config, repo, pr)?;
+                        if moved(store) {
+                            return Ok(None);
+                        }
+                        return Ok(Some(landing(store, c)));
                     }
-                    return Ok(Some(landing(store, c)));
-                }
-                PrMerge::Refused(why) => {
-                    let description = format!("GitHub refused its merge: {why}");
-                    (why, description)
+                    PrMerge::Refused(why) => {
+                        let description = format!("GitHub refused its merge: {why}");
+                        (why, description)
+                    }
                 }
             }
         }
@@ -177,6 +190,7 @@ pub(super) fn land_next(
     store.record(Body::Leave {
         change: next.change,
         why: Left::Refused,
+        trunk: None,
     })?;
     stepped.refused.push(Refused { pr, why });
     Ok(None)
@@ -219,7 +233,7 @@ fn landing_candidate(store: &Store, repo: &Repo) -> Option<Candidate> {
 /// The candidate the repo's train is landing ([`landing_candidate`]), and
 /// the PR whose landing it has started and no step has settled: that PR's
 /// head says it's landing with the candidate. Its merge may be on trunk,
-/// unseen, so nothing but a step may take it out meanwhile, nor stop a
+/// not yet shown, so nothing but a step may take it out meanwhile, nor stop a
 /// candidate in flight.
 pub(super) fn open_landing(
     store: &Store,
@@ -274,7 +288,7 @@ pub(super) fn stopped_landing(
                 let at = forge
                     .branch(&full, trunk)?
                     .ok_or_else(|| TrainError::NoTrunk(trunk.to_owned()))?;
-                if pull.is_merged() || merge_unseen(source, &full, pr, head.as_str(), &c, &at)? {
+                if pull.is_merged() || merge_unshown(source, &full, pr, head.as_str(), &c, &at)? {
                     return Ok(Some(Now::Landing {
                         candidate: c.id,
                         landings: vec![Landing {
@@ -366,7 +380,7 @@ pub(super) fn landing_marked(
 
 /// How far back trunk is read for a merge GitHub hasn't shown: past any
 /// candidate's own landings and the few that land outside it meanwhile.
-const UNSEEN: usize = 50;
+const UNSHOWN: usize = 50;
 
 /// Whether the PR's merge is on trunk already though GitHub doesn't show
 /// the PR merged yet: a step took its merge and stopped, or GitHub's answer
@@ -374,7 +388,7 @@ const UNSEEN: usize = 50;
 /// it's landing with this candidate can have been merged by it, and then
 /// trunk, read back by first parents to the candidate's base, holds a
 /// commit GitHub links to the PR.
-pub(super) fn merge_unseen(
+pub(super) fn merge_unshown(
     source: &dyn Source,
     full: &str,
     pr: u64,
@@ -386,7 +400,7 @@ pub(super) fn merge_unseen(
         return Ok(false);
     }
     let mut sha = at.to_owned();
-    for _ in 0..UNSEEN {
+    for _ in 0..UNSHOWN {
         if sha == c.base.as_str() {
             return Ok(false);
         }

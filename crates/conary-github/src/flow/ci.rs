@@ -1,13 +1,16 @@
 //! The check decision from prs.py. A suite which judged another diff is
 //! neither green nor red for this PR. Cancelled work is pending until an
-//! equivalent, completed workflow run replaces it, or annotations prove a timeout.
+//! equivalent, completed workflow run replaces it, or annotations prove a
+//! timeout. What nothing replaced is listed by the way GitHub runs it again,
+//! for the stall's recovery ([`super::recover`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::api::{ApiError, CheckRun};
+use crate::api::CheckRun;
 use conary_core::policy::Paths;
 
-use super::{Check, Ci, Read};
+use super::degraded::{ReadError, Reading, Reads};
+use super::{Check, Ci, Place, Read, Recovery, Settings};
 
 /// Workflow metadata from GitHub's suite/workflow-run reads. Missing metadata
 /// is not evidence that a cancelled run was replaced.
@@ -16,6 +19,8 @@ pub struct Workflow {
     pub id: String,
     pub name: String,
     pub path: Option<String>,
+    /// The workflow run's own id, which its rerun is asked by.
+    pub run: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +37,10 @@ pub(super) struct Result {
     pub has_ci: bool,
     /// Effective producer runs, selected by the same scope/replacement rules.
     pub runs: Vec<CheckRun>,
-    pub statuses: BTreeSet<String>,
+    /// Cancelled runs nothing replaced, by the way GitHub runs each again.
+    pub stopped: BTreeMap<Recovery, Vec<String>>,
+    /// Runs that timed out, by the way GitHub runs each again.
+    pub timed_out: BTreeMap<Recovery, Vec<String>>,
 }
 
 const LANE: &str = "lane into ";
@@ -85,6 +93,19 @@ fn judged<'a>(
         return None;
     }
     Some((base, Some(fork)))
+}
+/// How GitHub runs a check run again, by its kind: a GitHub Actions run by
+/// its workflow run's rerun, another App's by its check suite's re-request,
+/// once the suite has finished, as a rerun needs. A run in no suite the
+/// snapshot read, or an Actions run whose workflow run it didn't name, has
+/// no way the flow knows.
+fn rerun(run: &CheckRun, suites: &BTreeMap<u64, Suite>) -> Option<Recovery> {
+    let s = suite(run, suites).filter(|s| s.status == "completed")?;
+    match s.app.as_str() {
+        "" => None,
+        "github-actions" => s.workflow.as_ref()?.run.map(Recovery::Rerun),
+        _ => suite_id(run).map(Recovery::Rerequest),
+    }
 }
 fn cancelled(run: &CheckRun) -> bool {
     run.status == "completed" && run.conclusion.as_deref() == Some("cancelled")
@@ -184,26 +205,100 @@ fn deferred_workflow(suite: &Suite, settings: &super::Settings) -> bool {
     })
 }
 
+/// Where a run that hasn't finished stands: queued for a runner, or started
+/// at the time GitHub gives. A start GitHub didn't give, or gave in a form
+/// that doesn't read, leaves it unplaced, so the wait's own clock runs.
+fn placed(run: &CheckRun) -> Place {
+    let at = || {
+        run.started_at
+            .as_deref()
+            .and_then(|t| super::reviews::timestamp(t).ok())
+    };
+    match run.status.as_str() {
+        "queued" => Place::Queued(at()),
+        "in_progress" => at().map_or(Place::Unplaced, Place::Started),
+        _ => Place::Unplaced,
+    }
+}
+
+/// When the stall clock of a wait on CI starts, from the checks it waits
+/// on (`waiting-costs-nothing`). A check that's pending only behind the
+/// others has no clock of its own, unless nothing else is pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Clock {
+    /// The wait's own clock: some pending check isn't a run known to be
+    /// queued or started.
+    Wait,
+    /// Every pending check is queued for a runner: no clock runs, and the
+    /// queue time since the earliest time GitHub gave, when it gave one, is
+    /// capacity.
+    Queued(Option<u64>),
+    /// Every pending check is queued or started, and the earliest started
+    /// then: no earlier than that, however long it queued.
+    Started(u64),
+}
+
+pub(super) fn clock(checks: &[Check]) -> Clock {
+    let pending: Vec<_> = checks
+        .iter()
+        .filter(|c| c.state == Ci::Pending && c.run != Place::Behind)
+        .map(|c| c.run)
+        .collect();
+    if pending.is_empty() || pending.contains(&Place::Unplaced) {
+        return Clock::Wait;
+    }
+    let started = pending
+        .iter()
+        .filter_map(|r| match r {
+            Place::Started(at) => Some(*at),
+            _ => None,
+        })
+        .min();
+    started.map_or_else(
+        || {
+            Clock::Queued(
+                pending
+                    .iter()
+                    .filter_map(|r| match r {
+                        Place::Queued(at) => *at,
+                        _ => None,
+                    })
+                    .min(),
+            )
+        },
+        Clock::Started,
+    )
+}
+
 /// Evaluate one consistent set of check and suite reads. Annotation reads are
 /// lazy: a replacement run clears an old cancellation without asking why the
 /// old run stopped. API failure propagates, never guesses a timeout verdict.
+/// A read it goes on past (the docs lane's fork point, a run's suite) is a
+/// degraded read in `reads`, and what it was for is pending. Each read's
+/// outcome is kept in `reads`, even when a later one ends it.
+/// `documentation` is whether the machine's policy names every path of
+/// `paths` documentation: the docs lane's word alone, a job anyone's PR
+/// can name, never waives a proof.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn checks(
     source: &dyn Read,
     repo: &str,
     head: &str,
     base: &str,
     paths: &Paths,
+    documentation: bool,
     suites: &BTreeMap<u64, Suite>,
-    settings: &super::Settings,
-) -> std::result::Result<Result, ApiError> {
+    settings: &Settings,
+    reads: &mut Reads,
+) -> std::result::Result<Result, ReadError> {
     let proofs = &settings.machine();
     // Configured deferred producers are read through their owned workflow
     // runs, including when their native checks happen to be on the PR head.
     // Foreign or obsolete same-named results cannot become ordinary CI.
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
-    let raw_runs: Vec<_> = source
-        .check_runs(repo, head)?
+    let raw_runs: Vec<_> = reads
+        .ask(Reading::Checks, source.check_runs(repo, head))?
         .into_iter()
         .filter(|r| !settings.deferred.checks.contains_key(&r.name))
         .collect();
@@ -226,12 +321,19 @@ pub(super) fn checks(
         .iter()
         .filter_map(|r| judged(r, suites).map(|j| (r, j)))
         .collect();
+    // A base branch that's gone has no fork point: that's GitHub's answer.
     let fork = if said.iter().any(|(_, (b, f))| *b == base && f.is_some()) {
-        source
-            .branch(repo, base)
-            .ok()
-            .flatten()
-            .and_then(|tip| source.merge_base(repo, &tip, head).ok())
+        match source.branch(repo, base) {
+            Ok(Some(tip)) => reads.take(Reading::Fork, source.merge_base(repo, &tip, head)),
+            Ok(None) => {
+                reads.answered(Reading::Fork);
+                None
+            }
+            Err(e) => {
+                reads.met(Reading::Fork, super::degraded::why(&e));
+                None
+            }
+        }
     } else {
         None
     };
@@ -240,12 +342,14 @@ pub(super) fn checks(
         .filter(|(_, (b, f))| *b != base || f.is_some_and(|f| fork.as_deref() != Some(f)))
         .filter_map(|(r, _)| suite_id(r))
         .collect();
-    let docs = said.iter().any(|(r, (_, f))| {
-        f.is_some()
-            && !suite_id(r).is_some_and(|id| stale.contains(&id))
-            && r.status == "completed"
-            && r.conclusion.as_deref() == Some("success")
-    }) && !paths.cut
+    let docs = documentation
+        && said.iter().any(|(r, (_, f))| {
+            f.is_some()
+                && !suite_id(r).is_some_and(|id| stale.contains(&id))
+                && r.status == "completed"
+                && r.conclusion.as_deref() == Some("success")
+        })
+        && !paths.cut
         && !paths.files.iter().any(|p| {
             std::iter::once(p.path.as_str())
                 .chain(p.from.as_deref())
@@ -277,6 +381,7 @@ pub(super) fn checks(
         .map(|w| Check {
             name: format!("{w} for {base}"),
             state: Ci::Pending,
+            run: Place::Unplaced,
         })
         .collect();
     for s in suites.values().filter(|s| {
@@ -290,12 +395,29 @@ pub(super) fn checks(
                     .map_or("a workflow", |w| w.name.as_str())
             ),
             state: Ci::Red,
+            run: Place::Unplaced,
         });
     }
     let mut effective = BTreeMap::<(Option<String>, String), CheckRun>::new();
+    let mut stopped = BTreeMap::<Recovery, Vec<String>>::new();
+    let mut timed_out = BTreeMap::<Recovery, Vec<String>>::new();
     for run in &runs {
         if suite_id(run).is_some_and(|id| stale.contains(&id)) {
             continue;
+        }
+        // GitHub's two reads disagree about a run whose suite the snapshot
+        // doesn't hold: whether it's a workflow's, and so whether it was
+        // replaced or its workflow is still running, can't be told.
+        let unsuited = suite_id(run).is_some() && suite(run, suites).is_none();
+        if unsuited {
+            reads.met(
+                if cancelled(run) {
+                    Reading::Cancelled
+                } else {
+                    Reading::Checks
+                },
+                "a check run's suite wasn't in the snapshot".into(),
+            );
         }
         let after = if cancelled(run) {
             replacement(run, &runs, suites, &stale)
@@ -310,17 +432,25 @@ pub(super) fn checks(
             effective.insert(key, run.clone());
         }
         let mut name = run.name.clone();
+        let mut place = Place::Unplaced;
         let state = if run.status != "completed" || after == Replacement::Going {
+            if after == Replacement::None {
+                place = placed(run);
+            }
             Ci::Pending
         } else if cancelled(run) {
-            if source
-                .annotations(repo, run.id)?
-                .iter()
-                .any(|m| m.contains("has exceeded the maximum execution time"))
-            {
+            if crate::api::overran(
+                &reads.ask(Reading::Cancelled, source.annotations(repo, run.id))?,
+            ) {
+                if let Some(way) = rerun(run, suites) {
+                    timed_out.entry(way).or_default().push(run.name.clone());
+                }
                 name.push_str(" (timed out)");
                 Ci::Red
             } else {
+                if let Some(way) = rerun(run, suites) {
+                    stopped.entry(way).or_default().push(run.name.clone());
+                }
                 name.push_str(" (cancelled, to be run again)");
                 Ci::Pending
             }
@@ -328,7 +458,15 @@ pub(super) fn checks(
             run.conclusion.as_deref(),
             Some("success" | "neutral" | "skipped")
         ) {
+            if run.conclusion.as_deref() == Some("timed_out")
+                && let Some(way) = rerun(run, suites)
+            {
+                timed_out.entry(way).or_default().push(run.name.clone());
+            }
             Ci::Red
+        } else if unsuited {
+            name.push_str(" (its suite unread)");
+            Ci::Pending
         } else if flow(run, suites).is_some()
             && suite(run, suites).is_none_or(|s| s.status != "completed")
         {
@@ -338,11 +476,16 @@ pub(super) fn checks(
                     .and_then(|s| s.workflow.as_ref())
                     .map_or("CI", |w| w.name.as_str())
             );
+            place = Place::Behind;
             Ci::Pending
         } else {
             Ci::Green
         };
-        checks.push(Check { name, state });
+        checks.push(Check {
+            name,
+            state,
+            run: place,
+        });
     }
     let spelling: BTreeMap<_, _> = if docs {
         BTreeMap::new()
@@ -350,8 +493,7 @@ pub(super) fn checks(
         proofs.iter().map(|p| (p.to_lowercase(), p)).collect()
     };
     let mut seen = BTreeSet::new();
-    let mut successful_statuses = BTreeSet::new();
-    for status in source.statuses(repo, head)? {
+    for status in reads.ask(Reading::Checks, source.statuses(repo, head))? {
         if settings.deferred.checks.contains_key(&status.context) {
             continue;
         }
@@ -360,10 +502,12 @@ pub(super) fn checks(
         // Authenticate reserved train results before choosing the newest one.
         // A forged newer result must not hide the steward's blocking word.
         if train
-            && !status
-                .creator
-                .as_ref()
-                .is_some_and(|u| u.login.eq_ignore_ascii_case("fieldmouseworks-steward[bot]"))
+            && !status.creator.as_ref().is_some_and(|u| {
+                settings
+                    .flow_authors
+                    .iter()
+                    .any(|s| u.login.eq_ignore_ascii_case(s))
+            })
         {
             continue;
         }
@@ -379,12 +523,16 @@ pub(super) fn checks(
             "pending" | "expected" => Ci::Pending,
             _ => Ci::Red,
         };
-        if state == Ci::Green {
-            successful_statuses.insert(status.context.clone());
-        }
+        // A machine proof the flow says is pending waits for CI to finish.
+        let place = if proofs.contains(&name) {
+            Place::Behind
+        } else {
+            Place::Unplaced
+        };
         checks.push(Check {
             name: spelling.get(&name).map_or(status.context, |p| (*p).clone()),
             state,
+            run: place,
         });
     }
     for (lower, name) in spelling {
@@ -392,14 +540,18 @@ pub(super) fn checks(
             checks.push(Check {
                 name: name.clone(),
                 state: Ci::Pending,
+                run: Place::Behind,
             });
         }
     }
+    // Every cancelled run's suite was there to tell what became of it.
+    reads.answered(Reading::Cancelled);
     Ok(Result {
         checks,
         docs,
         has_ci,
         runs: effective.into_values().collect(),
-        statuses: successful_statuses,
+        stopped,
+        timed_out,
     })
 }

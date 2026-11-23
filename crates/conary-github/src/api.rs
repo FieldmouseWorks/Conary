@@ -45,6 +45,9 @@ pub struct PullRequest {
     pub user: User,
     pub merged: Option<bool>,
     pub created_at: Option<String>,
+    /// When anything about the PR itself last changed: a push, a retarget,
+    /// a close or reopen, an edit, a comment. To the second.
+    pub updated_at: Option<String>,
     pub merged_at: Option<String>,
     pub merge_commit_sha: Option<String>,
     pub auto_merge: Option<serde_json::Value>,
@@ -95,6 +98,16 @@ pub struct CheckRun {
     /// dispatch that started it here.
     #[serde(default)]
     pub external_id: Option<String>,
+    /// What it reports: a service producer's signed statement rides in its
+    /// text (`docs/service-attestation.md`).
+    #[serde(default)]
+    pub output: Option<CheckOutput>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CheckOutput {
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 /// One run of a workflow, as the workflow's run list shows it.
@@ -152,6 +165,7 @@ pub struct Comment {
     pub body: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub html_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,6 +232,10 @@ struct PullNumber {
 pub struct Event {
     pub event: Option<String>,
     pub created_at: Option<String>,
+    /// Who did it: a `User` or a `Bot`, or `None` for a deleted account.
+    pub actor: Option<User>,
+    /// The label a `labeled` or `unlabeled` event is about.
+    pub label: Option<Label>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,12 +251,19 @@ pub(crate) struct Comparison {
 pub(crate) struct ComparedFile {
     filename: String,
     previous_filename: Option<String>,
-    status: Option<String>,
 }
 
 /// The most files GitHub lists for a comparison. It says nothing of the
 /// rest, so a list this long may be cut short.
 pub const COMPARED_FILES: usize = 300;
+
+/// Whether a check run's annotations say GitHub stopped it at its timeout,
+/// which it concludes as cancelled.
+pub(crate) fn overran(annotations: &[String]) -> bool {
+    annotations
+        .iter()
+        .any(|m| m.contains("has exceeded the maximum execution time"))
+}
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -246,6 +271,9 @@ pub struct ApiError {
     /// GitHub couldn't be asked just now: its rate limit, its own errors, or
     /// the network. Asking again later is the whole fix.
     pub unavailable: bool,
+    /// What GitHub itself said of an error status, its words as it gave
+    /// them: its message and any errors it listed.
+    said: Option<String>,
 }
 
 impl ApiError {
@@ -253,6 +281,7 @@ impl ApiError {
         Self {
             what: what.into(),
             unavailable: false,
+            said: None,
         }
     }
 
@@ -260,7 +289,19 @@ impl ApiError {
         Self {
             what: what.into(),
             unavailable: true,
+            said: None,
         }
+    }
+
+    /// The same error, with what GitHub said of it.
+    pub fn saying(mut self, said: impl Into<String>) -> Self {
+        self.said = Some(said.into());
+        self
+    }
+
+    /// What GitHub said of the error, as it gave it, when it said anything.
+    pub fn said(&self) -> Option<&str> {
+        self.said.as_deref()
     }
 }
 
@@ -271,6 +312,13 @@ impl std::fmt::Display for ApiError {
 }
 
 impl std::error::Error for ApiError {}
+
+/// Whether `e`, or anything it wraps, is GitHub being unavailable: asked
+/// again later, it may answer.
+pub fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(e), |e| e.source())
+        .any(|e| e.downcast_ref::<ApiError>().is_some_and(|a| a.unavailable))
+}
 
 /// Which of a repo's PRs to list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +339,8 @@ pub trait Source {
     fn pull(&self, repo: &str, number: u64) -> Result<PullRequest, ApiError>;
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError>;
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError>;
+    /// What GitHub noted on check run `run`.
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError>;
@@ -313,10 +363,10 @@ pub struct Api {
     tokens: Tokens,
     etags: Option<Etags>,
     event_queue: Option<std::sync::Arc<crate::events::Queue>>,
+    /// The longest one call may take, and one paged read, all its pages.
+    call_for: Duration,
+    read_for: Duration,
 }
-
-/// Pages are read until one comes back short, up to this many.
-const MAX_PAGES: usize = 50;
 
 /// The longest one call may take, its answer read whole. GitHub answers in
 /// seconds and gives up on a request itself after ten, so a call this long
@@ -324,6 +374,12 @@ const MAX_PAGES: usize = 50;
 /// made it (a train's step, the ledger's lock) until its unit's own limit;
 /// cut off, it's GitHub unavailable, and asked again later.
 const CALL_FOR: Duration = Duration::from_secs(60);
+
+/// The longest one paged read may take, all its pages: one of thousands of
+/// pages goes on reading, and one whose pages keep coming slowly is cut off
+/// as GitHub unavailable, its pass booked again, rather than holding the
+/// pass. Each page's call is cut off at what's left of it.
+pub(crate) const READ_FOR: Duration = Duration::from_secs(5 * 60);
 
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
@@ -333,7 +389,12 @@ impl Api {
 
     /// Through `proxy`, or straight to GitHub when `None`, each call cut
     /// off at `call_for`.
-    fn through(base: &str, tokens: Tokens, proxy: Option<ureq::Proxy>, call_for: Duration) -> Self {
+    pub(crate) fn through(
+        base: &str,
+        tokens: Tokens,
+        proxy: Option<ureq::Proxy>,
+        call_for: Duration,
+    ) -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(call_for))
             .proxy(proxy)
@@ -353,6 +414,8 @@ impl Api {
             tokens,
             etags: None,
             event_queue: None,
+            call_for,
+            read_for: READ_FOR,
         }
     }
 
@@ -378,12 +441,31 @@ impl Api {
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
-        self.get_found(path)?
+        self.get_within(path, self.call_for)
+    }
+
+    /// A page of a paged read, its call cut off at what's `left` of the
+    /// read.
+    fn get_within<T: DeserializeOwned>(&self, path: &str, left: Duration) -> Result<T, ApiError> {
+        self.get_found_within(path, left)?
             .ok_or_else(|| ApiError::new(format!("{}{path}: not found", self.base)))
     }
 
     /// `None` for a 404.
     fn get_found<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, ApiError> {
+        self.get_found_within(path, self.call_for)
+    }
+
+    /// The cut-off of a call with `left` of its read: whichever is sooner.
+    fn cut(&self, left: Duration) -> Option<Duration> {
+        Some(left.min(self.call_for))
+    }
+
+    fn get_found_within<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        left: Duration,
+    ) -> Result<Option<T>, ApiError> {
         let url = format!("{}{path}", self.base);
         let kept = self.etags.as_ref().and_then(|e| e.get(&url));
         let mut request = self
@@ -391,7 +473,10 @@ impl Api {
             .get(&url)
             .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .config()
+            .timeout_global(self.cut(left))
+            .build();
         if let Some((etag, _)) = &kept {
             request = request.header("If-None-Match", etag);
         }
@@ -458,19 +543,51 @@ impl Api {
 
     fn pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, ApiError> {
         let sep = if path.contains('?') { '&' } else { '?' };
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: Vec<T> = self.get(&format!("{path}{sep}per_page=100&page={page}"))?;
-            let short = got.len() < 100;
-            all.extend(got);
-            if short {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+        paged(path, self.read_for, |page, left| {
+            let items: Vec<T> =
+                self.get_within(&format!("{path}{sep}per_page=100&page={page}"), left)?;
+            // A short page is the last.
+            let more = items.len() == PER_PAGE;
+            Ok(Page { items, more })
+        })
     }
+}
+
+/// The most GitHub answers in one page.
+pub(crate) const PER_PAGE: usize = 100;
+
+/// One page of a paged read: what it held, and whether GitHub has more.
+pub(crate) struct Page<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) more: bool,
+}
+
+/// Reads `what` page by page to the end of its data, asking `page` for each
+/// from the first with what's left of `within`, the read's deadline. Past
+/// it, the read fails as GitHub unavailable, as a call cut off does.
+pub(crate) fn paged<T>(
+    what: &str,
+    within: Duration,
+    mut page: impl FnMut(usize, Duration) -> Result<Page<T>, ApiError>,
+) -> Result<Vec<T>, ApiError> {
+    let start = std::time::Instant::now();
+    let mut all = Vec::new();
+    for n in 1.. {
+        let left = within.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(ApiError::unavailable(format!(
+                "{what}: not read in full within {}s, {} pages in",
+                within.as_secs(),
+                n - 1
+            )));
+        }
+        let got = page(n, left)?;
+        all.extend(got.items);
+        if !got.more {
+            break;
+        }
+    }
+    Ok(all)
 }
 
 /// The repository (OWNER/NAME) a path is under, `/repos/OWNER/NAME/...`:
@@ -546,51 +663,86 @@ fn etag(response: &Response) -> Option<&str> {
     header(response, "etag")
 }
 
-/// An error status. GitHub's limits, a 429 and its own 5xx are passing:
-/// GitHub is unavailable, not the request wrong. A limit is a 403 or 429
-/// whose headers say so (the primary one spent, a secondary one's
-/// Retry-After) or whose message does: a secondary limit can come with
-/// neither header, and a message lost to the network leaves it unknown, so
-/// unavailable too. Anything else refused, a permission or validation
-/// failure, stays refused.
+/// An error status, named with what GitHub said of it. GitHub's limits, a
+/// 429 and its own 5xx are passing: GitHub is unavailable, not the request
+/// wrong. A limit is a 403 or 429 whose headers say so (the primary one
+/// spent, a secondary one's Retry-After) or whose message does: a secondary
+/// limit can come with neither header, and a 403's message lost to the
+/// network leaves it unknown, so unavailable too. Anything else refused, a
+/// permission or validation failure, stays refused.
 fn failed(url: &str, response: &mut Response) -> ApiError {
     let status = response.status().as_u16();
-    let what = format!("{url}: http status: {status}");
     let limited = header(response, "x-ratelimit-remaining") == Some("0")
         || header(response, "retry-after").is_some();
-    if passing_status(status) || status == 403 && limited {
-        return ApiError::unavailable(what);
-    }
-    if status != 403 {
-        return ApiError::new(what);
-    }
-    match says_rate_limit(url, response) {
-        Ok(true) => ApiError::unavailable(what),
-        Ok(false) => ApiError::new(what),
-        Err(e) if e.unavailable => {
-            ApiError::unavailable(format!("{what}, its message unread: {e}"))
+    let said = said(url, response);
+    let mut what = format!("{url}: http status: {status}");
+    let mut words = None;
+    match &said {
+        Ok(Some(s)) => {
+            let errors = s
+                .errors
+                .as_ref()
+                .map(|e| format!(" {e}"))
+                .unwrap_or_default();
+            let given = format!("{}{errors}", s.message);
+            what = format!("{what}: {}", brief(&given));
+            words = Some(given);
         }
-        Err(e) => ApiError::new(format!("{what}, its message unread: {e}")),
+        Ok(None) => {}
+        Err(e) => what = format!("{what}, its message unread: {e}"),
+    }
+    let unavailable = passing_status(status)
+        || status == 403
+            && (limited
+                || match &said {
+                    Ok(s) => s
+                        .as_ref()
+                        .is_some_and(|s| s.message.to_lowercase().contains("rate limit")),
+                    Err(e) => e.unavailable,
+                });
+    let error = if unavailable {
+        ApiError::unavailable(what)
+    } else {
+        ApiError::new(what)
+    };
+    match words {
+        Some(words) => error.saying(words),
+        None => error,
     }
 }
 
-/// Whether an error answer's message is GitHub's about a rate limit
-/// ("API rate limit exceeded", "You have exceeded a secondary rate limit").
-/// One that isn't JSON isn't GitHub's; one that can't be read is an error.
-fn says_rate_limit(url: &str, response: &mut Response) -> Result<bool, ApiError> {
-    #[derive(Deserialize)]
-    struct Message {
-        message: String,
-    }
+/// What GitHub said of an error status: its message ("API rate limit
+/// exceeded", "BadObjectState") and, for a validation failure, the errors it
+/// lists. An answer that isn't such JSON isn't GitHub's and says nothing; one
+/// that can't be read is an error.
+#[derive(Deserialize)]
+struct Said {
+    message: String,
+    errors: Option<serde_json::Value>,
+}
+
+fn said(url: &str, response: &mut Response) -> Result<Option<Said>, ApiError> {
     let body = response
         .body_mut()
         .with_config()
         .limit(MAX_MESSAGE)
         .read_to_vec()
         .map_err(|e| unreachable(url, e))?;
-    Ok(serde_json::from_slice::<Message>(&body)
-        .is_ok_and(|m| m.message.to_lowercase().contains("rate limit")))
+    Ok(serde_json::from_slice(&body).ok())
 }
+
+/// What GitHub said, on one line and no longer than [`MAX_SAID`] characters:
+/// enough to tell its causes apart, never a page of it in each log line.
+fn brief(said: &str) -> String {
+    let line = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(MAX_SAID) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
+/// The most characters of what GitHub said an error keeps.
+const MAX_SAID: usize = 300;
 
 /// The most of an error answer read for its message.
 const MAX_MESSAGE: u64 = 64 * 1024;
@@ -639,18 +791,23 @@ impl Source for Api {
         // Every run, reruns included, not only each check's latest; the runs
         // come wrapped with their count rather than as a bare page.
         let path = format!("/repos/{repo}/commits/{sha}/check-runs?filter=all");
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: CheckRuns = self.get(&format!("{path}&per_page=100&page={page}"))?;
-            let short = got.check_runs.len() < 100;
-            all.extend(got.check_runs);
-            if short || all.len() >= got.total_count {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+        let mut read = 0;
+        paged(&path, self.read_for, |page, left| {
+            let got: CheckRuns =
+                self.get_within(&format!("{path}&per_page=100&page={page}"), left)?;
+            read += got.check_runs.len();
+            let more = got.check_runs.len() == PER_PAGE && read < got.total_count;
+            Ok(Page {
+                items: got.check_runs,
+                more,
+            })
+        })
+    }
+
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let all: Vec<flow::Annotation> =
+            self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;
+        Ok(all.into_iter().map(|a| a.message).collect())
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
@@ -695,7 +852,6 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
         files: files
             .into_iter()
             .map(|f| Touched {
-                new: matches!(f.status.as_deref(), Some("added" | "renamed" | "copied")),
                 path: f.filename,
                 from: f.previous_filename,
             })
@@ -704,8 +860,9 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
 }
 
 mod actions;
-mod carry;
 mod flow;
+#[cfg(test)]
+pub(crate) use flow::ThreadNode;
 mod flow_write;
 mod history;
 pub use history::History;

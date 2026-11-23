@@ -5,6 +5,13 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub(super) mod judge_issuance;
+pub(super) mod proof_plan;
+pub(super) mod step;
+
+#[cfg(test)]
+mod tests;
+
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -45,11 +52,13 @@ pub struct Record {
     pub decision: Option<Next>,
     pub jobs: Vec<super::jobs::Work>,
     pub failed: Option<Failure>,
-    pub failed_review: Option<FailedPost>,
+    /// What the failed effect said: the status of its retry shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_why: Option<String>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
     /// Deferred dispatches this controller sent, until they are forgotten.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dispatches: Vec<super::deferred::Dispatch>,
 }
 
@@ -72,6 +81,7 @@ impl Record {
             }
             if self.failed == Some(Failure::Stop) {
                 self.failed = None;
+                self.failed_why = None;
             }
         }
     }
@@ -92,7 +102,6 @@ pub struct Landing {
     #[serde(default)]
     pub revision: Option<Revision>,
     pub base: String,
-    pub delegated: bool,
     #[serde(default)]
     pub accepted: bool,
     #[serde(default)]
@@ -124,6 +133,11 @@ impl Drop for LocalLock {
         let _ = self.0.unlock();
     }
 }
+/// A repository's flow directory under `root`: its records, its lock and its
+/// workers' invocations and answers.
+pub fn dir(root: &Path, repo: &conary_core::op::Repo) -> PathBuf {
+    root.join("flow").join(repo.to_string().to_lowercase())
+}
 pub struct Data {
     dir: PathBuf,
     _lock: LocalLock,
@@ -135,7 +149,7 @@ impl Data {
     }
 
     pub fn open(root: &Path, repo: &conary_core::op::Repo) -> Result<Self> {
-        let dir = root.join("flow").join(repo.to_string().to_lowercase());
+        let dir = dir(root, repo);
         fs::create_dir_all(&dir)?;
         let lock = LocalLock::take(&dir.join("lock"))?;
         Ok(Self { dir, _lock: lock })
@@ -155,6 +169,10 @@ impl Data {
         }
         numbers.sort_unstable();
         Ok(numbers)
+    }
+    /// The repository's flow directory, which this holds the lock of.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
     }
     pub fn path(&self, pr: u64) -> PathBuf {
         self.dir.join(format!("{pr}.json"))

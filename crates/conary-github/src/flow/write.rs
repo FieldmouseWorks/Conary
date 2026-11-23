@@ -16,17 +16,23 @@ pub trait Write: Read + crate::train::Forge {
     fn cancel_run(&self, repo: &str, run: u64) -> Result<(), ApiError>;
     fn status(&self, repo: &str, head: &str, settled: bool, text: &str) -> Result<(), ApiError>;
     fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError>;
-    fn review(&self, repo: &str, pr: u64, head: &str, body: &str) -> Result<(), ApiError>;
+    /// Post a comment in the PR's conversation.
+    fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError>;
+    /// Reply on review thread `thread`, by GitHub's id.
+    fn reply(&self, repo: &str, pr: u64, thread: &str, body: &str) -> Result<(), ApiError>;
+    /// Resolve review thread `thread`.
+    fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError>;
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError>;
+    /// Ask the App whose check suite `suite` is to run it again.
+    fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError>;
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
     fn owner(&self, repo: &str, pr: u64, label: &str) -> Result<(), ApiError>;
     fn disable_auto_merge(&self, repo: &str, pr: u64) -> Result<(), ApiError>;
 }
 impl Stage {
     /// Every stage that has a label, in stages.py's order.
-    pub const LABELLED: [Stage; 11] = [
+    pub const LABELLED: [Stage; 10] = [
         Self::Review,
-        Self::Reviewer,
         Self::Fix,
         Self::Ci,
         Self::ProofSlot,
@@ -52,7 +58,6 @@ impl Stage {
     pub fn label(self) -> Option<&'static str> {
         Some(match self {
             Self::Review => "waiting: review",
-            Self::Reviewer => "waiting: reviewer",
             Self::Fix => "waiting: fix",
             Self::Ci => "waiting: CI",
             Self::ProofSlot => "waiting: proof slot",

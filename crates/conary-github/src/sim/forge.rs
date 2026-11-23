@@ -6,18 +6,18 @@ use serde_json::{Value, json};
 use conary_core::policy::Paths;
 
 use crate::api::{
-    ApiError, CheckRun, Commit, Comparison, Event, PullRequest, Pulls, Review, Source, Status,
-    compared,
+    ApiError, CheckRun, Commit, Comparison, Event, PER_PAGE, Page, PullRequest, Pulls, READ_FOR,
+    Review, Source, Status, compared, paged,
 };
 use crate::attest::{Actions, Artifact, Job, Key, testing};
 use crate::branches::{Branches, Merged};
-use crate::train::{CONTEXT, Forge, Mark, PrMerge};
+use crate::train::{CONTEXT, Forge, Mark, PrMerge, WorkflowRun};
 use crate::undo::Reverts;
 
 use super::faults::{Asked, Call};
 use super::{FRESH, Hub, STEWARD, World, fixtures, parse};
 
-fn not_found(what: impl std::fmt::Display) -> ApiError {
+pub(super) fn not_found(what: impl std::fmt::Display) -> ApiError {
     ApiError::new(format!("{what}: Not Found"))
 }
 
@@ -36,13 +36,12 @@ impl Source for Hub {
     }
     fn comments(&self, repo: &str, pr: u64) -> Result<Vec<crate::api::Comment>, ApiError> {
         let n = pr.to_string();
-        self.read(Asked::new(Call::Comments, repo).pr(pr), &[repo, &n], |w| {
+        self.read_pages(Asked::new(Call::Comments, repo).pr(pr), &[repo, &n], |w| {
             Ok(repo_of(w, repo)?
                 .comments
                 .get(&pr)
                 .into_iter()
                 .flatten()
-                .map(parse)
                 .collect())
         })
     }
@@ -69,6 +68,8 @@ impl Source for Hub {
                     .get(&(base.into(), head.into()))
                     .copied()
                     .unwrap_or(usize::MAX);
+                // Oldest first, as GitHub lists them.
+                commits.reverse();
                 let complete = commits.len() <= limit;
                 commits.truncate(limit);
                 Ok(crate::api::History { commits, complete })
@@ -94,45 +95,54 @@ impl Source for Hub {
     }
 
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
-        self.read(Asked::new(Call::Pulls, repo), &[repo], |w| {
-            let all = repo_of(w, repo)?.pulls.values();
-            Ok(match which {
-                Pulls::All => all.map(parse).collect(),
-                Pulls::Open => all.filter(|p| p["state"] == "open").map(parse).collect(),
-                Pulls::RecentlyClosed => all
+        let asked = Asked::new(Call::Pulls, repo);
+        match which {
+            Pulls::All => self.read_pages(asked, &[repo], |w| {
+                Ok(repo_of(w, repo)?.pulls.values().collect())
+            }),
+            Pulls::Open => self.read_pages(asked, &[repo], |w| {
+                let all = repo_of(w, repo)?.pulls.values();
+                Ok(all.filter(|p| p["state"] == "open").collect())
+            }),
+            // One page, as GitHub's is.
+            Pulls::RecentlyClosed => self.read(asked, &[repo], |w| {
+                let all = repo_of(w, repo)?.pulls.values();
+                Ok(all
                     .filter(|p| p["state"] == "closed")
                     .rev()
                     .map(parse)
-                    .collect(),
-            })
-        })
+                    .collect())
+            }),
+        }
     }
 
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {
-        self.read(Asked::new(Call::CheckRuns, repo), &[repo, sha], |w| {
-            Ok(w.checks.get(sha).into_iter().flatten().map(parse).collect())
+        self.read_pages(Asked::new(Call::CheckRuns, repo), &[repo, sha], |w| {
+            Ok(w.checks.get(sha).into_iter().flatten().collect())
+        })
+    }
+
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+        let id = run.to_string();
+        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
+            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
         })
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {
-        self.read(Asked::new(Call::Statuses, repo), &[repo, sha], |w| {
-            Ok(w.statuses
-                .get(sha)
-                .into_iter()
-                .flatten()
-                .map(parse)
-                .collect())
+        self.read_pages(Asked::new(Call::Statuses, repo), &[repo, sha], |w| {
+            Ok(w.statuses.get(sha).into_iter().flatten().collect())
         })
     }
 
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError> {
         let n = number.to_string();
-        self.read(
+        self.read_pages(
             Asked::new(Call::Reviews, repo).pr(number),
             &[repo, &n],
             |w| {
                 let r = repo_of(w, repo)?.reviews.get(&number);
-                Ok(r.into_iter().flatten().map(parse).collect())
+                Ok(r.into_iter().flatten().collect())
             },
         )
     }
@@ -155,12 +165,12 @@ impl Source for Hub {
 
     fn timeline(&self, repo: &str, number: u64) -> Result<Vec<Event>, ApiError> {
         let n = number.to_string();
-        self.read(
+        self.read_pages(
             Asked::new(Call::Timeline, repo).pr(number),
             &[repo, &n],
             |w| {
                 let t = repo_of(w, repo)?.timeline.get(&number);
-                Ok(t.into_iter().flatten().map(parse).collect())
+                Ok(t.into_iter().flatten().collect())
             },
         )
     }
@@ -186,7 +196,7 @@ impl Source for Hub {
                     .map(|t| json!({
                         "filename": t.path,
                         "previous_filename": t.from,
-                        "status": if t.from.is_some() {"renamed"} else if t.new { "added" } else { "modified" },
+                        "status": if t.from.is_some() {"renamed"} else { "modified" },
                     }))
                     .collect::<Vec<_>>()
             );
@@ -204,6 +214,7 @@ impl Actions for Hub {
         self.read(Asked::new(Call::Job, repo), &[repo, &n], |w| {
             Ok(Some(Job {
                 run_id: job * 10,
+                run_attempt: w.attempt(job),
                 runner_name: Some(
                     w.runners
                         .get(&job)
@@ -225,7 +236,7 @@ impl Actions for Hub {
                 .map(|(i, (name, _))| Artifact {
                     id: run * 10 + i as u64,
                     name: name.clone(),
-                    expired: w.expired_artifacts.contains(&(run / 10)),
+                    expired: w.expired.contains(&(run / 10)),
                 })
                 .collect())
         })
@@ -407,6 +418,29 @@ impl Reverts for Hub {
 }
 
 impl Forge for Hub {
+    fn workflow_run(&self, repo: &str, run: u64) -> Result<WorkflowRun, ApiError> {
+        let n = run.to_string();
+        self.read(Asked::new(Call::WorkflowRun, repo), &[repo, &n], |w| {
+            Ok(w.workflow_run(run / 10))
+        })
+    }
+
+    fn rerun(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowRerun, repo),
+            &[repo, &run.to_string()],
+            || {
+                let suite = self
+                    .world
+                    .borrow()
+                    .suite_of(repo, run)
+                    .ok_or_else(|| ApiError::new("Not Found").saying("Not Found"))?;
+                self.run_again(suite);
+                Ok(())
+            },
+        )
+    }
+
     fn mark(
         &self,
         repo: &str,
@@ -437,11 +471,17 @@ impl Forge for Hub {
         })
     }
 
-    fn land(&self, repo: &str, pr: u64, head: &str) -> Result<PrMerge, ApiError> {
+    fn land(
+        &self,
+        repo: &str,
+        pr: u64,
+        head: &str,
+        message: &crate::train::Message,
+    ) -> Result<PrMerge, ApiError> {
         let n = pr.to_string();
         self.write(
             Asked::new(Call::Land, repo).pr(pr),
-            &[repo, &n, head],
+            &[repo, &n, head, &message.title, &message.body],
             || {
                 let refused = self
                     .world
@@ -459,7 +499,7 @@ impl Forge for Hub {
                 if p["state"] != "open" {
                     return Ok(PrMerge::Refused("Pull Request is not mergeable".into()));
                 }
-                Ok(match self.squash(repo, pr, head) {
+                Ok(match self.squash(repo, pr, head, message) {
                     Ok(_) => PrMerge::Merged,
                     Err(why) => PrMerge::Refused(why),
                 })
@@ -480,25 +520,6 @@ impl crate::flow::Read for Hub {
                 .cloned()
                 .unwrap_or_default())
         })
-    }
-
-    fn carries(&self, repo: &str, base: &str, head: &str, old: &str) -> Result<bool, ApiError> {
-        self.read(
-            Asked::new(Call::Carries, repo),
-            &[repo, base, head, old],
-            |w| {
-                let tip = repo_of(w, repo)?
-                    .branches
-                    .get(base)
-                    .map(String::as_str)
-                    .unwrap_or(base);
-                let fork = w
-                    .merge_base(tip, head)
-                    .ok_or_else(|| not_found("merge base"))?;
-                Ok(w.three_way(&fork, old)
-                    .is_some_and(|tree| w.commits.get(head).is_some_and(|c| c.patches == tree)))
-            },
-        )
     }
 
     fn workflow_runs(
@@ -526,7 +547,7 @@ impl crate::flow::Read for Hub {
         )
     }
 
-    fn workflow_run(
+    fn dispatched_run(
         &self,
         repo: &str,
         run: u64,
@@ -545,29 +566,101 @@ impl crate::flow::Read for Hub {
         )
     }
 
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
-        let id = run.to_string();
-        self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
-            Ok(w.annotations.get(&run).cloned().unwrap_or_default())
-        })
-    }
+    /// The PR and its head's first page of check suites in one call, as
+    /// GitHub's query answers, then the rest a page at a time, on that
+    /// head, through the pager the API reads GitHub's with.
     fn snapshot(&self, repo: &str, number: u64) -> Result<crate::flow::Snapshot, ApiError> {
         let n = number.to_string();
-        self.read(
-            Asked::new(Call::FlowSnapshot, repo).pr(number),
-            &[repo, &n],
-            |w| {
-                let mut snapshot = repo_of(w, repo)?
-                    .flow
-                    .get(&number)
-                    .cloned()
-                    .ok_or_else(|| not_found(format!("flow #{number}")))?;
-                if snapshot.default_branch.is_none() {
-                    snapshot.default_branch = w.base_observation(repo);
-                }
-                Ok(snapshot)
-            },
-        )
+        let mut first = None;
+        let mut head = String::new();
+        let suites = paged(&format!("flow #{number}"), READ_FOR, |page, _| {
+            if page == 1 {
+                let snapshot = self.read(
+                    Asked::new(Call::FlowSnapshot, repo).pr(number),
+                    &[repo, &n],
+                    |w| {
+                        let mut snapshot = repo_of(w, repo)?
+                            .flow
+                            .get(&number)
+                            .cloned()
+                            .ok_or_else(|| not_found(format!("flow #{number}")))?;
+                        for thread in snapshot.threads.values_mut() {
+                            for comment in &mut thread.comments {
+                                *comment = super::flow::read_back(comment);
+                            }
+                        }
+                        if snapshot.default_branch.is_none() {
+                            snapshot.default_branch = w.base_observation(repo);
+                        }
+                        snapshot.suites = suites(w, &snapshot.suites, &snapshot.revision.head);
+                        Ok(snapshot)
+                    },
+                );
+                let mut snapshot = snapshot?;
+                head.clone_from(&snapshot.revision.head);
+                let all = std::mem::take(&mut snapshot.suites);
+                first = Some(snapshot);
+                Ok(suite_page(all, 1))
+            } else {
+                self.read(
+                    Asked::new(Call::CheckSuites, repo).pr(number),
+                    &[repo, &head],
+                    |w| {
+                        let named = &repo_of(w, repo)?
+                            .flow
+                            .get(&number)
+                            .ok_or_else(|| not_found(format!("flow #{number}")))?
+                            .suites;
+                        Ok(suite_page(suites(w, named, &head), page))
+                    },
+                )
+            }
+        })?;
+        let mut snapshot = first.expect("a paged read reads its first page");
+        snapshot.suites = suites.into_iter().collect();
+        Ok(snapshot)
+    }
+}
+
+/// Every suite of the head's check runs, as GitHub's snapshot holds them:
+/// those a test `named`, and one it didn't is an App's that runs no
+/// workflow.
+fn suites(
+    w: &World,
+    named: &std::collections::BTreeMap<u64, crate::flow::Suite>,
+    head: &str,
+) -> std::collections::BTreeMap<u64, crate::flow::Suite> {
+    let mut suites = named.clone();
+    for run in w.checks.get(head).into_iter().flatten() {
+        let Some(id) = run["check_suite"]["id"].as_u64() else {
+            continue;
+        };
+        let suite = suites.entry(id).or_insert_with(|| crate::flow::Suite {
+            status: "completed".into(),
+            conclusion: None,
+            app: String::new(),
+            workflow: None,
+        });
+        if suite.app.is_empty() && run["status"] != "completed" {
+            suite.status = "in_progress".into();
+        }
+    }
+    suites
+}
+
+/// Page `n` of a head's suites, oldest first.
+fn suite_page(
+    all: std::collections::BTreeMap<u64, crate::flow::Suite>,
+    n: usize,
+) -> Page<(u64, crate::flow::Suite)> {
+    let more = all.len() > n * PER_PAGE;
+    Page {
+        items: all
+            .into_iter()
+            .skip((n - 1) * PER_PAGE)
+            .take(PER_PAGE)
+            .collect(),
+        more,
     }
 }
 

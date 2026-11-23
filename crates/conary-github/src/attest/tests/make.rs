@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::api::CheckRun;
 use crate::attest::make::*;
 use crate::attest::testing::{claims, key, signer, token as signed};
-use crate::attest::{Subject, check};
+use crate::attest::{Attested, Subject, check, skipped};
 
 const COMMIT: &str = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
 const TREE: &str = "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
@@ -30,6 +30,7 @@ fn run(conclusion: &str) -> CheckRun {
         started_at: None,
         check_suite: None,
         external_id: None,
+        output: None,
     }
 }
 
@@ -40,6 +41,11 @@ fn log() -> Log {
 /// The file a job makes for `claim`, signed for as GitHub would sign its
 /// token, checked as the verifier checks one.
 fn made_and_checked(claim: &Claim, subject: Subject, conclusion: &str) -> Result<Outcome, String> {
+    made(claim, subject, conclusion).map(|a| a.result)
+}
+
+/// What the verifier reads of the file a job makes for `claim`.
+fn made(claim: &Claim, subject: Subject, conclusion: &str) -> Result<Attested, String> {
     let s = statement(claim)?.text();
     let mut c = claims("FieldmouseWorks/remi", COMMIT, RUN, &s);
     assert_eq!(c["aud"], json!(audience(&s)));
@@ -53,7 +59,7 @@ fn made_and_checked(claim: &Claim, subject: Subject, conclusion: &str) -> Result
         &run(conclusion),
         &signer(),
     )
-    .map(|claimed| claimed.attested.result)
+    .map(|claimed| claimed.attested)
 }
 
 #[test]
@@ -68,6 +74,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: COMMIT,
         tree: TREE,
+        definition: None,
     };
     assert_eq!(
         made_and_checked(&pushed, push, "success"),
@@ -77,6 +84,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let elsewhere = Subject::Commit {
         commit: COMMIT,
         tree: BASE,
+        definition: None,
     };
     assert!(
         made_and_checked(&pushed, elsewhere, "success")
@@ -96,12 +104,10 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
             .unwrap_err()
             .contains("says fail")
     );
-    let skipping = commit(Gate::Pass, &["vm"]);
-    assert!(
-        made_and_checked(&skipping, push, "success")
-            .unwrap_err()
-            .contains("skipped vm")
-    );
+    // A pass that skipped a check is one of those it ran, and names it.
+    let skipping = made(&commit(Gate::Pass, &["vm"]), push, "success").unwrap();
+    assert_eq!(skipping.result, Outcome::Pass);
+    assert_eq!(skipped(&skipping.attest).unwrap(), ["vm"]);
 
     let pr = Subject::Negative {
         base: BASE,
@@ -132,6 +138,7 @@ fn what_a_job_makes_is_what_the_verifier_reads() {
     let push = Subject::Commit {
         commit: HEAD,
         tree: TREE,
+        definition: None,
     };
     assert!(made_and_checked(&failed, push, "success").is_err());
 }
@@ -207,14 +214,19 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
         none.contains(r#""result":"none""#) && none.contains(r#""tree":null"#),
         "{none}"
     );
-    // The results a job names them by, and nothing else.
-    for (word, gate) in [
-        ("pass", Some(Gate::Pass)),
-        ("fail", Some(Gate::Fail)),
-        ("Pass", None),
-        ("none", None),
+    // The results a job names them by, and nothing else. Why it broke is
+    // an error's alone, and no error is without it.
+    for (word, why, gate) in [
+        ("pass", None, Some(Gate::Pass)),
+        ("fail", None, Some(Gate::Fail)),
+        ("error", Some("full"), Some(Gate::Error("full".into()))),
+        ("error", None, None),
+        ("pass", Some("full"), None),
+        ("fail", Some("full"), None),
+        ("Pass", None, None),
+        ("none", None, None),
     ] {
-        assert_eq!(word.parse::<Gate>().ok(), gate, "{word}");
+        assert_eq!(Gate::named(word, why).ok(), gate, "{word} {why:?}");
     }
     for (word, result) in [
         ("fail", Some(Negative::Fail)),
@@ -224,6 +236,46 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
         ("", None),
     ] {
         assert_eq!(word.parse::<Negative>().ok(), result, "{word}");
+    }
+}
+
+#[test]
+fn a_gate_that_broke_is_made_with_why_on_one_line_and_never_counts() {
+    let why = "couldn't write its log: No space left on device (os error 28)";
+    let commit = |why: &str| Claim::Commit {
+        commit: COMMIT.into(),
+        result: Gate::Error(why.into()),
+        tree: TREE.into(),
+        skipped: Vec::new(),
+        log: log(),
+    };
+    let revision = |why: &str| Claim::Revision {
+        base: BASE.into(),
+        head: COMMIT.into(),
+        result: Gate::Error(why.into()),
+        tree: TREE.into(),
+        skipped: Vec::new(),
+        log: log(),
+    };
+    let subject = Subject::Gate {
+        commit: COMMIT,
+        tree: TREE,
+    };
+    for claim in [commit(why), revision(why)] {
+        let made = statement(&claim).unwrap().predicate;
+        // burrow's bytes: `error` is after the log.
+        assert!(
+            made.ends_with(&format!(r#""artifact":"gate-log-1"}},"error":"{why}"}}"#)),
+            "{made}"
+        );
+        let refused = made_and_checked(&claim, subject, "success").unwrap_err();
+        assert!(refused.contains("says error"), "{refused}");
+    }
+    for bad in ["", "  ", "full\nagain", "full\r"] {
+        for claim in [commit(bad), revision(bad)] {
+            let refused = statement(&claim).unwrap_err();
+            assert!(refused.contains("one line"), "{bad:?}: {refused}");
+        }
     }
 }
 

@@ -12,6 +12,8 @@ pub(super) const BLANK_DOCS: &str = "check / docs only into ${{ github.event.pul
 pub(super) const BLANK_LANE: &str = "check / lane into ${{ github.event.pull_request.base.ref }}";
 pub(super) const GATE: &str = "check / check";
 pub(super) const TWIN: &str = ".github/workflows/flake-retarget.yml";
+/// A suite's workflow run id is this past the suite's.
+pub(super) const RUN: u64 = 9000;
 
 #[derive(Clone)]
 pub(super) struct Run {
@@ -31,6 +33,7 @@ impl Run {
                     id: "flake".into(),
                     name: "flake".into(),
                     path: Some(".github/workflows/flake.yml".into()),
+                    run: Some(RUN + suite),
                 }),
             },
             checks: jobs
@@ -77,6 +80,7 @@ impl Run {
             id: id.into(),
             name: "flake".into(),
             path: path.map(str::to_owned),
+            run: Some(RUN + self.suite),
         });
         self
     }
@@ -89,6 +93,12 @@ impl Run {
         self.checks.push(json!({"id": self.suite*100+i,"name":name,"status":"completed","conclusion":conclusion,"check_suite":{"id":self.suite}}));
         self
     }
+}
+
+/// A machine policy that names `docs/` and READMEs documentation: a PR's
+/// paths have to be, as well as its docs lane green, for proofs to be waived.
+pub(super) fn docs_policy() -> conary_core::Policy {
+    conary_core::Policy::parse(br#"{"docs": ["^docs/", "(^|/)README\\.md$"]}"#).unwrap()
 }
 
 pub(super) struct Scenario {
@@ -107,14 +117,15 @@ impl Scenario {
                 draft: false,
                 complete: true,
                 merge_state: "CLEAN".into(),
+                diff: None,
                 open_threads: 0,
                 threads: Default::default(),
                 resolved_reviews: Default::default(),
                 updated_at: 0,
                 suites: BTreeMap::new(),
-                checks_complete: true,
                 rebase_removed: Vec::new(),
                 timeline_cut_at: None,
+                since: Default::default(),
             },
         );
         Self { hub, memory }
@@ -127,7 +138,7 @@ impl Scenario {
                     .iter()
                     .map(|p| ((*p).into(), Recipe::Job("run proof".into())))
                     .collect(),
-                ..Settings::default()
+                ..crate::sim::settings()
             },
         )
     }
@@ -145,7 +156,7 @@ impl Scenario {
             &self.hub,
             &REMI.parse().unwrap(),
             3,
-            &conary_core::Policy::parse(b"{}").unwrap(),
+            &docs_policy(),
             settings,
             &["owner".into()],
         )
@@ -183,4 +194,12 @@ impl Scenario {
             Ci::None => panic!("these scenarios all have CI"),
         }
     }
+}
+
+/// Past CI and at its proof. The checks `Scenario::read` configures are
+/// model-run, so they wait there, with their reason, and start nothing.
+pub(super) fn at_proof(n: &Next) -> bool {
+    n.stage == Stage::Proof
+        && n.step == Step::Wait { until: None }
+        && n.description.contains("model-run check, not a proof")
 }

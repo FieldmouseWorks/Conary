@@ -330,6 +330,7 @@ fn an_undo_and_what_it_reverts_name_each_other() {
                 head: c("e"),
             },
             Body::Undo {
+                reason: Some("The landed change broke the health check".into()),
                 change: two,
                 reverts: vec![one],
                 asked: crate::op::Asked::Change,
@@ -350,6 +351,11 @@ fn an_undo_and_what_it_reverts_name_each_other() {
     assert_eq!(list[0]["status"], "reverted");
     assert_eq!(list[0]["reverted_by"], two.to_string());
     assert_eq!(list[1]["reverts"], json!([one.to_string()]));
+    let undo = call(&ledger, "change.get", &json!({"change": two.to_string()})).unwrap();
+    assert_eq!(
+        undo["undo"]["reason"],
+        "The landed change broke the health check"
+    );
     let reverted = call(&ledger, "change.list", &json!({"status": "reverted"})).unwrap();
     assert_eq!(prs(&reverted), [1]);
 }

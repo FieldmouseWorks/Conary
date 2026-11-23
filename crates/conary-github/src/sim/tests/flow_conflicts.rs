@@ -54,7 +54,7 @@ fn conflicts_are_fixed_before_any_review_ci_or_judge_landing() {
             }
             1 => {
                 c.secret();
-                c.judge("land");
+                c.judge("pass");
             }
             _ => {
                 c.hub.set_branch(REMI, "release", super::TRUNK);
@@ -131,7 +131,9 @@ fn swept_and_held_conflicts_never_get_a_second_fix_job() {
     }
     let mut c = bot(true, true, true);
     c.sweep("held");
-    assert_eq!(c.view(700).step, Step::ListOwner);
+    let n = c.view(700);
+    assert_eq!(n.step, Step::Wait { until: None });
+    assert!(n.description.starts_with("Major update held"), "{n:?}");
 }
 #[test]
 fn an_old_conflict_job_is_listed_even_when_queued_or_unknown() {

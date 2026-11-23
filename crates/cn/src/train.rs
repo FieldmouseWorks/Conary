@@ -11,10 +11,28 @@ use conary_core::op::{Left, Repo};
 use std::path::PathBuf;
 
 use conary_core::{CandidateId, ChangeId, Policy};
-use conary_github::attest::Signer;
+use conary_github::attest::service::Producers;
+use conary_github::attest::{Signer, Trust};
 use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
 use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
+
+/// Whose attestations count, as the machine names them. A producer keys
+/// file that's named and doesn't read is an error, never no producers.
+fn trust(
+    signer: &Signer,
+    fresh: &Option<String>,
+    producers: Option<&std::path::Path>,
+) -> Result<Trust> {
+    Ok(Trust {
+        signer: signer.clone(),
+        fresh: fresh.clone(),
+        producers: match producers {
+            Some(path) => Producers::load(path)?,
+            None => Producers::default(),
+        },
+    })
+}
 
 /// Why a join held a PR out ([`Joined::Raised`]), as the steward shows it.
 const RAISED: &str =
@@ -67,6 +85,13 @@ pub enum TrainCommand {
         /// besides GitHub's own.
         #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         fresh: Option<String>,
+        /// As for a step: the services whose signed negatives count.
+        #[arg(
+            long = "producer-keys",
+            env = "CONARY_PRODUCER_KEYS",
+            value_name = "FILE"
+        )]
+        producers: Option<PathBuf>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -97,8 +122,8 @@ pub enum TrainCommand {
         /// The repository, as owner/name.
         repo: Repo,
         /// The most changes a candidate holds.
-        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u64).range(1..))]
-        size: u64,
+        #[arg(long, default_value_t = train::DEFAULT_SIZE)]
+        size: std::num::NonZeroUsize,
         /// A check the gate waits for before it can be green, even before it
         /// reports, whose pass counts only with its job's attestation: the
         /// repo's gate, as its shared CI runs it. Repeat for each; a step
@@ -124,6 +149,17 @@ pub enum TrainCommand {
         /// it for every `cn`.
         #[arg(long = "fresh-runners", env = "CONARY_FRESH_RUNNERS", value_name = "PREFIX", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         fresh: Option<String>,
+        /// The machine's producer keys, a JSON file
+        /// (docs/service-attestation.md): the services on it (reviewers,
+        /// proof, judge and negative jobs) whose signed results count, each
+        /// for the checks it names. A machine setting, like the signer: with
+        /// none, no service's result counts.
+        #[arg(
+            long = "producer-keys",
+            env = "CONARY_PRODUCER_KEYS",
+            value_name = "FILE"
+        )]
+        producers: Option<PathBuf>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -183,14 +219,14 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             negative,
             signer,
             fresh,
+            producers,
             ..
         } => {
             let policy = Policy::load(policy)?;
             let negatives = match (negative, signer) {
                 (Some(check), Some(signer)) => Some(Negatives {
                     check: check.clone(),
-                    signer: signer.clone(),
-                    fresh: fresh.clone(),
+                    trust: trust(signer, fresh, producers.as_deref())?,
                 }),
                 (Some(_), None) => unreachable!("--negative requires --signer-workflow"),
                 (None, _) => None,
@@ -262,13 +298,13 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
             require,
             signer,
             fresh,
+            producers,
             ..
         } => {
             let settings = Settings {
-                size: usize::try_from(*size)?,
+                size: size.get(),
                 require: require.clone(),
-                signer: signer.clone(),
-                fresh: fresh.clone(),
+                trust: trust(signer, fresh, producers.as_deref())?,
             };
             train::step(store, &api, &api, &config, repo, &settings)
                 .map(|s| (stepped(&s), human_stepped(repo, &s)))
@@ -339,6 +375,17 @@ fn human_stepped(repo: &Repo, s: &Stepped) -> String {
             "{repo}#{}: red alone ({}), left the train",
             r.pr,
             checks.join(", ")
+        ));
+    }
+    for pr in &s.released {
+        lines.push(format!(
+            "{repo}#{pr}: the gate it was red alone in passed since, free to join again"
+        ));
+    }
+    for left in &s.unread {
+        lines.push(format!(
+            "{repo}#{}: still held red alone, its gate unread ({})",
+            left.pr, left.why
         ));
     }
     for pr in &s.landed {
@@ -424,7 +471,7 @@ fn candidate(ledger: &Ledger, c: &Candidate) -> Value {
 
 fn show(ledger: &Ledger, repo: &Repo) -> Value {
     let Some(t) = ledger.train(repo) else {
-        return json!({"joined": [], "in_flight": null, "candidates": []});
+        return json!({"joined": [], "in_flight": null, "red_alone": [], "candidates": []});
     };
     json!({
         "joined": t.joined().iter().map(|m| json!({
@@ -434,6 +481,11 @@ fn show(ledger: &Ledger, repo: &Repo) -> Value {
             "alone": t.alone(m.change),
         })).collect::<Vec<_>>(),
         "in_flight": t.in_flight().map(|id| id.to_string()),
+        // A train with any of these has a step to take however idle it is.
+        "red_alone": ledger.red_alone(repo).iter()
+            .filter_map(|id| ledger.candidate(*id))
+            .map(|c| pr_of(ledger, c.changes[0].change))
+            .collect::<Vec<_>>(),
         "candidates": t.candidates().iter()
             .filter_map(|id| ledger.candidate(*id))
             .map(|c| candidate(ledger, c))

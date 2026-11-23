@@ -51,6 +51,7 @@ fn suite(c: &Case, id: u64, target: &str) {
                     id: "gate".into(),
                     name: "gate".into(),
                     path: Some(".github/workflows/flake.yml".into()),
+                    run: None,
                 }),
             },
         );
@@ -74,27 +75,8 @@ fn check(c: &Case, suite: u64, name: &str, conclusion: &str, receipt: Option<&[u
 fn admission_verifies_only_effective_checks_and_current_receipts() {
     let c = Case::new();
     c.clean_review();
-    c.judgment(1, Judgment::Land, true);
-    let old_body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
-    c.hub.flow_review(REPO, 3, "reviewer", Verdict::Clean, 4);
-    let body = c
-        .hub
-        .reviews(REPO, 3)
-        .unwrap()
-        .last()
-        .unwrap()
-        .body
-        .clone()
-        .unwrap();
-    c.judgment(2, Judgment::Land, true);
+    let first = c.judgment(1, Judgment::Pass, true);
+    let second = c.judgment(2, Judgment::Pass, true);
     let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
     c.hub.remove_checks(&head(3));
     c.negative(&head(3), "none");
@@ -110,16 +92,15 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
     check(
         &c,
         10,
-        "conary/review/reviewer",
-        "success",
-        Some(&review_receipt(&head(3), &old_body)),
-    );
-    check(
-        &c,
-        10,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 1, Some(Judgment::Land))),
+        Some(&judgment_receipt_by(
+            &revision,
+            1,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&first),
+        )),
     );
     suite(&c, 2, "other");
     check(&c, 2, "irrelevant failure", "failure", None);
@@ -129,16 +110,15 @@ fn admission_verifies_only_effective_checks_and_current_receipts() {
     check(
         &c,
         3,
-        "conary/review/reviewer",
-        "success",
-        Some(&review_receipt(&head(3), &body)),
-    );
-    check(
-        &c,
-        3,
         "conary/judgment",
         "success",
-        Some(&judgment_receipt(&revision, 2, Some(Judgment::Land))),
+        Some(&judgment_receipt_by(
+            &revision,
+            2,
+            Some(Judgment::Pass),
+            Some(&super::judge_provenance()),
+            Some(&second),
+        )),
     );
     let report = run(&c, None, false);
     assert_eq!(report[0].error, None, "{:?}", report[0]);
@@ -174,47 +154,44 @@ fn excluded_prs_keep_read_classification_and_can_act_on_exclusion() {
         assert_eq!(report[0].error, None, "{excluded}: {:?}", report[0]);
         assert_eq!(c.hub.count(Call::Land), 0);
         if excluded == "untrusted" {
-            assert_eq!(report[0].next.as_ref().unwrap().step, Step::ListOwner);
+            assert_eq!(
+                report[0].next.as_ref().unwrap().step,
+                Step::ListOwner(Door::Outside)
+            );
             assert!(
-                c.hub
-                    .pull(REPO, 3)
-                    .unwrap()
-                    .labels
-                    .iter()
-                    .any(|l| l.name == c.config.settings.owner_label)
+                c.hub.pull(REPO, 3).unwrap().labels.iter().any(|l| c
+                    .config
+                    .settings
+                    .owner_label
+                    .as_ref()
+                    == Some(&l.name))
             );
         }
     }
 }
 #[test]
 fn a_targeted_kick_preserves_an_excluded_live_permission() {
-    for train in [false, true] {
-        let mut c = Case::new();
-        if train {
-            c.config.settings.train = true;
-        } else {
-            c.as_bot();
-        }
-        c.clean_review();
-        let first = run(&c, Some(3), false);
-        assert_eq!(first[0].error, None, "{:?}", first[0]);
-        assert_eq!(state(&c, 3), "success");
-        assert!(c.record().live.contains(&head(3)));
-        another(&c);
-        run(&c, Some(5), false);
-        assert_eq!(state(&c, 3), "success", "train={train}");
-        if train {
-            assert!(
-                !c.store
-                    .borrow()
-                    .ledger()
-                    .train(&REPO.parse().unwrap())
-                    .unwrap()
-                    .joined()
-                    .is_empty()
-            );
-        }
-    }
+    // A seat in the train is the permission that outlasts its pass: a
+    // direct merge, a bot's included, uses its permission in the same pass.
+    let mut c = Case::new();
+    c.config.settings.train = true;
+    c.clean_review();
+    let first = run(&c, Some(3), false);
+    assert_eq!(first[0].error, None, "{:?}", first[0]);
+    assert_eq!(state(&c, 3), "success");
+    assert!(c.record().live.contains(&head(3)));
+    another(&c);
+    run(&c, Some(5), false);
+    assert_eq!(state(&c, 3), "success");
+    assert!(
+        !c.store
+            .borrow()
+            .ledger()
+            .train(&REPO.parse().unwrap())
+            .unwrap()
+            .joined()
+            .is_empty()
+    );
 }
 #[test]
 fn a_targeted_kick_recovers_uncertain_permission_on_an_excluded_pr() {
@@ -248,7 +225,6 @@ fn unsent_and_failed_merge_intents_can_be_revalidated_and_retried() {
                     target: "main".into(),
                     revision: None,
                     base: TRUNK.into(),
-                    delegated: false,
                     accepted: false,
                     retry: false,
                 }),
@@ -311,7 +287,7 @@ fn superseding_an_uncertain_head_does_not_block_the_new_revision() {
 fn dry_run_with_a_writable_store_cannot_append_ledger_operations() {
     let c = Case::new();
     c.clean_review();
-    let path = conary_core::log::log_path(c.store.borrow().lock().dir());
+    let path = conary_core::log::log_path(c.store.borrow().dir());
     let before = std::fs::read(&path).unwrap_or_default();
     let anchor = c.store.borrow().head();
     let reports = run(&c, None, true);
@@ -323,7 +299,7 @@ fn dry_run_with_a_writable_store_cannot_append_ledger_operations() {
         Call::Land,
         Call::FlowStatus,
         Call::FlowStage,
-        Call::FlowReview,
+        Call::FlowComment,
     ] {
         assert_eq!(c.hub.count(call), 0);
     }
@@ -341,21 +317,26 @@ fn corrupt_proof_answers_are_one_unknown_holder_and_do_not_break_other_prs() {
     c.hub
         .post_status(&head(3), json!({"context":"machine","state":"pending"}));
     run(&c, Some(3), false);
+    c.prepared(true, Some(3));
+    run(&c, Some(3), false);
     let record = c.record();
-    let work = &record.jobs[0];
+    let work = &record.jobs[1];
+    assert!(matches!(work.purpose, jobs::Purpose::Proof));
     std::fs::write(work.path.with_extension("answer"), b"corrupt completion").unwrap();
     another(&c);
     for dry in [true, false] {
         let reports = run(&c, Some(5), dry);
         assert_eq!(reports[0].error, None);
-        assert_eq!(
-            reports[0].next.as_ref().unwrap().step,
-            Step::QueueReview("reviewer".into())
-        );
+        // Its own decision: waiting on the connector's review of its push.
+        let next = reports[0].next.as_ref().unwrap();
+        assert_eq!(next.stage, Stage::Review);
+        assert!(matches!(next.step, Step::Wait { .. }), "{:?}", next.step);
     }
-    c.hub.flow_review(REPO, 5, "reviewer", Verdict::Clean, 0);
+    c.hub.flow_review(REPO, 5, Verdict::Clean, 0);
     c.hub
         .post_status(&head(5), json!({"context":"machine","state":"pending"}));
+    run(&c, Some(5), false);
+    c.prepared(true, Some(5));
     for slots in [1, 2] {
         c.config.settings.proof_slots = Some(slots);
         for only in [None, Some(5)] {

@@ -27,7 +27,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             .chain(f.claims.iter().map(|c| &c.job))
             .chain(f.proof_data.records.iter().map(|r| &r.job))
             .chain(f.proof_data.live.iter().map(|h| &h.job))
-            .chain(f.proof_data.inputs_job.iter().map(|h| &h.job))
+            .chain(f.proof_data.prepared.iter().map(|p| &p.job))
             .any(|j| j.id == *id && !j.state.live());
         if ended || f.stopped_jobs.contains(id) {
             m.retired_jobs.insert(id.clone());
@@ -37,6 +37,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     m.stopping.retain(|id| !m.retired_jobs.contains(id));
     m.answered_jobs.extend(m.retired_jobs.iter().cloned());
     raised.jobs.retain(|_, j| !m.retired_jobs.contains(&j.id));
+    raised.working.retain(|id| !m.retired_jobs.contains(id));
     raised
         .proof_data
         .records
@@ -45,6 +46,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .proof_data
         .live
         .retain(|h| !m.retired_jobs.contains(&h.job.id));
+    raised
+        .proof_data
+        .prepared
+        .retain(|p| !m.retired_jobs.contains(&p.job.id));
     if let Some(record) = raised
         .proof_data
         .records
@@ -52,14 +57,6 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         .max_by_key(|r| r.job.started)
     {
         raised.jobs.insert(Kind::Proof, record.job.clone());
-    }
-    if raised
-        .proof_data
-        .inputs_job
-        .as_ref()
-        .is_some_and(|j| m.retired_jobs.contains(&j.job.id))
-    {
-        raised.proof_data.inputs_job = None;
     }
     if m.judge_issuance
         .keys()
@@ -71,12 +68,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         &mut m.judge_issuance,
         &raised.revision,
         raised.judgment_generation,
-        raised.judgment.as_ref().map(|j| j.verdict),
+        raised.judgment.as_ref().map(Judged::result),
     )
-    .map(|verdict| Judged {
-        revision: raised.revision.clone(),
-        verdict,
-    });
+    .map(|result| Judged::from_result(raised.revision.clone(), result));
+    judge_answered(&mut raised, &mut m);
     raised.major = issuance(
         &mut m.major_issuance,
         &raised.revision,
@@ -95,11 +90,16 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
         m.strikes.clear();
         m.retry = None;
         m.handed.clear();
+        m.recovered.clear();
         // Lost findings survive pushes, indexed by base; old judgments do
         // not, since their Revision must match below.
     }
     for (kind, clear) in [
-        (Failure::Empty, f.empty.is_some()),
+        // A train PR's candidate decides its emptiness, not GitHub's preview.
+        (
+            Failure::Empty,
+            f.empty.is_some() || super::decide::by_train(f),
+        ),
         (
             Failure::Mergeable,
             !matches!(f.merging, Merge::Unknown | Merge::Refused),
@@ -123,67 +123,24 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             }
         }
     }
+    if m.followup.is_none() {
+        m.followup = f.followup.clone();
+    }
+    super::stuck::settle(f, &mut m);
     for (kind, job) in &f.jobs {
         if kind.fixes_branch() {
             m.handed.insert(*kind, job.revision.clone());
         }
     }
-    for (role, reviewer) in &f.reviewers {
-        if reviewer.record_id.is_some()
-            && reviewer.record_id != m.latest_reviews.get(role).copied()
-            && reviewer
-                .review
-                .as_ref()
-                .is_some_and(|v| v.revision == f.revision)
-            && f.failed_review.as_ref().map(|p| &p.role) != Some(role)
-            && reviewer.failed_at.is_none()
-        {
-            m.review_failures
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-        if let Some(at) = reviewer
-            .failed_at
-            .into_iter()
-            .chain(reviewer.queue_failed_at)
-            .max()
-        {
-            let failure = m
-                .review_failures
-                .entry((role.clone(), f.revision.clone()))
-                .or_insert((0, u64::MAX));
-            if failure.1 != at {
-                failure.0 = failure.0.saturating_add(1);
-                failure.1 = at;
-            }
-        }
-        if reviewer.queued {
-            m.missing_reviews
-                .remove(&(role.clone(), f.revision.clone()));
-        }
-    }
-    if let Some(failed) = &f.failed_review
-        && let Some(answer) = f
-            .reviewers
-            .get(&failed.role)
-            .and_then(|r| r.answer.as_ref())
+    // The label the flow put on is its own until a pass reads it off: only
+    // then can it be a person's.
+    if !f
+        .settings
+        .owner_label
+        .as_ref()
+        .is_some_and(|l| f.labels.contains(l))
     {
-        if !failed.unavailable {
-            let tries = m
-                .review_posts
-                .entry((failed.role.clone(), answer.revision.clone(), answer.at))
-                .or_default();
-            *tries = tries.saturating_add(1);
-            if answer.revision.head == f.revision.head && answer.revision.base == f.revision.base {
-                let failure = m
-                    .review_failures
-                    .entry((failed.role.clone(), f.revision.clone()))
-                    .or_insert((0, 0));
-                failure.0 = failure.0.saturating_add(1);
-                failure.1 = now;
-            }
-        }
-        let strikes = m.strikes.entry(Failure::Post).or_default();
-        *strikes = strikes.saturating_add(1);
+        m.labelled = false;
     }
     let decision = super::decide::decide(f, &mut m, now);
     if let Step::StopJob(id) = &decision.1 {
@@ -209,26 +166,9 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
     } else {
         decision
     };
-    let (stage, step, description) = super::train::apply(f, decision);
-    let description = description.chars().take(140).collect::<String>();
-    let no_reviewer = f.classified.review()
-        && f.reviewers.values().all(|r| {
-            r.unavailable_until.is_some_and(|until| until > now)
-                && !r
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.revision == f.revision && r.verdict == Verdict::Clean)
-        });
-    let failures = m.review_failures.iter().any(|((role, rev), (count, _))| {
-        rev == &f.revision
-            && *count >= 3
-            && f.reviewers
-                .get(role)
-                .is_some_and(|r| r.unavailable_until.is_none_or(|until| until <= now))
-    });
-    let unposted = m.review_posts.iter().any(|(key, count)| {
-        *count >= 3 && !m.consumed_reviews.contains(key) && f.reviewers.contains_key(&key.0)
-    });
+    let (stage, mut step, description) = super::train::apply(f, decision);
+    let mut description = description.chars().take(140).collect::<String>();
+    let no_reviewer = super::review::overdue(f, &m, now);
     let red = f.checks.iter().any(|c| c.state == Ci::Red);
     let own_conflict = f.merging == Merge::Conflict
         && f.bot_edited == Some(true)
@@ -242,48 +182,50 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             && f.classified.class != Class::R2
             && !red;
     let owner_notice = if f.draft
+        || f.paused.is_some()
         || !f.open
         || f.labels.contains(&f.settings.hold_label)
         || f.stacked_on.is_some()
-        || matches!(step, Step::ListOwner)
+        || matches!(step, Step::ListOwner(_))
+        // Two lost jobs are no door: their stall stays overdue in the
+        // status, however long the PR has been open.
+        || description == super::decide::LOST
     {
         None
     } else if no_reviewer
-        && matches!(stage, Stage::Reviewer | Stage::Review)
-        && matches!(step, Step::Wait { .. })
+        && stage == Stage::Review
+        && matches!(step, Step::Wait { .. } | Step::AskReview(_))
     {
         Some(OwnerNotice::NoReviewer)
-    } else if failures && f.classified.review() {
-        Some(OwnerNotice::ReviewFailures)
-    } else if unposted {
-        Some(OwnerNotice::UnpostedReview)
     } else if f
         .created_at
         .is_some_and(|at| now > at.saturating_add(86400))
         && (!f.renovate || fixed_renovate)
         && !matches!(
             step,
-            Step::Merge | Step::Settle | Step::JoinTrain | Step::CloseAlreadyLanded
+            Step::Merge | Step::JoinTrain | Step::CloseAlreadyLanded
         )
     {
         Some(OwnerNotice::OpenOverDay)
     } else {
         None
     };
+    // A pause is the owner's switch, never a stall.
     let watched = owner_notice.is_none()
         && !(f.draft
+            || f.paused.is_some()
             || !f.open
             || (f.stacked_on.is_some() && stage == Stage::Base)
-            || matches!(step, Step::ListOwner));
+            || matches!(step, Step::ListOwner(_)));
+    let mut queued = None;
+    let mut recovery = None;
     let overdue_at = if watched {
         let duration = if f.labels.contains(&f.settings.hold_label) {
             f.settings.hold_stall_after
         } else if stage == Stage::Train {
             f.settings.train_stall_after
-        } else if stage == Stage::Merge && f.renovate && f.bot_merges && f.bot_automerge_enabled {
-            f.settings.renovate_merge_after
         } else {
-            f.settings.stall_after
+            f.settings.stall_after.at(f.rank().level)
         };
         let failure = m
             .strikes
@@ -303,9 +245,32 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                             && w.failure == failure))
             })
             .map_or(now, |w| w.since);
-        let failing = m.strikes.values().any(|n| *n >= 3);
-        let due = if failing {
-            since
+        // A check stalled on its deadlines, when that's what was decided,
+        // is overdue at once, as three strikes are.
+        let stalled = super::proofs::stalled(f).is_some_and(|s| {
+            matches!(s, super::proofs::Stall::Twice { .. })
+                && description == s.to_string().chars().take(140).collect::<String>()
+        });
+        let lost = description == super::decide::LOST;
+        let failing = m.strikes.values().any(|n| *n >= 3) || stalled || lost;
+        // A wait on CI counts from its runs' start, never their queue.
+        let clock = if stage == Stage::Ci && !failing {
+            super::ci::clock(&f.checks)
+        } else {
+            super::ci::Clock::Wait
+        };
+        queued = match clock {
+            super::ci::Clock::Queued(at) => Some(at.unwrap_or(since)),
+            _ => None,
+        };
+        let since = match clock {
+            super::ci::Clock::Started(at) => since.max(at),
+            _ => since,
+        };
+        let due = if queued.is_some() {
+            None
+        } else if failing {
+            Some(since)
         } else {
             let refreshing = f.renovate
                 && f.settings.renovate_sweep
@@ -332,28 +297,66 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             } else {
                 0
             };
-            since
-                .max(until)
-                .saturating_add(grace)
-                .saturating_add(duration)
+            Some(
+                since
+                    .max(until)
+                    .saturating_add(grace)
+                    .saturating_add(duration),
+            )
         };
-        m.wait = Some(Wait {
+        let wait = Wait {
             head: f.revision.head.clone(),
             base: f.revision.base.clone(),
             stage,
             description: description.clone(),
             failure,
             since,
-            due,
-        });
-        Some(due)
+            due: due.unwrap_or(u64::MAX),
+        };
+        // Past its deadline, a wait is brought back as GitHub allows, once
+        // in its stall. The wait stays what was decided, so the stall's
+        // clock runs on whatever the status says.
+        // Two jobs lost go to it too, overdue at once: a timed-out run a
+        // fix can't be handed for comes back by its kind.
+        if (!failing || lost)
+            && let Some(look) = super::recover::look(f, &m, stage, &step, &wait, now)
+        {
+            // A fix still to hand says so; the pass shows the recovery if
+            // it can't hand it after all.
+            if let Some(ask) = look.step {
+                step = ask;
+                description = look.recovery.describe();
+            } else if let Step::Wait { .. } = step {
+                description = look.recovery.describe();
+            }
+            recovery = Some(look.recovery);
+        }
+        // A stall its recovery couldn't bring back goes to the stuck role,
+        // once for its head and stage, before any owner hears of it.
+        if let Some(stuck) = super::stuck::stall(
+            f,
+            &m,
+            (stage, &step, failing),
+            &wait,
+            recovery.as_ref(),
+            now,
+        ) {
+            step = stuck;
+            description = format!("Overdue; handing it to the stuck role: {description}")
+                .chars()
+                .take(140)
+                .collect();
+        }
+        m.wait = Some(wait);
+        due
     } else {
         m.wait = None;
         None
     };
+    let owner = super::approval::ask(f, &mut m, &step, now);
     (
         Next {
-            stage: if f.draft || f.labels.contains(&f.settings.hold_label) {
+            stage: if f.draft || f.paused.is_some() || f.labels.contains(&f.settings.hold_label) {
                 Stage::None
             } else {
                 stage
@@ -366,6 +369,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 _ => None,
             },
             overdue_at,
+            queued,
+            recovery,
             owner_notice,
             wait_on: watched.then(|| {
                 if f.labels.contains(&f.settings.hold_label) {
@@ -373,25 +378,15 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 } else if stage == Stage::Train {
                     WaitOn::Train
                 } else if f.settings.renovate_sweep
-                    && f.major_generation.is_some()
-                    && f.major.is_none()
-                    && stage == Stage::Review
-                    && matches!(step, Step::Wait { .. })
-                {
-                    WaitOn::Sweep
-                } else if f.settings.renovate_sweep
-                    && f.renovate
-                    && f.bot_merges
-                    && f.bot_automerge_enabled
-                    && stage == Stage::Merge
-                {
-                    WaitOn::Renovate
-                } else if f.settings.renovate_sweep
-                    && f.renovate
-                    && f.dependency.is_some()
-                    && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
-                    && (f.checks.iter().any(|c| c.state == Ci::Red)
-                        || f.dependency == Some(Dependency::Major) && f.major.is_none())
+                    && ((f.major_generation.is_some()
+                        && f.major.is_none()
+                        && stage == Stage::Review
+                        && matches!(step, Step::Wait { .. }))
+                        || (f.renovate
+                            && f.dependency.is_some()
+                            && (f.merging != Merge::Conflict || f.bot_edited == Some(true))
+                            && (f.checks.iter().any(|c| c.state == Ci::Red)
+                                || f.dependency == Some(Dependency::Major) && f.major.is_none())))
                 {
                     WaitOn::Sweep
                 } else {
@@ -401,8 +396,7 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             on_usage: watched
                 && !m.strikes.values().any(|n| *n >= 3)
                 && f.jobs.iter().any(|(kind, j)| {
-                    matches!(j.state, JobState::Running | JobState::Queued)
-                        && (*kind != Kind::Proof || super::proofs::engine_job(f, &j.id))
+                    matches!(j.state, JobState::Running | JobState::Queued) && *kind != Kind::Proof
                 }),
             proof: if matches!(step, Step::PostProof) {
                 super::proofs::posting(f)
@@ -410,15 +404,56 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 None
             }
             .or_else(|| {
-                if matches!(step, Step::Prove | Step::PostProof) {
+                if matches!(step, Step::Prepare | Step::Prove | Step::PostProof) {
                     super::proofs::next(f, now).and_then(|(_, _, _, plan)| plan)
                 } else {
                     None
                 }
             }),
+            deadline: super::proofs::deadline_shown(f, &step),
+            // The pass names them: some live in its configuration alone.
+            switches: Vec::new(),
+            priority: f.rank().level,
+            degraded: Vec::new(),
+            owner,
         },
         m,
     )
+}
+
+/// Whether the finished judge job on this revision was answered, against
+/// every issuance the flow knows for it, GitHub's and remembered. A job is
+/// answered once an issuance seals what it asked on (any issuance, for a
+/// request from before the flow said), and stays answered: its answer is
+/// then superseded, never missing, so it leaves the unanswered count. A
+/// finished job is owed its producer's answer only while no issuance of its
+/// revision is known, not merely while GitHub shows none.
+fn judge_answered(f: &mut Facts, m: &mut Memory) {
+    let Some(job) = f.jobs.get_mut(&Kind::Judge) else {
+        return;
+    };
+    let Some(asked) = f.judge_requests.get(&job.id) else {
+        return;
+    };
+    if job.revision != f.revision || !matches!(job.state, JobState::Done | JobState::Unknown) {
+        return;
+    }
+    let seals = |asked: &Option<Basis>| {
+        f.judgment
+            .as_ref()
+            .is_some_and(|j| asked.is_none() || j.basis == *asked)
+    };
+    if m.answered_judges.contains(&job.id) || seals(asked) {
+        m.answered_judges.insert(job.id.clone());
+        m.lost_jobs.remove(&job.id);
+        for ended in m.unanswered.values_mut() {
+            ended.remove(&job.id);
+        }
+        m.unanswered.retain(|_, ended| !ended.is_empty());
+        job.state = JobState::Answered;
+    } else if m.judge_issuance.contains_key(&f.revision) {
+        job.state = JobState::Done;
+    }
 }
 
 /// A deleted/edited comment cannot roll an observed decision back. Conflicting

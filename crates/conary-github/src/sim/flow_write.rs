@@ -84,20 +84,78 @@ impl Write for Hub {
             },
         )
     }
-    fn review(&self, repo: &str, pr: u64, head: &str, body: &str) -> Result<(), ApiError> {
-        self.write(Asked::new(Call::FlowReview, repo).pr(pr), &[repo,&pr.to_string(),head,body], || {
-            let mut world = self.world.borrow_mut();
-            let records = world.repos.get_mut(repo).unwrap().reviews.entry(pr).or_default();
-            records.push(json!({"id":records.len()+1,"commit_id":head,"body":body,
-                "submitted_at":"2099-01-01T00:00:00Z","user":{"login":STEWARD,"type":"Bot"},"state":"COMMENTED"}));
-            Ok(())
-        })
+    fn comment(&self, repo: &str, pr: u64, body: &str) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowComment, repo).pr(pr),
+            &[repo, &pr.to_string(), body],
+            || {
+                self.flow_comment(repo, pr, STEWARD, body);
+                Ok(())
+            },
+        )
+    }
+    fn reply(&self, repo: &str, pr: u64, thread: &str, body: &str) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowReply, repo).pr(pr),
+            &[repo, &pr.to_string(), thread, body],
+            || {
+                let mut world = self.world.borrow_mut();
+                let flow = world
+                    .repos
+                    .get_mut(repo)
+                    .unwrap()
+                    .flow
+                    .get_mut(&pr)
+                    .unwrap();
+                let thread = flow
+                    .threads
+                    .get_mut(thread)
+                    .ok_or_else(|| ApiError::new("Could not resolve to a review thread"))?;
+                thread.comments.push(crate::flow::ThreadComment {
+                    author: Some(STEWARD.into()),
+                    body: body.into(),
+                });
+                Ok(())
+            },
+        )
+    }
+    fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowResolve, repo).pr(pr),
+            &[repo, &pr.to_string(), thread],
+            || {
+                let mut world = self.world.borrow_mut();
+                let flow = world
+                    .repos
+                    .get_mut(repo)
+                    .unwrap()
+                    .flow
+                    .get_mut(&pr)
+                    .unwrap();
+                flow.threads
+                    .get_mut(thread)
+                    .ok_or_else(|| ApiError::new("Could not resolve to a review thread"))?
+                    .resolved = true;
+                flow.open_threads = flow.threads.values().filter(|t| !t.resolved).count() as u32;
+                Ok(())
+            },
+        )
     }
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError> {
         self.write(
             Asked::new(Call::FlowUpdate, repo).pr(pr),
             &[repo, &pr.to_string(), head],
             || Ok(()),
+        )
+    }
+    fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowRerequest, repo),
+            &[repo, &suite.to_string()],
+            || {
+                self.run_again(suite);
+                Ok(())
+            },
         )
     }
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError> {
@@ -115,12 +173,20 @@ impl Write for Hub {
             Asked::new(Call::FlowOwner, repo).pr(pr),
             &[repo, &pr.to_string(), label],
             || {
-                self.edit_pull(repo, pr, |p| {
-                    let labels = p["labels"].as_array_mut().unwrap();
-                    if !labels.iter().any(|l| l["name"] == label) {
-                        labels.push(json!({"name":label}));
-                    }
+                let mut labels: Vec<String> = self.repo_mut(repo, |r| {
+                    r.pulls[&pr]["labels"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|l| l["name"].as_str().unwrap().to_owned())
+                        .collect()
                 });
+                if !labels.iter().any(|l| l == label) {
+                    labels.push(label.into());
+                }
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                // The flow writes as its App.
+                self.label_as(repo, pr, &labels, (super::STEWARD, "Bot"));
                 Ok(())
             },
         )

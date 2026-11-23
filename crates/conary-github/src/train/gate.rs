@@ -12,7 +12,7 @@ use conary_core::op::{Attest, Body, CheckKind};
 
 use super::{Failed, Forge, Settings, TrainError, record};
 use crate::api::{CheckRun, Source};
-use crate::attest::{Subject, attested, signed_by};
+use crate::attest::{Subject, attested, skipped, stands_for};
 use crate::ingest::{Config, run_result, status_result};
 
 /// What a candidate's checks say so far.
@@ -21,23 +21,30 @@ pub(super) enum Gate {
     /// (and why): none named when no check has reported at all.
     Waiting(Vec<String>),
     Green,
-    Red(Vec<Failed>),
+    Red(Vec<Failure>),
+}
+
+/// A failed check, and the run that failed unless it's a status.
+pub(super) struct Failure {
+    pub(super) failed: Failed,
+    pub(super) run: Option<CheckRun>,
 }
 
 /// A check's latest word on a commit.
 enum Said<'a> {
     Pass(Option<&'a CheckRun>),
     Pending,
-    Fail(Option<String>),
+    Fail(Option<&'a CheckRun>, Option<String>),
 }
 
 /// Records the CI results on the candidate's commit, as ingest records a
 /// PR's, and says what they add up to. Red once any check's latest result
-/// is a failure: a failed test has had its second try inside its run
-/// (`docs/DESIGN.md` section 4.7). Green once every check has passed, the
+/// is a failure, which a gating candidate's verdict is only once it has had
+/// its second try ([`super::retry`]). Green once every check has passed, the
 /// required ones among them, each required one's latest run a success its
 /// producer attests. A required status can't be: no status carries an
-/// attestation. Waiting otherwise, with no check at all too, so a gate that
+/// attestation. A required CI result that skipped checks counts only once
+/// each is a required check whose pass a service attests on this candidate. Waiting otherwise, with no check at all too, so a gate that
 /// never starts, or never attests, is a stall, never a pass.
 pub(super) fn gate(
     store: &mut Store,
@@ -73,7 +80,7 @@ pub(super) fn gate(
         .map(|run| {
             let s = match (run.status.as_str(), run.conclusion.as_deref()) {
                 ("completed", Some("success" | "neutral" | "skipped")) => Said::Pass(Some(run)),
-                ("completed", _) => Said::Fail(run.html_url.clone()),
+                ("completed", _) => Said::Fail(Some(run), run.html_url.clone()),
                 _ => Said::Pending,
             };
             (run.name.as_str(), s)
@@ -86,17 +93,20 @@ pub(super) fn gate(
             let s = match status.state.as_str() {
                 "success" => Said::Pass(None),
                 "pending" => Said::Pending,
-                _ => Said::Fail(status.target_url.clone()),
+                _ => Said::Fail(None, status.target_url.clone()),
             };
             said.push((&status.context, s));
         }
     }
-    let failed: Vec<Failed> = said
+    let failed: Vec<Failure> = said
         .iter()
         .filter_map(|(check, s)| match s {
-            Said::Fail(url) => Some(Failed {
-                check: (*check).to_owned(),
-                url: url.clone(),
+            Said::Fail(run, url) => Some(Failure {
+                failed: Failed {
+                    check: (*check).to_owned(),
+                    url: url.clone(),
+                },
+                run: run.cloned(),
             }),
             _ => None,
         })
@@ -105,6 +115,10 @@ pub(super) fn gate(
     // A red gate needs no attestation; a required check's pass does.
     let mut attests: BTreeMap<u64, Attest> = BTreeMap::new();
     let mut unattested = Vec::new();
+    // The required checks a service on the machine attests on this
+    // candidate, and the required CI results that skipped some checks.
+    let mut proved: BTreeSet<&str> = BTreeSet::new();
+    let mut skips: Vec<(&str, Vec<String>)> = Vec::new();
     if failed.is_empty() {
         for (check, s) in &said {
             let Said::Pass(run) = s else { continue };
@@ -117,10 +131,34 @@ pub(super) fn gate(
             };
             match attestation(forge, source, settings, c, run)? {
                 Ok(attest) => {
+                    match skipped(&attest) {
+                        Ok(s) if s.is_empty() => {}
+                        Ok(s) => skips.push((check, s)),
+                        Err(why) => unattested.push(format!("{check}: {why}")),
+                    }
+                    if matches!(attest, Attest::Service { .. }) {
+                        proved.insert(check);
+                    }
                     attests.insert(run.id, attest);
                 }
                 Err(why) => unattested.push(format!("{check}: {why}")),
             }
+        }
+    }
+    // A result that skipped checks says nothing about them: it counts only
+    // once a required machine proof of this same commit and tree covers
+    // each one, by name.
+    for (check, skipped) in skips {
+        let uncovered: Vec<&str> = skipped
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !proved.contains(s))
+            .collect();
+        if !uncovered.is_empty() {
+            unattested.push(format!(
+                "{check}: it skipped {}, which no required machine proof of this candidate attests",
+                uncovered.join(", ")
+            ));
         }
     }
 
@@ -176,7 +214,8 @@ pub(super) fn gate(
 }
 
 /// A required check run's attestation: the one its evidence already holds,
-/// checked when it was recorded, or one checked now.
+/// checked when it was recorded, while it's still what the run publishes
+/// ([`stands_for`]), or one checked now.
 fn attestation(
     forge: &dyn Forge,
     source: &dyn Source,
@@ -190,30 +229,24 @@ fn attestation(
             run.conclusion.as_deref().unwrap_or("nothing")
         )));
     }
-    // A job's link names it: no other run's evidence has it. Kept only
-    // while its signer is still the one the machine names.
+    // A publisher can reuse a link for another check, so keep the check
+    // identity as well. Count it only while it's what the run publishes now
+    // and its signer is still trusted.
     let kept = run.html_url.as_ref().and_then(|url| {
         c.evidence
             .iter()
-            .filter(|e| &e.source == url)
+            .filter(|e| &e.source == url && e.check == run.name)
             .filter_map(|e| e.attest.clone())
-            .find(|a| signed_by(a, &settings.signer))
+            .find(|a| stands_for(a, run) && settings.trust.holds(a))
     });
     if let Some(attest) = kept {
         return Ok(Ok(attest));
     }
+    // The train configures no check's recipe: its checks are named only.
     let subject = Subject::Commit {
         commit: c.commit.as_str(),
         tree: c.tree.as_str(),
+        definition: None,
     };
-    Ok(attested(
-        forge,
-        source,
-        &c.repo,
-        subject,
-        run,
-        &settings.signer,
-        settings.fresh.as_deref(),
-    )?
-    .map(|a| a.attest))
+    Ok(attested(forge, source, &c.repo, subject, run, &settings.trust)?.map(|a| a.attest))
 }

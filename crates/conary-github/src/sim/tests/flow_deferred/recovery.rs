@@ -276,8 +276,12 @@ fn authorization_preserves_proof_read_errors_for_event_backoff() {
                 dry_run: false,
                 ledger: None,
             };
-            let error = crate::flow::evidence::authorize(&pass, &c.hub, &f).unwrap_err();
-            assert!(error.downcast_ref::<crate::ApiError>().is_some(), "{error}");
+            let mut looked = std::collections::BTreeSet::new();
+            let error =
+                crate::flow::evidence::authorize(&pass, &c.hub, &f, &Step::Merge, &mut looked)
+                    .unwrap_err();
+            // A read GitHub didn't answer can't tell: never a rejection.
+            assert!(error.is::<crate::flow::evidence::CantTell>(), "{error}");
         }
         assert_eq!(c.hub.count(Call::Dispatch), 1);
         assert_eq!(c.hub.count(Call::Land), 0);
@@ -298,7 +302,7 @@ fn invalid_missing_expired_and_wrong_scope_proofs_have_bounded_recovery() {
             "invalid" => c.hub.attest(id, "invalid attestation"),
             "expired" => {
                 sign(&c, &head(3), id, &n);
-                c.hub.world.borrow_mut().expired_artifacts.insert(id);
+                c.hub.world.borrow_mut().expired.insert(id);
             }
             "head" => {
                 let tree = crate::branches::Branches::tree(&c.hub, REPO, &head(3)).unwrap();
@@ -480,6 +484,7 @@ fn deferred_startup_suites_recover_while_ordinary_startup_failures_still_reach_r
                             ".github/workflows/{}",
                             if deferred { "heavy.yml" } else { "cheap.yml" }
                         )),
+                        run: None,
                     }),
                 },
             );
@@ -523,6 +528,7 @@ fn ordinary_jobs_keep_their_suite_metadata_in_a_configured_deferred_workflow() {
                     id: "55".into(),
                     name: "workflow".into(),
                     path: Some(".github/workflows/heavy.yml".into()),
+                    run: None,
                 }),
             },
         );

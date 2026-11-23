@@ -91,7 +91,12 @@ fn nonce(c: &Case) -> String {
 fn nothing_starts_before_review_is_ready() {
     let c = configured();
     let now = jobs::now();
-    assert_eq!(step(&c, now), Step::QueueReview("reviewer".into()));
+    let reports = c.pass(now, false);
+    assert_eq!(reports[0].error, None);
+    let next = reports[0].next.as_ref().unwrap();
+    // The reviewer hasn't spoken: it waits on review, starting nothing.
+    assert_eq!(next.stage, Stage::Review);
+    assert!(!matches!(next.step, Step::StartDeferred(_)));
     // Cheap checks are not held back: the ordinary check is already green.
     assert_eq!(runs(&c), 0);
     assert_eq!(c.hub.count(Call::Dispatch), 0);
@@ -611,15 +616,24 @@ mod capped {
     use super::super::flow_case::Case;
     use crate::flow::deferred::Deferral;
     use crate::flow::*;
+    use crate::sim::{CONNECTOR, REMI};
+    use conary_core::plugin::{Judgment, Trigger};
 
+    /// Five rounds of findings, answered: past the round limit.
     fn five() -> Case {
         let mut c = Case::new();
         c.roles(&["primary", "secondary"]);
         for t in 1..=5 {
             c.review("primary", Verdict::Findings, t);
         }
-        c.answered("primary");
+        c.answered();
+        c.hub
+            .flow_thread_comments(REMI, 3, "T0", &[(CONNECTOR, "a finding")]);
+        c.hub.flow_thread(REMI, 3, "T0", true);
         c
+    }
+    fn judge() -> Step {
+        Step::Judge(vec![Trigger::RoundLimit])
     }
     fn view(c: &Case, state: Deferral, now: u64) -> Next {
         let mut f = c.facts();
@@ -633,9 +647,9 @@ mod capped {
         let start = |c: &Case| view(c, Deferral::Unstarted, 4000);
         let wait = Deferral::InFlight { wake: 9999 };
         // Not ready, and nothing to wait on yet: the judge is asked.
-        assert_eq!(start(&c).step, Step::Judge);
-        assert_eq!(view(&c, wait, 4000).step, Step::Judge);
-        c.judge("land");
+        assert_eq!(start(&c).step, judge());
+        assert_eq!(view(&c, wait, 4000).step, judge());
+        c.judge(Judgment::Pass.word());
         assert_eq!(start(&c).step, Step::StartDeferred(vec!["heavy".into()]));
         assert!(matches!(view(&c, wait, 4001).step, Step::Wait { .. }));
         let done = Deferral::Done {
@@ -648,9 +662,26 @@ mod capped {
     #[test]
     fn an_approved_owner_judgment_is_readiness_too() {
         let mut c = five();
-        c.judge("owner");
-        assert_eq!(view(&c, Deferral::Unstarted, 4000).step, Step::ListOwner);
+        c.judge(Judgment::Owner.word());
+        assert_eq!(
+            view(&c, Deferral::Unstarted, 4000).step,
+            Step::ListOwner(Door::Judge)
+        );
         c.approve();
+        assert_eq!(
+            view(&c, Deferral::Unstarted, 4001).step,
+            Step::StartDeferred(vec!["heavy".into()])
+        );
+    }
+
+    #[test]
+    fn a_review_its_pr_changed_after_is_judged_before_anything_starts() {
+        let mut c = Case::new();
+        c.description("new reasons", 0);
+        c.hub.edit_flow(REMI, 3, |s| s.since.edited = Some(100));
+        let changed = Step::Judge(vec![Trigger::Changed]);
+        assert_eq!(view(&c, Deferral::Unstarted, 4000).step, changed);
+        c.judge(Judgment::Pass.word());
         assert_eq!(
             view(&c, Deferral::Unstarted, 4001).step,
             Step::StartDeferred(vec!["heavy".into()])
@@ -660,9 +691,12 @@ mod capped {
     #[test]
     fn a_push_invalidates_the_judgment_and_it_is_asked_again() {
         let mut c = five();
-        c.judge("land");
+        c.judge(Judgment::Pass.word());
         c.push(&super::head(4));
-        assert_eq!(view(&c, Deferral::Unstarted, 4000).step, Step::Judge);
+        assert!(matches!(
+            view(&c, Deferral::Unstarted, 4000).step,
+            Step::Judge(_)
+        ));
     }
 }
 
