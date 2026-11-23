@@ -38,7 +38,9 @@ pub struct Config {
     pub review_authors: Vec<String>,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a
-    /// landing only on a head it settled.
+    /// landing only on a head it settled. The train's own status is neither,
+    /// whether it's listed or not: [`Config::settles`] and
+    /// [`Config::is_check`] each leave it out.
     pub own_contexts: Vec<String>,
 }
 
@@ -49,11 +51,24 @@ impl Config {
         !self.own_contexts.iter().any(|c| c == context) && context != crate::train::CONTEXT
     }
 
+    /// Whether `status` is the steward's word on whether its commit may land:
+    /// in one of its own contexts and posted by one of its logins. Anyone who
+    /// can push can post its context; only the steward's own logins say it.
+    /// The train's status never is, listed or not: it says where the train
+    /// is, not whether the steward settled the head, and its pending, newer
+    /// than the success a PR joined on, would unsettle every PR in the train.
+    /// So every writer reads one merge alike, whatever its list holds.
+    pub(crate) fn settles(&self, status: &CommitStatus) -> bool {
+        status.context != crate::train::CONTEXT
+            && self.own_contexts.contains(&status.context)
+            && (status.creator.as_ref()).is_some_and(|u| self.reviewers.contains(&u.login))
+    }
+
     pub(crate) fn check(&self) -> Result<(), IngestError> {
         if self.reviewers.is_empty() {
             return Err(IngestError::Config("no reviewer logins: the steward's"));
         }
-        if self.own_contexts.is_empty() {
+        if !(self.own_contexts.iter()).any(|c| c != crate::train::CONTEXT) {
             return Err(IngestError::Config(
                 "no own status contexts: the steward's settled status",
             ));
@@ -579,21 +594,15 @@ fn record_with_submission(
     }
     // Newest first: the steward's latest word on this head since the last
     // retarget and before it merged, so a merge it hadn't settled yet (an
-    // administrator's) stays a bypass whatever it says after. Anyone who can
-    // push can post its context; only the steward's own logins say it. An
-    // open PR's is its latest, which the train lands on.
+    // administrator's) stays a bypass whatever it says after. An open PR's is
+    // its latest, which the train lands on.
     let before_merge = |at: Option<&str>| match pr.merged_at.as_deref() {
         Some(m) => at.is_some_and(|t| t <= m),
         None => !pr.is_merged(),
     };
     let mut settled = statuses
         .iter()
-        .filter(|s| config.own_contexts.contains(&s.context))
-        .filter(|s| {
-            s.creator
-                .as_ref()
-                .is_some_and(|u| config.reviewers.contains(&u.login))
-        })
+        .filter(|s| config.settles(s))
         .filter(|s| before_merge(s.created_at.as_deref()))
         .find(|s| current(s.created_at.as_deref()))
         .filter(|s| s.state == "success")

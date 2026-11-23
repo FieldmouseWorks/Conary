@@ -580,6 +580,11 @@ fn ingest_refuses_to_run_without_the_steward_configured() {
             own_contexts: vec![],
             ..config()
         },
+        // The train's own status is never the steward's word.
+        Config {
+            own_contexts: vec![crate::train::CONTEXT.into()],
+            ..config()
+        },
     ] {
         assert!(matches!(
             pull(&mut store, &f, &config, &repo(), 9),

@@ -107,7 +107,7 @@ fn a_pass_whose_read_hangs_holds_up_no_other_writer() {
 }
 
 /// A ledger of its own for `c`, set up and anchored, open for a pass.
-fn anchored(c: &Case) -> (tempfile::TempDir, anchor::Anchored) {
+pub(super) fn anchored(c: &Case) -> (tempfile::TempDir, anchor::Anchored) {
     let ledger = tempfile::tempdir().unwrap();
     let dir = ledger.path();
     anchor::init(dir, &log::key_path(dir), &c.hub, ANCHOR).unwrap();
@@ -117,7 +117,7 @@ fn anchored(c: &Case) -> (tempfile::TempDir, anchor::Anchored) {
 }
 
 /// One pass of `c`, published after; the error its PR 3 met, if any.
-fn pass(c: &Case, anchored: &mut anchor::Anchored) -> Option<String> {
+pub(super) fn pass(c: &Case, anchored: &mut anchor::Anchored) -> Option<String> {
     let pass = crate::flow::Pass {
         config: &c.config,
         policy: &c.policy,
@@ -175,11 +175,7 @@ fn race_pull_of_3(c: &Case, dir: &Path, call: crate::sim::On) -> Rc<Cell<Option<
     c.hub.race(call, move |hub| {
         let key = log::load_signing_key(&log::key_path(&at)).unwrap();
         let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
-        let config = crate::Config {
-            reviewers: settings.flow_authors.iter().cloned().collect(),
-            review_authors: settings.review_authors.iter().cloned().collect(),
-            own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
-        };
+        let config = crate::flow::ledger::config(&settings);
         let before = other.store.head().map_or(0, |h| h.seq);
         crate::ingest::pull(&mut other.store, hub, &config, &REPO.parse().unwrap(), 3).unwrap();
         other.publish(hub).unwrap();
@@ -340,11 +336,7 @@ fn push_recorded_by_another(hub: &crate::sim::Hub, at: &Path, settings: &crate::
     hub.push(REPO, 3, &super::head(4));
     let key = log::load_signing_key(&log::key_path(at)).unwrap();
     let mut other = anchor::open(at, key, hub, ANCHOR).unwrap();
-    let config = crate::Config {
-        reviewers: settings.flow_authors.iter().cloned().collect(),
-        review_authors: settings.review_authors.iter().cloned().collect(),
-        own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
-    };
+    let config = crate::flow::ledger::config(settings);
     crate::ingest::pull(&mut other.store, hub, &config, &REPO.parse().unwrap(), 3).unwrap();
     other.publish(hub).unwrap();
 }
@@ -424,11 +416,7 @@ fn a_passs_step_reads_the_train_as_it_stands() {
         let seat = move |hub: &crate::sim::Hub| {
             let key = log::load_signing_key(&log::key_path(&at)).unwrap();
             let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
-            let config = crate::Config {
-                reviewers: settings.flow_authors.iter().cloned().collect(),
-                review_authors: settings.review_authors.iter().cloned().collect(),
-                own_contexts: vec![crate::flow::SETTLED.into(), crate::train::CONTEXT.into()],
-            };
+            let config = crate::flow::ledger::config(&settings);
             let joined = crate::train::join(
                 &mut other.store,
                 hub,
@@ -455,7 +443,7 @@ fn a_passs_step_reads_the_train_as_it_stands() {
 }
 
 /// How the ledger at `dir` says trunk moved to `after`, each time it does.
-fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
+pub(super) fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
     let public = log::load_public_key(&log::public_path(&log::key_path(dir))).unwrap();
     log::read(dir, &public, None)
         .unwrap()
@@ -468,44 +456,48 @@ fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
         .collect()
 }
 
-// PR 3, seated in the train, is merged outside it while its older settled
-// success stands, the write to withdraw it having failed. A sync told only
-// the settled context records that as a landing while the pass, which reads
-// the train's newer pending status too, is judging it outside: the landing
-// stands alone.
+// PR 3, never settled, is merged by hand. Another writer records that merge
+// as a landing (one that trusts another steward login, say) while the pass is
+// judging it outside: the landing stands alone.
 #[test]
 fn a_pass_never_records_outside_where_another_writer_recorded_a_land() {
     unblocked(120, || {
-        let mut c = Case::new();
-        c.config.settings.train = true;
-        c.clean_review();
+        let c = Case::new();
         let (ledger, mut a) = anchored(&c);
         assert_eq!(pass(&c, &mut a), None);
-        let train = a.store.ledger().train(&REPO.parse().unwrap()).unwrap();
-        assert!(!train.joined().is_empty(), "the pass joined PR 3");
-        c.hub.fail(Call::FlowStatus);
 
         let after: Rc<RefCell<Option<String>>> = Rc::default();
         let (merged, at) = (Rc::clone(&after), ledger.path().to_owned());
-        let settings = c.config.settings.clone();
-        // Merged before the pass reads it to record it, and synced while the
-        // pass reads the merge's commit.
+        // Merged before the pass reads it to record it, and recorded while
+        // the pass reads the merge's commit.
         c.hub.race(Call::FlowSnapshot.repo(REPO).pr(3), move |hub| {
             hub.race(Call::Pull.repo(REPO).pr(3), move |hub| {
+                let base = hub.pull_json(REPO, 3)["base"]["ref"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let before = hub.branch_at(REPO, &base).unwrap();
                 let message = crate::train::Message::new("by hand", 3, []);
                 let sha = hub.squash(REPO, 3, &super::head(3), &message).unwrap();
-                *merged.borrow_mut() = Some(sha);
+                *merged.borrow_mut() = Some(sha.clone());
                 hub.race(Call::CommitPulls.repo(REPO), move |hub| {
                     let key = log::load_signing_key(&log::key_path(&at)).unwrap();
                     let mut other = anchor::open(&at, key, hub, ANCHOR).unwrap();
-                    other.store.hold().unwrap();
-                    let config = crate::Config {
-                        reviewers: settings.flow_authors.iter().cloned().collect(),
-                        review_authors: settings.review_authors.iter().cloned().collect(),
-                        own_contexts: vec![crate::flow::SETTLED.into()],
+                    let change = other
+                        .store
+                        .ledger()
+                        .by_pr(&REPO.parse().unwrap(), 3)
+                        .unwrap();
+                    let body = Body::Land {
+                        change: change.id,
+                        revision: change.revisions.last().unwrap().id,
+                        before: before.parse().unwrap(),
+                        after: sha.parse().unwrap(),
+                        by: conary_core::op::Authority::Status {
+                            login: "another-steward[bot]".into(),
+                        },
                     };
-                    let repo = REPO.parse().unwrap();
-                    crate::ingest::pull(&mut other.store, hub, &config, &repo, 3).unwrap();
+                    other.store.record(body).unwrap();
                     other.publish(hub).unwrap();
                 });
             });
@@ -515,7 +507,6 @@ fn a_pass_never_records_outside_where_another_writer_recorded_a_land() {
         assert_eq!(moves(ledger.path(), &after), ["land"], "{error:?}");
         let error = error.expect("the pass's outside was refused");
         assert!(error.contains("read it again"), "{error}");
-        c.hub.heal(Call::FlowStatus);
         assert_eq!(pass(&c, &mut a), None);
         assert_eq!(moves(ledger.path(), &after), ["land"]);
     });
