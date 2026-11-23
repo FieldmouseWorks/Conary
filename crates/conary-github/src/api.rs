@@ -362,7 +362,12 @@ impl Api {
 
     /// Through `proxy`, or straight to GitHub when `None`, each call cut
     /// off at `call_for`.
-    fn through(base: &str, tokens: Tokens, proxy: Option<ureq::Proxy>, call_for: Duration) -> Self {
+    pub(crate) fn through(
+        base: &str,
+        tokens: Tokens,
+        proxy: Option<ureq::Proxy>,
+        call_for: Duration,
+    ) -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(call_for))
             .proxy(proxy)

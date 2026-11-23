@@ -421,6 +421,7 @@ mod flow_doors;
 mod flow_pass_context;
 
 mod events;
+mod events_concurrent;
 mod events_recovery;
 
 mod events_revision;
