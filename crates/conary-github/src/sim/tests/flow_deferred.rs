@@ -373,6 +373,29 @@ fn a_configuration_that_collides_with_a_gate_is_refused() {
     assert!(result.is_err());
 }
 
+#[test]
+fn a_configuration_with_the_train_is_refused() {
+    let mut c = configured();
+    c.config.settings.train = true;
+    let mut store = c.store.borrow_mut();
+    let result = Pass {
+        config: &c.config,
+        policy: &c.policy,
+        root: c.dir.path(),
+        launcher: &c.deferred,
+        now: jobs::now(),
+        dry_run: false,
+        ledger: None,
+    }
+    .run(&c.hub, &REPO.parse().unwrap(), None, Some(&mut store));
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("deferred checks cannot be used with the train"),
+        "{error}"
+    );
+    assert_eq!(runs(&c), 0);
+}
+
 /// An owned job that succeeded without anyone signing it.
 fn unsigned(c: &Case, head: &str, nonce: &str) -> u64 {
     let run = run_of(c, nonce).unwrap();

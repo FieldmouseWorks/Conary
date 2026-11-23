@@ -89,6 +89,14 @@ impl DeferredConfig {
                 return Err(format!("deferred check {name:?} collides with another gate").into());
             }
         }
+        // The train's gate asks its candidate only for `evidence.require`,
+        // attested on the tree that lands; a deferred check proves the PR's
+        // head alone, so on a train it would never run on the landing tree.
+        if !self.checks.is_empty() && settings.train {
+            return Err("deferred checks cannot be used with the train: \
+                        they never run on the candidate tree that lands"
+                .into());
+        }
         if !self.checks.is_empty() && (self.attempts == 0 || self.start_timeout == 0) {
             return Err("deferred attempts and start_timeout must be above zero".into());
         }

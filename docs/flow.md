@@ -947,7 +947,9 @@ so no recovery, but for two lost jobs ([Asking the owner](#asking-the-owner)).
 
 Some checks are too heavy to run on every push. A repository's machine
 configuration (`settings.deferred`) can name them; the default is none, and
-nothing about a repository changes until it does:
+nothing about a repository changes until it does. They prove the PR's head,
+not a train candidate's tree, so a repository with `settings.train` on can't
+name any: the pass refuses that configuration.
 
 ```json
 "settings": {
