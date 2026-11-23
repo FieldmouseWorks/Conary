@@ -22,6 +22,8 @@ enum Pulls {
     Unavailable,
     /// 404: refused, which asking again won't change.
     Missing,
+    /// With no PRs, and GitHub unavailable for every read of a ref after.
+    ThenDown,
 }
 
 /// GitHub's refs and their commits, as the ledger's anchor moves them, and
@@ -32,6 +34,8 @@ struct State {
     commits: HashMap<String, Value>,
     made: usize,
     pulls: HashMap<String, Pulls>,
+    /// Refs can't be read: GitHub went down.
+    down: bool,
 }
 
 /// Serves GitHub's API on localhost until the test ends; its root URL.
@@ -94,9 +98,16 @@ fn answer(state: &mut State, method: &str, path: &str, body: &Value) -> (u16, Va
     match (method, rest) {
         ("GET", "pulls") => match state.pulls.get(&repo) {
             Some(Pulls::Empty) => (200, json!([])),
+            Some(Pulls::ThenDown) => {
+                state.down = true;
+                (200, json!([]))
+            }
             Some(Pulls::Unavailable) => (503, json!({"message": "Service Unavailable"})),
             Some(Pulls::Missing) | None => missing,
         },
+        ("GET", r) if r.starts_with("git/ref/") && state.down => {
+            (503, json!({"message": "Service Unavailable"}))
+        }
         ("GET", r) if r.starts_with("git/ref/") => {
             let name = format!("refs/{}", &r["git/ref/".len()..]);
             match state.refs.get(&format!("{repo} {name}")) {
@@ -172,9 +183,10 @@ fn sync(github: &[(&str, Pulls)], repos: &[&str]) -> (Option<i32>, Vec<(String, 
         .lines()
         .map(|l| {
             let v: Value = serde_json::from_str(l).unwrap();
+            let stopped = if v["stopped"] == true { " stopped" } else { "" };
             (
                 v["repo"].as_str().unwrap().into(),
-                v["outcome"].as_str().unwrap().into(),
+                format!("{}{stopped}", v["outcome"].as_str().unwrap()),
             )
         })
         .collect();
@@ -201,6 +213,12 @@ fn one_repo_exits_0_when_synced_75_when_github_is_unavailable_and_1_when_it_fail
     assert_eq!(
         sync(&[(r, Pulls::Missing)], &[r]),
         (Some(1), ended(&[(r, "failed")]))
+    );
+    // Gathered, then GitHub down for the anchor: the sync stopped, and
+    // asking again later is the fix.
+    assert_eq!(
+        sync(&[(r, Pulls::ThenDown)], &[r]),
+        (Some(75), ended(&[(r, "unavailable stopped")]))
     );
 }
 

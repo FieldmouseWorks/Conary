@@ -13,8 +13,7 @@
 
 use std::path::Path;
 
-use ed25519_dalek::SigningKey;
-
+use conary_core::log;
 use conary_core::notes::Links;
 use conary_core::op::Repo;
 use conary_core::store::StoreError;
@@ -77,18 +76,17 @@ impl std::error::Error for Stopped {
     }
 }
 
-/// Syncs each of `targets` in turn, the ledger at `dir` opened once, its
-/// anchor in `anchor_repo`, and tells `done` how each ended as it ends,
+/// Syncs each of `targets` in turn, the ledger at `dir` opened once with
+/// the key beside it, its anchor in `anchor_repo`, and tells `done` how each ended as it ends,
 /// after its lock is let go. The ledger is opened only once a repo is
 /// gathered, so a pass whose every gather fails never touches it. A repo
 /// whose gather, sync or notes fail ends [`Ended::Unavailable`] or
 /// [`Ended::Failed`], and the next is synced all the same; what a failed
-/// sync recorded is anchored and noted as ever. A failure to open the
+/// sync recorded is anchored and noted as ever. A failure to load its key or open the
 /// ledger, take its lock again, check or move its anchor, or of its log
 /// during a sync, stops the pass: [`Stopped`] names the repos not synced.
 pub fn sync_all<G: Source + Anchors + Notes>(
     dir: &Path,
-    key: &SigningKey,
     anchor_repo: &str,
     github: &G,
     config: &Config,
@@ -111,7 +109,8 @@ pub fn sync_all<G: Source + Anchors + Notes>(
         let a = match &mut anchored {
             Some(a) => a,
             None => {
-                anchored.insert(anchor::open(dir, key.clone(), github, anchor_repo).map_err(stop)?)
+                let key = log::load_signing_key(&log::key_path(dir)).map_err(|e| stop(e.into()))?;
+                anchored.insert(anchor::open(dir, key, github, anchor_repo).map_err(stop)?)
             }
         };
         a.hold(github).map_err(stop)?;

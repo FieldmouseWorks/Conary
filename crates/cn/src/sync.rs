@@ -4,7 +4,6 @@
 
 use serde_json::{Value, json};
 
-use conary_core::log;
 use conary_core::op::Repo;
 use conary_github::api::unavailable;
 use conary_github::ingest::{self, Ended, Target};
@@ -43,7 +42,6 @@ impl std::error::Error for Unsynced {}
 
 pub(crate) fn run(cli: &Cli, repos: &[Repo], github: &GithubArgs) -> Result<()> {
     let (api, config) = writer(cli, github)?;
-    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
     let targets: Vec<Target> = repos
         .iter()
         .map(|repo| Target {
@@ -108,7 +106,6 @@ pub(crate) fn run(cli: &Cli, repos: &[Repo], github: &GithubArgs) -> Result<()> 
     };
     let passed = ingest::sync_all(
         &cli.ledger,
-        &key,
         &github.remote.anchor_repo,
         &api,
         &config,

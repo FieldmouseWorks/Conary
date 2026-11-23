@@ -83,9 +83,9 @@ fn word(ended: &Ended) -> &'static str {
 }
 
 /// Syncs [`REPOS`], and returns how each ended, in order.
-fn pass(dir: &Path, hub: &Hub, key: &SigningKey) -> (Ends, Result<(), Stopped>) {
+fn pass(dir: &Path, hub: &Hub) -> (Ends, Result<(), Stopped>) {
     let mut ends = Vec::new();
-    let passed = sync_all(dir, key, ANCHOR, hub, &config(), &targets(), |r, e| {
+    let passed = sync_all(dir, ANCHOR, hub, &config(), &targets(), |r, e| {
         ends.push((r.to_string(), word(&e)));
     });
     (ends, passed)
@@ -123,7 +123,7 @@ fn anchored(dir: &Path, hub: &Hub, key: &SigningKey) {
 fn a_pass_reads_the_log_once_however_many_repos_it_syncs() {
     let (dir, hub, key) = world();
     let read = log::lines_read();
-    let (ends, passed) = pass(dir.path(), &hub, &key);
+    let (ends, passed) = pass(dir.path(), &hub);
     let read = log::lines_read() - read;
     passed.unwrap();
     assert_eq!(ends, all_done());
@@ -162,7 +162,7 @@ fn another_writer_records_during_a_later_gather_and_the_pass_catches_up_on_it() 
         .unwrap();
     });
     let read = log::lines_read();
-    let (ends, passed) = pass(dir.path(), &hub, &key);
+    let (ends, passed) = pass(dir.path(), &hub);
     let read = log::lines_read() - read;
     passed.unwrap();
     assert_eq!(ends, all_done());
@@ -220,7 +220,7 @@ fn a_ref_put_back_between_two_repos_is_refused_before_anything_is_written() {
         hub.put_back_ref(ANCHOR, REF, &was);
         *then.borrow_mut() = Some(written(&at, hub));
     });
-    let (ends, passed) = pass(dir.path(), &hub, &key);
+    let (ends, passed) = pass(dir.path(), &hub);
     let stopped = passed.unwrap_err();
     assert!(matches!(stopped.error, AnchorError::Lost(_)), "{stopped}");
     let unsynced: Vec<String> = stopped.unsynced.iter().map(Repo::to_string).collect();
@@ -237,12 +237,29 @@ fn a_ref_put_back_between_two_repos_is_refused_before_anything_is_written() {
 }
 
 #[test]
+fn github_unavailable_for_the_anchor_stops_the_pass_as_unavailable() {
+    let (dir, hub, key) = world();
+    hub.race(Call::Pulls.repo(REPOS[1]), |hub| hub.fail(Call::Ref));
+    let (ends, passed) = pass(dir.path(), &hub);
+    let stopped = passed.unwrap_err();
+    assert!(crate::api::unavailable(&stopped), "{stopped}");
+    let unsynced: Vec<String> = stopped.unsynced.iter().map(Repo::to_string).collect();
+    assert_eq!(unsynced, REPOS[1..]);
+    assert_eq!(ends, all_done()[..1]);
+    hub.heal(Call::Ref);
+    let (ledger, _) = ledger(dir.path(), &key);
+    assert!(recorded(&ledger, REPOS[0]));
+    assert!(!REPOS[1..].iter().any(|r| recorded(&ledger, r)));
+    anchored(dir.path(), &hub, &key);
+}
+
+#[test]
 fn an_unavailable_and_a_failed_repo_leave_the_third_synced() {
     let (dir, hub, key) = world();
     hub.fail(Call::Pulls.repo(REPOS[0]));
     // Read again under the lock, after its gather couldn't.
     hub.refuse_with(Call::Timeline.repo(REPOS[1]), "Resource not accessible");
-    let (ends, passed) = pass(dir.path(), &hub, &key);
+    let (ends, passed) = pass(dir.path(), &hub);
     passed.unwrap();
     assert_eq!(
         ends,
@@ -261,15 +278,9 @@ fn an_unavailable_and_a_failed_repo_leave_the_third_synced() {
 fn a_pass_killed_after_its_first_repo_leaves_it_recorded_and_anchored() {
     let (dir, hub, key) = world();
     let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        sync_all(
-            dir.path(),
-            &key,
-            ANCHOR,
-            &hub,
-            &config(),
-            &targets(),
-            |_, _| panic!("killed"),
-        )
+        sync_all(dir.path(), ANCHOR, &hub, &config(), &targets(), |_, _| {
+            panic!("killed")
+        })
     }));
     assert!(killed.is_err());
     let (ledger, _) = ledger(dir.path(), &key);

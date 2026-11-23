@@ -152,7 +152,8 @@ enum Command {
     /// `unavailable` if GitHub being unavailable stopped it, else `failed`.
     ///
     /// Exits 0 when every repository is done, 75 when every one that isn't
-    /// is unavailable, and 1 otherwise.
+    /// is unavailable, and 1 otherwise. One that stops before it tries any
+    /// repository, on its arguments or its token, prints no lines.
     Sync {
         /// The repositories, as owner/name.
         #[arg(required = true)]

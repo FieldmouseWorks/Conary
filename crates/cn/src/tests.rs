@@ -1,7 +1,7 @@
 use super::*;
-use conary_github::{ApiError, IngestError};
 use conary_github::anchor::AnchorError;
 use conary_github::undo::UndoError;
+use conary_github::{ApiError, IngestError};
 
 #[test]
 fn undo_requires_a_nonblank_reason_for_every_selection() {
