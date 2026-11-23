@@ -98,16 +98,25 @@ impl Pass<'_> {
         only: Option<u64>,
         mut store: Option<&mut Store>,
     ) -> Result<Vec<Report>> {
+        self.config.settings.deferred.validate(
+            &self.config.settings,
+            self.config.evidence.as_ref().map(|e| e.negative.as_str()),
+        )?;
         let data = if self.dry_run {
             None
         } else {
             Some(Data::open(self.root, repo)?)
         };
         let mut recovery = Vec::new();
+        // Records owning deferred dispatches, for those whose PR is closed.
+        let mut owning = Vec::new();
         if let Some(data) = &data {
             for pr in data.records()? {
                 let result: Result<()> = (|| {
                     let mut record = data.load(pr)?;
+                    if !record.dispatches.is_empty() {
+                        owning.push(pr);
+                    }
                     // The repository's off switch reaches every owned worker,
                     // even when its PR closed or a later GitHub read fails.
                     let cancelled = super::pause::cancel(self.root, repo, pr, &mut record, false)
@@ -174,6 +183,29 @@ impl Pass<'_> {
             }
         }
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
+        // No decision reads a PR that isn't open: its deferred runs are
+        // stopped here, paused or not, since it can land nothing.
+        if let Some(data) = &data {
+            for pr in owning
+                .into_iter()
+                .filter(|pr| !pulls.iter().any(|p| p.number == *pr))
+            {
+                let result = data.load(pr).and_then(|mut record| {
+                    super::deferred::abandon(
+                        github,
+                        &repo.to_string(),
+                        pr,
+                        &mut record,
+                        data,
+                        &self.config.settings.deferred,
+                        self.now,
+                    )
+                });
+                if let Err(error) = result {
+                    recovery.push((pr, format!("stopping its deferred runs: {error}")));
+                }
+            }
+        }
         // Proof slots, train joins and dry runs' virtual slots go in line.
         pulls.sort_by_key(|p| {
             super::Rank::of(&self.config.settings, &self.config.trusted_authors, p)
@@ -324,6 +356,20 @@ impl Pass<'_> {
                     report.error = Some(format!("recording what degraded: {e}"));
                 }
                 hydrated?;
+                facts.dispatches.clone_from(&record.dispatches);
+                let seen = super::deferred::hydrate(
+                    github,
+                    &mut facts,
+                    self.config.evidence.as_ref(),
+                    self.now,
+                )?;
+                if !self.dry_run
+                    && seen.apply(&mut record)
+                    && let Some(data) = &data
+                {
+                    data.save(pr, &record)?;
+                    facts.dispatches.clone_from(&record.dispatches);
+                }
                 if let (Some(data), Ok(timed)) = (&data, &mut durations)
                     && timed.fold(&facts.proof_data.ran)
                 {
@@ -497,8 +543,15 @@ impl Pass<'_> {
                         // used is degraded: recorded, and the decision
                         // saved waits on it, naming it.
                         Err((kind, error)) => {
-                            record.failed = Some(kind);
-                            record.failed_why = Some(error.to_string());
+                            // A stop request has its own persisted attempt
+                            // deadline; PR backoff would starve other runs.
+                            if !(matches!(next.step, Step::CancelDeferred(_))
+                                && kind == Failure::Deferred
+                                && error.downcast_ref::<crate::ApiError>().is_some())
+                            {
+                                record.failed = Some(kind);
+                                record.failed_why = Some(error.to_string());
+                            }
                             report.error = Some(error.to_string());
                             if let Some(withdrawn) =
                                 error.downcast_ref::<super::degraded::Withdrawn>()
@@ -537,6 +590,11 @@ impl Pass<'_> {
                             .filter(|w| !w.posted && w.deadline > self.now)
                             .map(|w| w.deadline),
                     )
+                    .chain(super::deferred::deadline(
+                        &facts,
+                        &record.dispatches,
+                        self.now,
+                    ))
                     .min();
                 report.next = Some(next.clone());
                 record.decision = Some(next.clone());

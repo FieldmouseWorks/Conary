@@ -253,6 +253,12 @@ pub(crate) fn act<G: Write>(
                     .ok_or("job missing")?;
                 jobs::cancel(work, why)?;
             }
+            Step::StartDeferred(names) => {
+                super::deferred::begin(pass, github, f, names, record, data)?
+            }
+            Step::CancelDeferred(dispatch_id) => {
+                super::deferred::cancel(github, f, dispatch_id, pass.now, record, data)?
+            }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Recover(recovery) => {
                 let mut asked = next
@@ -477,6 +483,7 @@ fn failure(step: &Step) -> Failure {
         Step::Prepare | Step::Prove | Step::PostProof => Failure::Build,
         Step::HandFix(_) | Step::Judge(_) | Step::Stuck(..) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
+        Step::StartDeferred(_) | Step::CancelDeferred(_) => Failure::Deferred,
         _ => Failure::Status,
     }
 }

@@ -106,6 +106,22 @@ pub struct CheckOutput {
     pub text: Option<String>,
 }
 
+/// One run of a workflow, as the workflow's run list shows it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkflowRun {
+    pub id: u64,
+    /// The workflow's `run-name`. A dispatched run's carries its dispatch id.
+    #[serde(default)]
+    pub display_title: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub conclusion: Option<String>,
+    /// The commit the run is on: a dispatch's is its ref's tip, never the
+    /// PR's head, and its jobs' check runs are on that commit.
+    #[serde(default)]
+    pub head_sha: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CheckSuite {
     pub id: u64,

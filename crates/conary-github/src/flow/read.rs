@@ -50,6 +50,21 @@ pub trait Read: Source + crate::branches::Branches {
         branch: &str,
     ) -> Result<BTreeMap<String, crate::api::User>, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
+    /// One run by its id, `None` once GitHub says there is none.
+    fn dispatched_run(
+        &self,
+        repo: &str,
+        run: u64,
+    ) -> Result<Option<crate::api::WorkflowRun>, ApiError>;
+    /// Every dispatched run of one workflow created at or after `since`
+    /// (Unix seconds), newest first, across all pages. A listing GitHub cuts
+    /// short is an error, never a shorter answer.
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+        since: u64,
+    ) -> Result<Vec<crate::api::WorkflowRun>, ApiError>;
 }
 
 /// Why a read GitHub answered with something that doesn't parse degraded.
@@ -210,6 +225,12 @@ fn gather(
         failed: None,
         failed_why: None,
         succeeded: BTreeSet::new(),
+        dispatches: Vec::new(),
+        deferred: BTreeMap::new(),
+        deferred_stale: Vec::new(),
+        deferred_running: Vec::new(),
+        deferred_failures: BTreeMap::new(),
+        deferred_wake: None,
     };
     // These PRs do not enter the pipeline. In particular, do not spend
     // thousands of review/comment reads after GitHub already said the cap

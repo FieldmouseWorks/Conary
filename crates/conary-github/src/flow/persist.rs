@@ -57,6 +57,9 @@ pub struct Record {
     pub failed_why: Option<String>,
     pub succeeded: std::collections::BTreeSet<Failure>,
     pub sequence: u64,
+    /// Deferred dispatches this controller sent, until they are forgotten.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dispatches: Vec<super::deferred::Dispatch>,
 }
 
 impl Record {

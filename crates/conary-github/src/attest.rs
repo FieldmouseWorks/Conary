@@ -177,6 +177,16 @@ pub enum Subject<'a> {
     /// (`docs/ci-attestation.md`, "Negative runs"): `head` on its merge
     /// base `base`.
     Negative { base: &'a str, head: &'a str },
+    /// A deferred check's gate, run by a dispatched workflow for the
+    /// dispatch `dispatch_id`, on `commit` (whose tree is `tree`). A dispatch runs
+    /// on the ref it was sent to, so its token's `sha` is not the commit; the
+    /// signed statement names the commit and the dispatch id instead, and the token
+    /// still has to be this check run's own job's.
+    Deferred {
+        commit: &'a str,
+        tree: &'a str,
+        dispatch_id: &'a str,
+    },
     /// A gate passing on exactly `tree`, by a check run on `commit`, to be
     /// counted for another commit of that tree ([`crate::reuse`]): a push
     /// of `commit` (`conary commit v1`), or a PR revision whose head is
@@ -536,6 +546,19 @@ fn check(
                 revised(&statement, commit, tree, run)?
             }
         }
+        Subject::Deferred {
+            commit,
+            tree,
+            dispatch_id,
+        } => {
+            if said("event_name") != "workflow_dispatch" {
+                return Err(format!(
+                    "its token is for a {:?} event, not a dispatch",
+                    said("event_name")
+                ));
+            }
+            deferred(&statement, commit, tree, dispatch_id, run)?
+        }
     };
     Ok(Claimed {
         attested: Attested {
@@ -685,6 +708,54 @@ fn pass_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
         ));
     }
     Ok(Outcome::Pass)
+}
+
+/// A deferred check's statement, as one of `commit`, whose tree is `tree`, for
+/// the dispatch `dispatch_id`, passing as its check run did.
+fn deferred(
+    statement: &str,
+    commit: &str,
+    tree: &str,
+    dispatch_id: &str,
+    run: &CheckRun,
+) -> Result<(Outcome, Option<String>), String> {
+    let mut lines = statement.lines();
+    let (Some("conary deferred v1"), Some(subject), Some(named), Some(predicate), None) = (
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+        lines.next(),
+    ) else {
+        return Err(
+            "its statement isn't a deferred run's subject, dispatch id and predicate".into(),
+        );
+    };
+    if subject != commit {
+        return Err(format!("its statement is about {subject}, not {commit}"));
+    }
+    if named != dispatch_id {
+        return Err(format!(
+            "its statement is for dispatch {named}, not {dispatch_id}"
+        ));
+    }
+    let predicate: Predicate =
+        serde_json::from_str(predicate).map_err(|e| format!("its predicate doesn't read: {e}"))?;
+    if predicate.revision.is_some_and(|r| !r.is_null()) {
+        return Err("its predicate names a revision, not a deferred run".into());
+    }
+    if predicate.tree != tree {
+        return Err(format!("it ran on tree {}, not {tree}", predicate.tree));
+    }
+    if predicate.result != "pass" || run.conclusion.as_deref() != Some("success") {
+        return Err(format!(
+            "it says {} and its check run {}",
+            predicate.result,
+            run.conclusion.as_deref().unwrap_or("hasn't concluded")
+        ));
+    }
+    skipped_none(&predicate.skipped)?;
+    Ok((Outcome::Pass, predicate.log.and_then(|l| l.sha256)))
 }
 
 /// A negative run's statement, as one of `head` on `base`, its result the

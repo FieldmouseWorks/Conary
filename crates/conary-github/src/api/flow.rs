@@ -582,4 +582,46 @@ impl Read for Api {
             suites,
         })
     }
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+        since: u64,
+    ) -> Result<Vec<WorkflowRun>, ApiError> {
+        #[derive(Deserialize)]
+        struct Runs {
+            total_count: usize,
+            workflow_runs: Vec<WorkflowRun>,
+        }
+        // Bounded by time, because a filtered listing is cut at a thousand
+        // results however many pages are read. Anything cut short is an
+        // error: absence is never inferred from an incomplete listing.
+        let from = jiff::Timestamp::from_second(i64::try_from(since).unwrap_or(0))
+            .map_err(|_| ApiError::new("workflow run window is out of range"))?
+            .strftime("%Y-%m-%dT%H:%M:%SZ");
+        let path = format!(
+            "/repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&created=%3E%3D{from}"
+        );
+        let mut total = 0;
+        let all = crate::api::paged(&path, self.read_for, |page, left| {
+            let got: Runs = self.get_within(&format!("{path}&per_page=100&page={page}"), left)?;
+            total = got.total_count;
+            let more = got.workflow_runs.len() == crate::api::PER_PAGE;
+            Ok(crate::api::Page {
+                items: got.workflow_runs,
+                more,
+            })
+        })?;
+        if all.len() < total {
+            return Err(ApiError::new(format!(
+                "workflow {workflow}'s runs: GitHub listed {} of {total}",
+                all.len()
+            )));
+        }
+        Ok(all)
+    }
+
+    fn dispatched_run(&self, repo: &str, run: u64) -> Result<Option<WorkflowRun>, ApiError> {
+        self.get_found(&format!("/repos/{repo}/actions/runs/{run}"))
+    }
 }

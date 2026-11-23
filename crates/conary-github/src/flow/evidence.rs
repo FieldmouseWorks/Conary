@@ -145,6 +145,23 @@ fn told<T>(check: &str, read: Result<T>) -> Result<T> {
         }
     })
 }
+/// What the deferred checks' shared reads count as, when they can't tell.
+const DEFERRED: &str = "deferred checks";
+/// A deferred lookup's answer, `check` recorded as looked at unless GitHub
+/// didn't answer a read it needed ([`told`]).
+fn deferred_lookup<T>(
+    check: &str,
+    read: Result<T>,
+    looked: &mut std::collections::BTreeSet<super::Degraded>,
+) -> Result<T> {
+    let answer = told(check, read);
+    if !answer.as_ref().is_err_and(|e| e.is::<CantTell>()) {
+        looked.insert(super::Degraded::Lookup {
+            check: check.to_owned(),
+        });
+    }
+    answer
+}
 /// Whether every attested result a landing needs holds. Each lookup or
 /// shared read that told yes or no, rather than couldn't tell, goes in
 /// `looked`.
@@ -201,6 +218,14 @@ pub(crate) fn authorize<G: Write>(
     // candidate instead) and, unless the PR is docs-only, its proofs. Any
     // other green check is a PR job's, whose token names GitHub's merge
     // commit rather than the head, and a status can't attest.
+    // A deferred check is proven only by its own owned dispatch's record.
+    let proofs = deferred_lookup(
+        DEFERRED,
+        super::deferred::verify(github, f, pass.now, &|p| {
+            deferred(github, f, &trust, p).map(|r| r.is_ok())
+        }),
+        looked,
+    )?;
     let effective = observations(github, f, &f.revision.head)?;
     looked.insert(super::Degraded::Read {
         read: super::Reading::Observations,
@@ -224,6 +249,17 @@ pub(crate) fn authorize<G: Write>(
             }
             required.extend(spellings);
         }
+    }
+    // A deferred check is proven by its own owned record below, never by the
+    // newest run of its name.
+    required.retain(|name| !f.settings.deferred.checks.contains_key(name));
+    for proof in &proofs {
+        deferred_lookup(
+            &proof.name,
+            deferred(github, f, &trust, proof).map_err(Into::into),
+            looked,
+        )?
+        .map_err(|why| -> super::persist::Error { why.into() })?;
     }
     for name in required {
         check(github, f, &trust, &f.revision.head, &name, None, looked)?;
@@ -296,6 +332,58 @@ pub(crate) fn authorize<G: Write>(
     }
     Ok(())
 }
+/// One deferred check's evidence: the check run of the owned dispatch's own
+/// workflow run, attested for this head, tree and dispatch id.
+pub(crate) fn deferred<G: Write>(
+    github: &G,
+    f: &Facts,
+    trust: &Trust,
+    proof: &super::deferred::Proof,
+) -> std::result::Result<std::result::Result<(), String>, crate::api::ApiError> {
+    let repo = f.repo.to_string();
+    let head = &f.revision.head;
+    let name = &proof.name;
+    let run = github
+        .check_runs(&repo, &proof.sha)?
+        .into_iter()
+        .find(|c| c.id == proof.check_run);
+    let Some(run) = run else {
+        return Ok(Err(format!("{name}: its check run is gone")));
+    };
+    if run.name != *name
+        || run.status != "completed"
+        || run.conclusion.as_deref() != Some("success")
+    {
+        return Ok(Err(format!("{name}: producer check is not successful")));
+    }
+    if github.job(&repo, run.id)?.map(|j| j.run_id) != Some(proof.run) {
+        return Ok(Err(format!(
+            "{name}: its check run is not the owned dispatch's job"
+        )));
+    }
+    let tree = github.tree(&repo, head)?;
+    let verified = attested(
+        github,
+        github,
+        &f.repo,
+        Subject::Deferred {
+            commit: head,
+            tree: &tree,
+            dispatch_id: &proof.dispatch_id,
+        },
+        &run,
+        trust,
+    )?;
+    let verified = match verified {
+        Ok(verified) => verified,
+        Err(why) => return Ok(Err(format!("{name}: {why}"))),
+    };
+    if verified.result != Outcome::Pass {
+        return Ok(Err(format!("{name}: producer did not pass")));
+    }
+    Ok(Ok(()))
+}
+
 fn check<G: Write>(
     github: &G,
     f: &Facts,

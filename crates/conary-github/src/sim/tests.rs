@@ -398,6 +398,7 @@ mod flow_switches;
 
 mod flow_pass_landing;
 
+mod flow_deferred;
 mod flow_pass_lock;
 
 mod flow_pass_settled;

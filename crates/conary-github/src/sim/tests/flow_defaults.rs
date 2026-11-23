@@ -46,12 +46,14 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         train_stall_after: _,
         renovate_run: _,
         renovate_sweep,
+        deferred,
     } = Settings::default();
     // Spenders: off or zero.
     assert!(!train);
     assert_eq!(proof_slots, Some(0));
     assert!(proofs.is_empty());
     assert!(!renovate_sweep);
+    assert!(deferred.checks.is_empty());
     // Nothing breaks a loop the owner didn't ask to, and a disputed P2
     // blocks, as it always has.
     assert_eq!(fix_growth, None);

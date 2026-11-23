@@ -3,8 +3,8 @@
 //! `cn flow resume` with no pass, conaryd, GitHub, build or deploy, and read
 //! by every pass before each decision and again before each effect. A paused
 //! PR, like a held one, vacates: its live workers get cancellation markers
-//! independently of its next intention, which frees their proof slots, and
-//! nothing new starts. What they finished stays, so a resume redoes nothing.
+//! independently of its next intention, which frees their proof slots, its
+//! deferred runs are asked to stop by its decisions, and nothing new starts. What they finished stays, so a resume redoes nothing.
 use super::persist::{self, Result};
 use conary_core::op::Repo;
 use serde::{Deserialize, Serialize};
@@ -93,8 +93,8 @@ pub(crate) fn effect(root: &Path, repo: &Repo, pr: u64) -> Result<()> {
 }
 
 /// Whether a step takes work off rather than puts it on: the only steps a
-/// pause lets through. Leaving the train and taking GitHub's queued merge
-/// off vacate too.
+/// pause lets through. Stopping a deferred run, leaving the train and taking
+/// GitHub's queued merge off vacate too.
 pub(crate) fn vacates(step: &super::Step) -> bool {
     use super::Step;
     matches!(
@@ -102,6 +102,7 @@ pub(crate) fn vacates(step: &super::Step) -> bool {
         Step::Wait { .. }
             | Step::Retry { .. }
             | Step::StopJob(_)
+            | Step::CancelDeferred(_)
             | Step::LeaveTrain
             | Step::DisableAutoMerge
     )

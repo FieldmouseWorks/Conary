@@ -195,6 +195,16 @@ fn replacement(
     }
 }
 
+fn deferred_workflow(suite: &Suite, settings: &super::Settings) -> bool {
+    suite.workflow.as_ref().is_some_and(|w| {
+        settings.deferred.checks.values().any(|start| {
+            start.workflow == w.id
+                || w.path.as_deref().and_then(|p| p.rsplit('/').next())
+                    == Some(start.workflow.as_str())
+        })
+    })
+}
+
 /// Where a run that hasn't finished stands: queued for a runner, or started
 /// at the time GitHub gives. A start GitHub didn't give, or gave in a form
 /// that doesn't read, leaves it unplaced, so the wait's own clock runs.
@@ -282,13 +292,20 @@ pub(super) fn checks(
     reads: &mut Reads,
 ) -> std::result::Result<Result, ReadError> {
     let proofs = &settings.machine();
+    // Configured deferred producers are read through their owned workflow
+    // runs, including when their native checks happen to be on the PR head.
+    // Foreign or obsolete same-named results cannot become ordinary CI.
     let mut grouped: BTreeMap<(u64, String), CheckRun> = BTreeMap::new();
     let mut runs = Vec::new();
-    let raw_runs = reads.ask(Reading::Checks, source.check_runs(repo, head))?;
+    let raw_runs: Vec<_> = reads
+        .ask(Reading::Checks, source.check_runs(repo, head))?
+        .into_iter()
+        .filter(|r| !settings.deferred.checks.contains_key(&r.name))
+        .collect();
     let mut has_ci = !raw_runs.is_empty()
-        || suites
-            .values()
-            .any(|s| s.conclusion.as_deref() == Some("startup_failure"));
+        || suites.values().any(|s| {
+            s.conclusion.as_deref() == Some("startup_failure") && !deferred_workflow(s, settings)
+        });
     for run in raw_runs {
         let Some(id) = suite_id(&run) else {
             runs.push(run);
@@ -367,10 +384,9 @@ pub(super) fn checks(
             run: Place::Unplaced,
         })
         .collect();
-    for s in suites
-        .values()
-        .filter(|s| s.conclusion.as_deref() == Some("startup_failure"))
-    {
+    for s in suites.values().filter(|s| {
+        s.conclusion.as_deref() == Some("startup_failure") && !deferred_workflow(s, settings)
+    }) {
         checks.push(Check {
             name: format!(
                 "{} (failed to start)",
@@ -478,6 +494,9 @@ pub(super) fn checks(
     };
     let mut seen = BTreeSet::new();
     for status in reads.ask(Reading::Checks, source.statuses(repo, head))? {
+        if settings.deferred.checks.contains_key(&status.context) {
+            continue;
+        }
         let name = status.context.to_lowercase();
         let train = name == crate::train::CONTEXT.to_ascii_lowercase();
         // Authenticate reserved train results before choosing the newest one.

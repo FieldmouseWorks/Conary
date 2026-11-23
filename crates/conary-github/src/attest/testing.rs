@@ -73,6 +73,19 @@ pub(crate) fn statement(commit: &str, tree: &str, result: &str) -> String {
     format!("conary commit v1\n{commit}\n{predicate}\n")
 }
 
+/// The statement of a deferred check's gate on `commit`, whose tree is
+/// `tree`, for the dispatch `dispatch_id`.
+pub(crate) fn deferred_statement(
+    commit: &str,
+    tree: &str,
+    dispatch_id: &str,
+    result: &str,
+) -> String {
+    let predicate = json!({"result": result, "revision": null, "tree": tree, "skipped": [],
+                           "log": {"sha256": "0".repeat(64), "artifact": "flake-log-1"}});
+    format!("conary deferred v1\n{commit}\n{dispatch_id}\n{predicate}\n")
+}
+
 /// The statement of a gate on `tree` naming `gate` and skipping
 /// `skipped`: a push's of `commit` with no `base`, or a PR revision's,
 /// `commit` on its merge base `base`.

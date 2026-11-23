@@ -76,7 +76,7 @@ pub(crate) fn problems(f: &Facts, kind: Kind) -> Result<Vec<(Problem, Option<Str
             Ok(problems)
         }
         Kind::Red => {
-            let problems: Vec<_> = f
+            let mut problems: Vec<_> = f
                 .checks
                 .iter()
                 .filter(|c| c.state == Ci::Red)
@@ -88,6 +88,15 @@ pub(crate) fn problems(f: &Facts, kind: Kind) -> Result<Vec<(Problem, Option<Str
                     (problem, None)
                 })
                 .collect();
+            problems.extend(f.deferred_failures.iter().map(|(name, failure)| {
+                let problem = Problem::RedCheck {
+                    check: name.clone(),
+                    text: format!("Owned deferred workflow run {} ended with {}; diagnostics: https://github.com/{}/actions/runs/{}{}",
+                        failure.run, failure.conclusion, f.repo, failure.run,
+                        failure.check_run.map_or(String::new(), |id| format!(" (check run {id})"))),
+                };
+                (problem, None)
+            }));
             if problems.is_empty() {
                 Err("v1 fixer lacks the blocking check".into())
             } else {

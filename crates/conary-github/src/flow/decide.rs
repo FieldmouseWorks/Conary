@@ -58,6 +58,13 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         m.retry = None;
         m.retry_why = None;
     }
+    if let Some(dispatch_id) = f.deferred_stale.first() {
+        return at(
+            Stage::Ci,
+            Step::CancelDeferred(dispatch_id.clone()),
+            "Cancel a deferred check that is obsolete or lost",
+        );
+    }
     if let Some(id) = m.stopping.first() {
         return at(
             Stage::Fix,
@@ -191,6 +198,10 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Posting the remaining machine proof verdicts",
         );
     }
+    // Owned deferred failures need repair even without a configured reviewer.
+    if !f.deferred_failures.is_empty() {
+        return hand(f, m, now, Kind::Red, true);
+    }
     let ci = ci(f, m, now);
     // Unknown provenance is someone else's code until read: only a history
     // known to be the bots' alone skips the review loop.
@@ -223,7 +234,9 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
         }
     }
     match super::review::look(f, m, now, f.dependency.is_none() || edited) {
-        super::review::Look::Next(decision) => decision,
+        super::review::Look::Next(decision) => {
+            super::deferred::without_reviewer(f, ci == Ci::Red, &decision).unwrap_or(decision)
+        }
         super::review::Look::Settled { capped, changed } => {
             after_review(f, m, now, ci, capped, changed)
         }
@@ -232,8 +245,8 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
 
 /// A paused or held PR keeps nothing running. Every worker of its that
 /// hasn't answered is stopped at once, through the stop path, so a proof's
-/// slot frees as soon as its worker ends; nothing new starts; and what its
-/// workers finished stays, so nothing is redone once it's lifted. A pause
+/// slot frees as soon as its worker ends, and so is every deferred run it
+/// owns; nothing new starts; and what its workers finished stays, so nothing is redone once it's lifted. A pause
 /// then waits here, before anything else is decided. A hold waits where it
 /// always has, after what an owner must hear of first.
 fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
@@ -248,6 +261,15 @@ fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
             None => "On hold (the hold label): stopping its work".into(),
         };
         return Some(at(Stage::None, Step::StopJob(first.clone()), &why));
+    }
+    // Owned deferred runs stop too: whatever was already due to stop first,
+    // then what is still running for this head.
+    if let Some(dispatch_id) = f.deferred_stale.first().or(f.deferred_running.first()) {
+        return Some(at(
+            Stage::None,
+            Step::CancelDeferred(dispatch_id.clone()),
+            "Paused or on hold: stopping its deferred checks",
+        ));
     }
     f.paused
         .as_ref()
@@ -320,6 +342,15 @@ fn after_review(
     if verdict == Some(Judgment::Owner) && !f.owner_approved {
         return owner(f, Door::Judge);
     }
+    // Review is ready here: the deferred checks start, and cheap checks have
+    // been running all along. A judge's pending verdict on exhausted rounds,
+    // or on a PR changed after its clean review, is not readiness.
+    let ready = !(capped || changed)
+        || verdict == Some(Judgment::Pass)
+        || verdict == Some(Judgment::Owner) && f.owner_approved;
+    if ready && let Some(decision) = super::deferred::start(f) {
+        return decision;
+    }
     let pending: Vec<_> = f.checks.iter().filter(|c| c.state == Ci::Pending).collect();
     let machine = f.settings.machine();
     let proof_only = !pending.is_empty()
@@ -389,23 +420,28 @@ fn after_review(
         || f.jobs.get(&Kind::Judge).is_some_and(|j| {
             j.revision.head == f.revision.head && j.revision.base == f.revision.base
         });
-    if requires_judge {
-        if !matches!(verdict, Some(Judgment::Pass))
-            && !(verdict == Some(Judgment::Owner) && f.owner_approved)
-        {
-            if f.merging == Merge::Update {
-                return at(
-                    Stage::Review,
-                    Step::UpdateBranch,
-                    "Behind its base: updated before judging",
-                );
-            }
-            let mut decision = work(f, m, now, Kind::Judge);
-            if let Step::Judge(reasons) = &mut decision.1 {
-                *reasons = why;
-            }
-            return decision;
+    if requires_judge
+        && !matches!(verdict, Some(Judgment::Pass))
+        && !(verdict == Some(Judgment::Owner) && f.owner_approved)
+    {
+        if f.merging == Merge::Update {
+            return at(
+                Stage::Review,
+                Step::UpdateBranch,
+                "Behind its base: updated before judging",
+            );
         }
+        let mut decision = work(f, m, now, Kind::Judge);
+        if let Step::Judge(reasons) = &mut decision.1 {
+            *reasons = why;
+        }
+        return decision;
+    }
+    // After the judgment, which readiness may need before any evidence exists.
+    if let Some(decision) = super::deferred::gate(f) {
+        return decision;
+    }
+    if requires_judge {
         // A judge's land verdict cannot replace the person's word for R2.
         if f.classified.class == Class::R2 && !f.owner_approved {
             return owner(f, Door::R2);
@@ -712,6 +748,7 @@ fn failure_stage(kind: Failure) -> Stage {
     match kind {
         Failure::Build | Failure::Eval => Stage::Proof,
         Failure::Post => Stage::Review,
+        Failure::Deferred => Stage::Ci,
         Failure::Job | Failure::Lost | Failure::Answer | Failure::Stop => Stage::Fix,
         _ => Stage::Merge,
     }

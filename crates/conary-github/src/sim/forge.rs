@@ -522,6 +522,50 @@ impl crate::flow::Read for Hub {
         })
     }
 
+    fn workflow_runs(
+        &self,
+        repo: &str,
+        workflow: &str,
+        _since: u64,
+    ) -> Result<Vec<crate::api::WorkflowRun>, ApiError> {
+        self.read(
+            Asked::new(Call::WorkflowRuns, repo),
+            &[repo, workflow],
+            |w| {
+                if w.list_incomplete {
+                    return Err(ApiError::new("workflow runs: GitHub listed 1000 of 1500"));
+                }
+                Ok(w.workflow_runs
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["workflow"] == workflow)
+                    .take(w.list_cap.unwrap_or(usize::MAX))
+                    .map(parse)
+                    .collect())
+            },
+        )
+    }
+
+    fn dispatched_run(
+        &self,
+        repo: &str,
+        run: u64,
+    ) -> Result<Option<crate::api::WorkflowRun>, ApiError> {
+        self.read(
+            Asked::new(Call::WorkflowRuns, repo),
+            &[repo, &run.to_string()],
+            |w| {
+                Ok(w.workflow_runs
+                    .get(repo)
+                    .into_iter()
+                    .flatten()
+                    .find(|r| r["id"] == run)
+                    .map(parse))
+            },
+        )
+    }
+
     /// The PR and its head's first page of check suites in one call, as
     /// GitHub's query answers, then the rest a page at a time, on that
     /// head, through the pager the API reads GitHub's with.

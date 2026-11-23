@@ -473,6 +473,10 @@ pub struct Settings {
     /// Whether dependency PRs wait on the machine's Renovate sweep.
     #[schemars(extend("x-spender" = true))]
     pub renovate_sweep: bool,
+    /// Heavy checks started only once review is ready, through a dispatched
+    /// workflow, and needed to land. Its `checks` say which start paid work.
+    #[schemars(extend("x-spender" = false))]
+    pub deferred: super::deferred::DeferredConfig,
 }
 
 impl Settings {
@@ -555,6 +559,7 @@ impl Default for Settings {
             train_stall_after: 7200,
             renovate_run: 7200,
             renovate_sweep: false,
+            deferred: Default::default(),
         }
     }
 }
@@ -701,6 +706,19 @@ pub struct Facts {
     /// What that failed effect said.
     pub failed_why: Option<String>,
     pub succeeded: BTreeSet<Failure>,
+    /// The deferred dispatches this controller owns, from its record.
+    pub dispatches: Vec<super::deferred::Dispatch>,
+    /// Where each configured deferred check stands for this head.
+    pub deferred: BTreeMap<String, super::deferred::Deferral>,
+    /// Dispatch ids of owned runs to cancel.
+    pub deferred_stale: Vec<String>,
+    /// Dispatch ids of owned runs still going that nothing has asked to stop: what
+    /// a pause or a hold stops.
+    pub deferred_running: Vec<String>,
+    /// Owned current-head failures and their producer diagnostics.
+    pub deferred_failures: BTreeMap<String, super::deferred::DeferredFailure>,
+    /// When the owned dispatches next need a look.
+    pub deferred_wake: Option<u64>,
 }
 impl Facts {
     /// This PR's place in line, by its own labels and age.
@@ -736,6 +754,7 @@ pub enum Failure {
     Answer,
     Lost,
     Stop,
+    Deferred,
     /// Asking GitHub to run a check again.
     Rerun,
 }
@@ -839,6 +858,10 @@ pub enum Step {
     PostFix(String),
     HandFix(Kind),
     StopJob(String),
+    /// Start these deferred checks, once review is ready.
+    StartDeferred(Vec<String>),
+    /// Cancel the owned run with this dispatch dispatch id.
+    CancelDeferred(String),
     /// Ready a proof's inputs, holding no proof slot.
     Prepare,
     Prove,

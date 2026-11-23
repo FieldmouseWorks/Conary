@@ -275,6 +275,11 @@ pub(super) fn check(
                     .into(),
             );
         }
+        Subject::Deferred { .. } => {
+            return Err(
+                "a deferred check counts only by its dispatched job's own attestation".into(),
+            );
+        }
     };
     Ok(Attested {
         attest: Attest::Service {
