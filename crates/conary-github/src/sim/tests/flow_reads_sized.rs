@@ -26,8 +26,10 @@ fn a_head_with_thousands_of_suites_and_runs_is_read_in_full_and_lands() {
     let reports = c.pass(now, false);
     let three = reports.iter().find(|r| r.pr == 3).unwrap();
     let decided = format!("{three:?}");
-    assert!(!decided.contains("over 100 checks"), "{decided}");
+    assert!(three.error.is_none(), "{decided}");
     assert!(c.hub.pull(REPO, 3).unwrap().is_merged(), "{decided}");
-    // Every page read, each its own call.
-    assert!(c.hub.count(Call::CheckRuns) >= RUNS / crate::api::PER_PAGE);
+    // Every page of runs and of suites read, each its own call.
+    let pages = RUNS / crate::api::PER_PAGE;
+    assert!(c.hub.count(Call::CheckRuns) >= pages);
+    assert!(c.hub.count(Call::CheckSuites) >= pages - 1);
 }

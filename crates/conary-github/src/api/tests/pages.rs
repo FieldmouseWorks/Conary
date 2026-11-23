@@ -133,3 +133,22 @@ fn a_page_that_stalls_is_cut_off_at_its_reads_deadline() {
         .expect("the read is cut off at its deadline");
     assert!(got.unwrap_err().unavailable);
 }
+
+/// Check suites' pages that say there's more but don't move on, with no
+/// cursor or the one before again, fail the read rather than read the same
+/// page until the deadline.
+#[test]
+fn check_suites_pages_that_do_not_advance_fail_the_read() {
+    let stuck = |cursor: Value| {
+        json!({"data":{"repository":{"object":{"checkSuites":{
+            "pageInfo":{"hasNextPage":true,"endCursor":cursor},"nodes":[suite(PER_PAGE)]}}}}})
+    };
+    for second in [stuck(json!(null)), stuck(json!("c1"))] {
+        let first = snapshot((0..PER_PAGE).map(suite).collect(), "c1");
+        let (base, _) = github(vec![answer(first), answer(second)]);
+        let err = Api::new(&base, Tokens::given("t"))
+            .snapshot("o/r", 7)
+            .unwrap_err();
+        assert!(err.to_string().contains("did not advance"), "{err}");
+    }
+}
