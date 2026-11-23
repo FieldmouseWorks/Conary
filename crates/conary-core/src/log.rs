@@ -560,7 +560,16 @@ pub fn read_anchored(dir: &Path, key: &VerifyingKey) -> Result<Vec<Op>, LogError
 /// checks the log against, so neither can change under it.
 pub struct Lock {
     dir: PathBuf,
-    _file: File,
+    file: File,
+}
+
+impl Drop for Lock {
+    /// Lets the lock go here, not when the file's last copy closes: a child
+    /// another thread forks keeps a copy until it execs, and would hold the
+    /// lock past this writer's end.
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
 }
 
 impl Lock {
@@ -582,7 +591,7 @@ impl Lock {
         file.lock()?;
         Ok(Self {
             dir: dir.to_owned(),
-            _file: file,
+            file,
         })
     }
 

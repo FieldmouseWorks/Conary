@@ -157,8 +157,12 @@ fn free(effect: Effect) -> Vec<usize> {
     c.hub.watch(move |hub| {
         let call = calls.replace(calls.get() + 1);
         let lock = std::fs::File::open(at.join("lock")).unwrap();
-        if lock.try_lock().is_ok() && !done(effect, hub, &at) {
-            seen.borrow_mut().push(call);
+        if lock.try_lock().is_ok() {
+            if !done(effect, hub, &at) {
+                seen.borrow_mut().push(call);
+            }
+            // Now, not when a child another test forks closes its copy.
+            let _ = lock.unlock();
         }
     });
     c.pass(jobs::now(), false);
@@ -217,7 +221,7 @@ fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
                     }
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                drop(lock);
+                let _ = lock.unlock();
             });
         }
         if wait.load(SeqCst) && !changed.replace(true) && !done(effect, hub, &ledger) {
