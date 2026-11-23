@@ -446,6 +446,15 @@ PRs are the ones the last pass listed, saved as `open` in the repository's
 directory with the time it read them (`read_at`); a record stays once its
 PR closes, so a closed PR drops out at the next pass.
 
+It also lists, as `prs`, every open PR whose record reads, with what its
+last decision has for the stall watchdog and the owner. Its `wait` is the
+`stage` it waits in, what it waits on (`wait_on`), `since` when and when
+it's `due` (overdue). It's left out when the wait has no deadline: the flow
+doesn't watch the PR, or every check it waits on is queued for a runner. A
+held PR's wait has no stage and waits on its `Hold`. Its `notice` is the owner's digest notice, and its `owner`
+is the request it's listed for: the subject `key`, `since` when, and a
+judge's `reason`. Comparing `due` with the clock is the reader's job.
+
 ## Priority
 
 Each PR has a priority level, `high`, `medium` or `low`, the levels

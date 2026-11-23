@@ -441,10 +441,10 @@ is covered. It fails on main.
 
 Issue: [#490](https://github.com/FieldmouseWorks/Conary/issues/490).
 
-`cn flow status OWNER/REPO --json` adds, for each open PR, the overdue stage
-with its `since` and `due`, and its owner notice. It reads only the data
-directory, as `cn flow status` does now. When FP10 lands, its subject key is
-added. Lane: Conary flow, after the tasks open there.
+`cn flow status OWNER/REPO`, which prints JSON, adds, for each open PR, the
+overdue stage with its `since` and `due`, and its owner notice, with FP10's
+subject key for an owner listing. It reads only the data directory, as
+`cn flow status` does now. Lane: Conary flow, after the tasks open there.
 
 ### C2: flow: the lock-file grace includes the sweep's 20-second gap (Conary)
 

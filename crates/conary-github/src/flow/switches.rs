@@ -3,7 +3,8 @@
 //! hold label, an omitted plugin, the train off, no person list, no evidence
 //! verifier. Each PR's decision names every switch that stops it, whichever
 //! of them decided its step, and [`status`] lists the repository's switches
-//! with the PRs and workers they hold, from local state alone.
+//! with the PRs and workers they hold, and each open PR's wait and owner
+//! notices, from local state alone.
 use super::persist::{self, Result};
 use super::*;
 use conary_core::op::Repo;
@@ -155,6 +156,73 @@ pub struct Status {
     /// when there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<DegradedPr>,
+    /// Every open PR whose record reads, with what its last decision has
+    /// for the stall watchdog and the owner.
+    pub prs: Vec<Watched>,
+}
+/// One open PR's wait and owner notices, as its last decision saved them.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Watched {
+    pub pr: u64,
+    /// The stage whose wait goes overdue at `due`. Left out when its wait
+    /// has no deadline: the flow doesn't watch it (a draft, a pause, an
+    /// owner notice or listing), or every check it waits on is queued.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<Stall>,
+    /// The owner's digest notice. Left out when there's none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<OwnerNotice>,
+    /// The owner request it's listed for, by its subject key. Left out
+    /// when it lists no one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Listed>,
+}
+/// A watched wait: its stage, what it waits on, since when, and when it's
+/// overdue.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Stall {
+    /// None for a held PR, whose hold is what it waits on.
+    pub stage: Stage,
+    pub wait_on: Option<WaitOn>,
+    pub since: u64,
+    pub due: u64,
+}
+/// An owner request, by its subject key.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct Listed {
+    pub key: Subject,
+    /// When the owner was first asked.
+    pub since: u64,
+    /// A judge's reason for its `owner` verdict.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+impl Watched {
+    fn of(pr: u64, record: &persist::Record) -> Self {
+        let decision = record.decision.as_ref();
+        // The wait its decision is overdue by: a decision that replaced it
+        // (a degraded read's) leaves the older wait in memory, unwatched.
+        let wait = decision.and_then(|d| {
+            let due = d.overdue_at?;
+            let w = record.memory.wait.as_ref().filter(|w| w.due == due)?;
+            Some(Stall {
+                stage: w.stage,
+                wait_on: d.wait_on,
+                since: w.since,
+                due,
+            })
+        });
+        Self {
+            pr,
+            wait,
+            notice: decision.and_then(|d| d.owner_notice),
+            owner: decision.and_then(|d| d.owner.as_ref()).map(|r| Listed {
+                key: r.key.clone(),
+                since: r.since,
+                reason: r.reason.clone(),
+            }),
+        }
+    }
 }
 /// One open PR's degraded path.
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -186,7 +254,8 @@ pub struct Held {
 /// over each open PR's saved decision and workers. Needs no GitHub,
 /// conaryd, token or lock, so it answers while they're down or a pass runs.
 /// A pause, read here, holds every open PR it covers whether or not a pass
-/// has seen it yet. Holds are as the last pass read the labels.
+/// has seen it yet. Holds, waits and owner notices are as the last pass
+/// decided them.
 pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Status> {
     let pause = super::pause::read(root, repo)?;
     let open: Option<Open> = match std::fs::read(open_path(root, repo)) {
@@ -195,6 +264,7 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
         Err(e) => return Err(e.into()),
     };
     let mut prs = Vec::new();
+    let mut watched = Vec::new();
     let mut degraded = Vec::new();
     for &pr in open.iter().flat_map(|o| &o.prs) {
         let mut found = |what, e: &super::persist::Error| {
@@ -242,6 +312,7 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
                 });
             }
         }
+        watched.push(Watched::of(pr, &record));
         prs.push((pr, record.decision, workers));
     }
     let held = |pr: u64, step: Option<Step>, workers: &Vec<String>| Held {
@@ -330,5 +401,6 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
         read_at: open.map(|o| o.at),
         switches,
         degraded,
+        prs: watched,
     })
 }
