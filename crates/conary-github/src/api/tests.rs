@@ -10,8 +10,10 @@ use super::*;
 
 /// Serves `answers` in turn, one per connection, and sends back each
 /// request's head (its request line and headers, lower-cased), then a blank
-/// line and its body as it came. The body is read before the answer goes
-/// out. An answer the client stops reading, past its size limit, is let go.
+/// line and its body as it came. The body is read, and the request sent
+/// back, before the answer goes out, so every request a client has an answer
+/// to is already on the channel when its call returns. An answer the client
+/// stops reading, past its size limit, is let go.
 fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -35,8 +37,8 @@ fn github(answers: Vec<&'static str>) -> (String, mpsc::Receiver<String>) {
                 .map_or(0, |n| n.trim().parse().unwrap());
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            _ = conn.write_all(answer.as_bytes());
             _ = tx.send(format!("{head}\r\n{}", String::from_utf8(body).unwrap()));
+            _ = conn.write_all(answer.as_bytes());
         }
     });
     (base, rx)
