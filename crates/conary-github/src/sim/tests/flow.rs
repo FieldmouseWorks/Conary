@@ -326,15 +326,17 @@ fn same_wait_keeps_its_deadline() {
 }
 
 #[test]
-fn empty_change_closes_but_bot_closes_its_own() {
-    // landed.py: the result tree is empty; dependency bots close their own.
+fn empty_change_closes_whatever_its_author() {
+    // Conary#600: the result tree is empty, so it's closed, a dependency
+    // update too: its bot may never run again to close it (burrow#792).
     let c = Case::new();
     let tip = c.hub.add(&head(3), "after");
     c.hub.set_branch(REMI, "main", &tip);
     assert_eq!(c.view(4000).step, Step::CloseAlreadyLanded);
-    c.hub
-        .edit_pull(REMI, 3, |p| p["head"]["ref"] = json!("dependabot/pkg"));
-    assert_eq!(c.view(4000).step, Step::Wait { until: None });
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["head"]["ref"] = json!("renovate/dependencies")
+    });
+    assert_eq!(c.view(4000).step, Step::CloseAlreadyLanded);
 }
 
 #[test]
