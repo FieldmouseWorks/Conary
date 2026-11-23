@@ -52,3 +52,21 @@ impl Anchors for Hub {
         })
     }
 }
+
+impl Hub {
+    /// Puts ref `name` in `repo` back on `commit`, a move it made before, as
+    /// a force-push would: no call of the API's can.
+    pub(crate) fn put_back_ref(&self, repo: &str, name: &str, commit: &str) {
+        let mut w = self.world.borrow_mut();
+        let kept = w.ref_commits[commit].clone();
+        w.refs.insert((repo.to_owned(), name.to_owned()), kept);
+    }
+
+    /// The commit ref `name` in `repo` is at.
+    pub(crate) fn ref_at(&self, repo: &str, name: &str) -> Option<String> {
+        let w = self.world.borrow();
+        w.refs
+            .get(&(repo.to_owned(), name.to_owned()))
+            .map(|k| k.commit.clone())
+    }
+}

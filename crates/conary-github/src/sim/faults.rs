@@ -58,6 +58,8 @@ pub(crate) enum Call {
     Ref,
     RefCommit,
     SetRef,
+    Notes,
+    SetNotes,
 }
 
 /// Which calls a fault is for: a kind, and if a test narrows it, only in

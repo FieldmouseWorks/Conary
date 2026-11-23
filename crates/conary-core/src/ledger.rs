@@ -145,7 +145,7 @@ impl Change {
 
     /// The change's pull request on GitHub.
     pub fn url(&self) -> String {
-        format!("https://github.com/{}/pull/{}", self.repo, self.pr)
+        self.repo.pull_url(self.pr)
     }
 
     pub fn revision(&self, id: RevisionId) -> Option<&Revision> {

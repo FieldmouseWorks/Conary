@@ -18,12 +18,13 @@ use conary_core::{reader, rpc};
 use conary_github::anchor::{self, Anchored};
 use conary_github::class;
 use conary_github::undo::{self, How, Stopped, Undid, Undone, Unrecorded};
-use conary_github::{Api, ApiError, Config, Etags, Ingested, Tokens, ingest, notes};
+use conary_github::{Api, Config, Etags, Ingested, Tokens, ingest, notes};
 
 mod attest;
 mod flow;
 mod lessons;
 mod plugin;
+mod sync;
 mod train;
 
 #[derive(Parser)]
@@ -134,11 +135,29 @@ enum Command {
         #[command(flatten)]
         github: GithubArgs,
     },
-    /// Bring a repository's open and recently closed pull requests up to
-    /// date: what to run on each of its PR events.
+    /// Bring repositories' open and recently closed pull requests up to
+    /// date: what to run on each one's PR events, or on every one in turn.
+    ///
+    /// The ledger's log is read once for them all, and its lock is let go
+    /// between them. Each repository ends as one JSON line on stdout, in
+    /// the order they end, with its `repo` and its `outcome`: `done`
+    /// (recorded, anchored and its notes written; `prs` lists each PR it
+    /// recorded with its `change`, `pr`, `url` and the ops it `recorded`,
+    /// and `refused` each undo PR refused alone, by `pr` and `why`),
+    /// `unavailable` (GitHub couldn't be asked just now: run it again
+    /// later), or `failed` (anything else), the last two with an `error`.
+    /// What a repository recorded before it failed is anchored. When the
+    /// ledger or its anchor fails, so writing on isn't safe, the sync stops,
+    /// and each repository it didn't reach gets a line with `stopped: true`,
+    /// `unavailable` if GitHub being unavailable stopped it, else `failed`.
+    ///
+    /// Exits 0 when every repository is done, 75 when every one that isn't
+    /// is unavailable, and 1 otherwise. One that stops before it tries any
+    /// repository, on its arguments or its token, prints no lines.
     Sync {
-        /// The repository, as owner/name.
-        repo: Repo,
+        /// The repositories, as owner/name.
+        #[arg(required = true)]
+        repos: Vec<Repo>,
         #[command(flatten)]
         github: GithubArgs,
     },
@@ -316,10 +335,13 @@ impl std::fmt::Display for Unnamed {
 
 impl std::error::Error for Unnamed {}
 
-/// Whether the error comes down to GitHub being unavailable.
+/// Whether the error comes down to GitHub being unavailable: for a sync,
+/// whether it was for every repository it didn't sync.
 fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
-    std::iter::successors(Some(e), |e| e.source())
-        .any(|e| e.downcast_ref::<ApiError>().is_some_and(|a| a.unavailable))
+    match e.downcast_ref::<sync::Unsynced>() {
+        Some(unsynced) => unsynced.unavailable(),
+        None => conary_github::api::unavailable(e),
+    }
 }
 
 fn run(cli: &Cli) -> Result<()> {
@@ -345,20 +367,11 @@ fn run(cli: &Cli) -> Result<()> {
             write_notes(&api, &a, github, repo)?;
             print_ingested(cli, repo, *pr, got?, a.store.ledger());
         }
-        Command::Sync { repo, github } | Command::Backfill { repo, github } => {
+        Command::Sync { repos, github } => sync::run(cli, repos, github)?,
+        Command::Backfill { repo, github } => {
             let (api, config) = writer(cli, github)?;
-            let (mut a, got) = if matches!(cli.command, Command::Sync { .. }) {
-                // Read before the lock, so other writers wait only for
-                // the recording, not the minutes GitHub takes.
-                let gathered = ingest::gather(&api, &config, repo, &cli.ledger)?;
-                let mut a = open(cli, github, &api)?;
-                let got = ingest::sync(&mut a.store, &api, gathered);
-                (a, got)
-            } else {
-                let mut a = open(cli, github, &api)?;
-                let got = ingest::backfill(&mut a.store, &api, &config, repo);
-                (a, got)
-            };
+            let mut a = open(cli, github, &api)?;
+            let got = ingest::backfill(&mut a.store, &api, &config, repo);
             a.publish(&api)?;
             write_notes(&api, &a, github, repo)?;
             let (got, store) = (got?, &a.store);
@@ -646,13 +659,17 @@ fn open(cli: &Cli, github: &GithubArgs, api: &Api) -> Result<Anchored> {
 
 /// Brings `repo`'s notes up to date with what the ledger now holds.
 fn write_notes(api: &Api, a: &Anchored, github: &GithubArgs, repo: &Repo) -> Result<()> {
-    let links = if github.session_links.contains(repo) {
+    notes::publish(api, a.store.ledger(), repo, links(github, repo))?;
+    Ok(())
+}
+
+/// Whether `repo`'s notes may link sessions.
+fn links(github: &GithubArgs, repo: &Repo) -> Links {
+    if github.session_links.contains(repo) {
         Links::Kept
     } else {
         Links::Left
-    };
-    notes::publish(api, a.store.ledger(), repo, links)?;
-    Ok(())
+    }
 }
 
 /// The ledger, verified against its public key and the anchor its writer
