@@ -342,9 +342,11 @@ fn no_wait_of_a_pass_comes_between_a_look_and_what_it_permits() {
                 let mut waits = 0;
                 let mut at = free[0];
                 while let Some(&next) = free.iter().find(|&&call| call >= at) {
-                    let Some(got) = waited(effect, change, next) else {
-                        break;
-                    };
+                    // Each call left alone found the lock free, so the
+                    // pass waits at every one: none is skipped unseen.
+                    let got = waited(effect, change, next).unwrap_or_else(|| {
+                        panic!("{effect:?}, {change:?}: the pass didn't wait at call {next}")
+                    });
                     waits += 1;
                     if got.acted || got.granted {
                         wrong.push(format!("{effect:?}, {change:?}, at {next}: {got:?}"));
