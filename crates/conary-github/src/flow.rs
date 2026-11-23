@@ -80,5 +80,7 @@ mod approval;
 pub use approval::{Door, Labeller, Request, Subject, owner_approval};
 
 mod handoff;
+mod stuck;
+pub use stuck::{Disputed, ENDED as STUCK_ENDED, Handoff, Stuck, followup as stuck_followup};
 
 pub(crate) mod publish;

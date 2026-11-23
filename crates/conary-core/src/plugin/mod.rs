@@ -65,7 +65,8 @@ pub enum Trigger {
     NoCi,
     /// Someone asked for a judge.
     Asked,
-    /// The review loop reached its round limit with findings open.
+    /// The review loop ended with findings open: at its round limit, after
+    /// the stuck role, or on a disputed finding the flow lets block nothing.
     RoundLimit,
     /// A major dependency update not from the dependency bot.
     MajorDependency,

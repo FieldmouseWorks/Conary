@@ -28,6 +28,8 @@ pub(super) struct Case {
     pub judge_requests: BTreeMap<String, Option<Basis>>,
     /// Why the flow's own judge answered `owner`, as its worker's answer says.
     pub judge_reason: Option<String>,
+    /// Whether a `job` plugin serves the stuck role, as the pass says.
+    pub stuck_role: bool,
 }
 impl Case {
     pub fn new() -> Self {
@@ -49,6 +51,7 @@ impl Case {
             train: TrainState::default(),
             judge_requests: BTreeMap::new(),
             judge_reason: None,
+            stuck_role: false,
         }
     }
     pub fn roles(&mut self, names: &[&str]) {
@@ -218,6 +221,7 @@ impl Case {
         f.succeeded = self.succeeded.clone();
         f.base_held |= self.base_held;
         f.train = self.train.clone();
+        f.stuck_role = self.stuck_role;
         f
     }
     /// A preparation of the programs the next proof runs on the head (its

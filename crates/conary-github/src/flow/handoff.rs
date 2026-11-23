@@ -13,6 +13,17 @@ use std::sync::LazyLock;
 static BADGE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"!\[P([0-3]) Badge\]").expect("pattern"));
 
+/// The severity a finding opens with. A thread without the connector's
+/// badge, a person's, blocks landing as a P1 does.
+pub(super) fn severity(body: &str) -> Severity {
+    match BADGE.captures(body).map(|c| c[1].to_owned()) {
+        Some(p) if p == "0" => Severity::P0,
+        Some(p) if p == "2" => Severity::P2,
+        Some(p) if p == "3" => Severity::P3,
+        _ => Severity::P1,
+    }
+}
+
 /// Open thread `id` as a finding: where it is, its severity, and all it
 /// says, each comment under its author.
 fn thread(id: &str, t: &ReviewThread) -> Result<Problem, String> {
@@ -23,14 +34,7 @@ fn thread(id: &str, t: &ReviewThread) -> Result<Problem, String> {
     let line = t
         .line
         .ok_or("v1 fixer cannot represent a review thread on no line")?;
-    // A thread without the connector's badge, a person's, blocks landing as
-    // a P1 does.
-    let severity = match BADGE.captures(&first.body).map(|c| c[1].to_owned()) {
-        Some(p) if p == "0" => Severity::P0,
-        Some(p) if p == "2" => Severity::P2,
-        Some(p) if p == "3" => Severity::P3,
-        _ => Severity::P1,
-    };
+    let severity = severity(&first.body);
     let said: Vec<_> = t
         .comments
         .iter()

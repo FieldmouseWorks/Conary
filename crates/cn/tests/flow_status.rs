@@ -55,6 +55,7 @@ fn status_needs_nothing_but_the_data_directory_and_configuration() {
             named("pause", None),
             named("no_plugin", Some("judge")),
             named("no_plugin", Some("proof")),
+            named("no_plugin", Some("job")),
             named("train_off", None),
             named("no_people", None),
             named("no_evidence", None),

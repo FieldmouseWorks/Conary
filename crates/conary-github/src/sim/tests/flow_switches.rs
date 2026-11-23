@@ -144,13 +144,14 @@ fn status_lists_each_switch_with_the_prs_it_holds() {
         .map(|s| (s["switch"].as_str().unwrap(), s["kind"].as_str()))
         .collect();
     // The case's configuration has a review author list, people and an
-    // evidence verifier, and no judge or proof plugin.
+    // evidence verifier, and no judge, proof or job plugin.
     assert_eq!(
         switches,
         [
             ("pause", None),
             ("no_plugin", Some("judge")),
             ("no_plugin", Some("proof")),
+            ("no_plugin", Some("job")),
             ("train_off", None),
         ]
     );

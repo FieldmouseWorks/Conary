@@ -131,13 +131,20 @@ pub enum Kind {
     Conflict,
     Judge,
     Proof,
+    /// The stuck role's job ([`super::stuck`]), which may push to the branch.
+    Stuck,
 }
 
 impl Kind {
     pub fn fixes_branch(self) -> bool {
         matches!(
             self,
-            Self::Findings | Self::Red | Self::JudgeFailure | Self::Description | Self::Conflict
+            Self::Findings
+                | Self::Red
+                | Self::JudgeFailure
+                | Self::Description
+                | Self::Conflict
+                | Self::Stuck
         )
     }
 }
@@ -433,9 +440,21 @@ pub struct Settings {
     /// working.
     #[schemars(extend("x-spender" = false))]
     pub session_handoff_after: u64,
-    /// Review rounds before a PR that still has findings goes past the limit.
+    /// Review rounds before a PR that still has findings goes past the limit:
+    /// with a `job` plugin, to the stuck role.
     #[schemars(extend("x-spender" = false))]
     pub rounds: u32,
+    /// The share, in percent, of a PR's diff before its first fix round
+    /// that its fix rounds may add before it goes to the stuck role. Unset,
+    /// growth hands nothing over.
+    #[schemars(extend("x-spender" = false))]
+    pub fix_growth: Option<u32>,
+    /// What an answered P2 or P3 finding a reviewer raises again, unchanged,
+    /// does: `block`, the default, takes it as any finding (and, with a
+    /// `job` plugin, hands the PR to the stuck role); `judge` has it block
+    /// nothing, and the judge reads it.
+    #[schemars(extend("x-spender" = false))]
+    pub disputed_p2: super::Disputed,
     /// Seconds a PR may wait at one stage before it's overdue, by its
     /// priority level.
     #[schemars(extend("x-spender" = false))]
@@ -527,6 +546,8 @@ impl Default for Settings {
             handoff_after: 1800,
             session_handoff_after: 7200,
             rounds: 5,
+            fix_growth: None,
+            disputed_p2: super::Disputed::Block,
             stall_after: StallAfter::default(),
             hold_stall_after: 28800,
             train_stall_after: 7200,
@@ -661,6 +682,14 @@ pub struct Facts {
     pub created_at: Option<u64>,
     pub last_reply_at: u64,
     pub session: bool,
+    /// Whether a `job` plugin is configured, which serves the stuck role:
+    /// without one, no loop or stall is handed to it ([`super::stuck`]).
+    pub stuck_role: bool,
+    /// Lines its diff adds and deletes, as GitHub counts them. None when
+    /// GitHub didn't say.
+    pub diff: Option<u64>,
+    /// The follow-up issue the stuck role's job named, when one did.
+    pub followup: Option<String>,
     /// The failed effect from the preceding execution, if any. Decisions
     /// never optimistically record an effect as having succeeded.
     pub failed: Option<Failure>,
@@ -778,6 +807,24 @@ pub struct Memory {
     /// its own listing, never a person's door.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub labelled: bool,
+    /// Each handoff to the stuck role ([`super::stuck`]): a loop's once for
+    /// the PR, a stall's once for its head and stage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stuck: Vec<super::Handoff>,
+    /// The diff's size when its first fix round was handed: what fix
+    /// growth is measured against, across every head after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<u64>,
+    /// The PR's one follow-up issue, as the stuck role's job named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub followup: Option<String>,
+    /// The head whose open findings the flow conceded to the judge
+    /// ([`super::stuck::concede`]): no review round follows on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conceded: Option<String>,
+    /// What conceding has sent so far that GitHub acknowledged.
+    #[serde(default, skip_serializing_if = "super::jobs::Sent::is_empty")]
+    pub concessions: super::jobs::Sent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -791,6 +838,12 @@ pub enum Step {
     Prepare,
     Prove,
     PostProof,
+    /// Hand the PR to the stuck role, for this reason, with what the flow
+    /// saw ([`super::stuck`]).
+    Stuck(super::Stuck, String),
+    /// Answer each open finding the flow concedes to the judge, and
+    /// resolve its thread ([`super::stuck::concede`]).
+    Concede,
     /// Ask a judge, for these reasons. Empty when a judge already started on
     /// this head and base is all that holds (the request then carries that
     /// judge's reasons), and in decisions saved before steps carried them.

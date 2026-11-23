@@ -117,6 +117,7 @@ impl Scenario {
                 draft: false,
                 complete: true,
                 merge_state: "CLEAN".into(),
+                diff: None,
                 open_threads: 0,
                 threads: Default::default(),
                 resolved_reviews: Default::default(),
