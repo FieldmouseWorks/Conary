@@ -75,7 +75,7 @@ fn a_persons_push_waits_quiet_then_is_asked_for() {
     pushed_by(&c, "person", "User");
     c.pass(0);
     assert_eq!(c.pass(60).step, Step::Wait { until: Some(QUIET) });
-    assert!(QUIET <= 5 * 60);
+    const { assert!(QUIET <= 5 * 60) };
     let late = c.pass(QUIET);
     assert!(
         matches!(&late.step, Step::AskReview(why) if why.contains("No review of")),
