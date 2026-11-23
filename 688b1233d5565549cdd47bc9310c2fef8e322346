@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "3zbjn8hkadajw805fc54ndvy53",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 586,
+  "url": "https://github.com/fieldmouseworks/conary/pull/586",
+  "summary": "flow: break a review loop that won't settle",
+  "task": "fieldmouseworks/conary#422",
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "af181f4c7e127ba99cbc08026603e2369b988abb6bc216729a69b3eec7e87aa9",
+    "before": "e3a1687b0d8b99c6b7e167a556c7099ae4f6d530",
+    "after": "688b1233d5565549cdd47bc9310c2fef8e322346",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795416399096
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501952/job/137522450890"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501952/job/137522450677"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501741/job/137522449522"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422/job/137522445062"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#586)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501422"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/586#issuecomment-7091977039 at 2026-11-23T06:22:46Z"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501741/job/137522599578"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501952/job/137522479011"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501952/job/137522450951"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "fail",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45123501952/job/137522450951"
+    }
+  ]
+}
