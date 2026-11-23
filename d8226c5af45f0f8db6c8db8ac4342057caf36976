@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "1aq63y037n4hb6mfcn7tj6c94z",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 599,
+  "url": "https://github.com/fieldmouseworks/conary/pull/599",
+  "summary": "log: let the ledger's lock go when its writer drops it",
+  "task": "fieldmouseworks/conary#594",
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "0dbc160fb48b3b00e117d8759e72a59c933761924e32ac61cdd28caa092cfef2",
+    "before": "8c58645bdcb0197de8f12086712b16fc5c9ae320",
+    "after": "d8226c5af45f0f8db6c8db8ac4342057caf36976",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795456302240
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636325/job/137874771759"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636173/job/137874771105"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636325/job/137874771064"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232/job/137874766597"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#599)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226635232"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/599#issuecomment-7108584504 at 2026-11-23T17:24:26Z"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636173/job/137875061859"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636325/job/137874771838"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636325/job/137874827569"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "fail",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45226636325/job/137874771838"
+    }
+  ]
+}
