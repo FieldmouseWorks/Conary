@@ -605,3 +605,76 @@ fn a_switch_report_names_the_stuck_role_off_without_a_job_plugin() {
     assert!(off(&c));
     assert!(!off(&with_job_plugin(c)));
 }
+
+#[test]
+fn a_stall_on_a_pr_the_flow_doesnt_work_goes_to_no_one() {
+    // Three failed status writes make a stall at once, decided before the
+    // flow reads whether it works the PR at all: an outside contribution's
+    // goes to no stuck role.
+    for trusted in [true, false] {
+        let mut c = Case::new();
+        c.stuck_role = true;
+        if !trusted {
+            c.hub.edit_pull(REMI, 3, |p| {
+                p["user"]["login"] = serde_json::json!("stranger");
+            });
+        }
+        c.failed = Some(Failure::Status);
+        let mut steps = Vec::new();
+        for now in [1000, 1001, 1002, 1003] {
+            steps.push(c.pass(now));
+        }
+        assert_eq!(
+            steps.iter().any(|n| handed(n) == Some(Stuck::Stall)),
+            trusted,
+            "trusted {trusted}: {steps:?}"
+        );
+    }
+}
+
+#[test]
+fn a_concession_cut_short_still_goes_to_the_judge() {
+    let mut c = pass::Case::new();
+    c.config.settings.disputed_p2 = Disputed::Judge;
+    c.config.plugins.judge = Some(pass::example());
+    let p2 = FINDING;
+    c.hub
+        .flow_thread_at(REPO, 3, "T1", ("src/lib.rs", 3), (CONNECTOR, p2));
+    c.hub.flow_thread_comments(
+        REPO,
+        3,
+        "T1",
+        &[(CONNECTOR, p2), (STEWARD, "Answered: it can't happen.")],
+    );
+    c.hub.flow_thread(REPO, 3, "T1", true);
+    c.hub
+        .flow_thread_at(REPO, 3, "T2", ("src/lib.rs", 5), (CONNECTOR, p2));
+    let now = flow::jobs::now();
+    c.hub.flow_review(REPO, 3, Verdict::Findings, now);
+    // Its answer goes up, and resolving it fails: the head already owes a
+    // judge.
+    c.hub.fail(crate::sim::Call::FlowResolve);
+    let r = report(&c, now + 1);
+    assert_eq!(r.next.unwrap().step, Step::Concede);
+    assert!(r.error.is_some());
+    assert_eq!(c.record().memory.conceded, Some(head(3)));
+    // Resolved after all (the write went through, the answer was lost), and
+    // the reviewer clean: the judge still decides, and nothing lands first.
+    c.hub.heal(crate::sim::Call::FlowResolve);
+    c.hub.flow_thread(REPO, 3, "T2", true);
+    c.clean_review_at(now + 2);
+    let mut steps = Vec::new();
+    for t in [3, 120, 600, 3600, 7200] {
+        steps.push(report(&c, now + t).next.unwrap().step);
+    }
+    assert!(
+        !steps
+            .iter()
+            .any(|s| matches!(s, Step::Merge | Step::JoinTrain)),
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&Step::Judge(vec![Trigger::RoundLimit])),
+        "{steps:?}"
+    );
+}

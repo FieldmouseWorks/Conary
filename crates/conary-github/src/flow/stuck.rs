@@ -242,6 +242,7 @@ pub(super) fn stall(
     now: u64,
 ) -> Option<Step> {
     if !f.stuck_role
+        || !worked(f, m)
         || now < wait.due
         || !matches!(step, Step::Wait { .. } | Step::Retry { .. })
         || !(failing || matches!(stage, Stage::Ci | Stage::Merge | Stage::Fix))
@@ -264,6 +265,21 @@ pub(super) fn stall(
         detail.push_str(&format!(". Its recovery: {}", r.describe()));
     }
     Some(Step::Stuck(Stuck::Stall, detail))
+}
+
+/// Whether the flow works the PR past every gate [`super::decide::decide`]
+/// holds it at before its own steps: open and ready, trusted, read in
+/// full, on no base it waits for, and not at a person's owner label. A
+/// stall a failed effect's strikes make, decided before those gates, is
+/// never the stuck role's on a PR they hold.
+fn worked(f: &Facts, m: &Memory) -> bool {
+    f.open
+        && !f.draft
+        && f.trusted
+        && f.complete
+        && !f.base_held
+        && f.stacked_on.is_none()
+        && (f.owner_approved || !super::approval::person_labelled(f, m))
 }
 
 /// The `job` request's prompt: the handoff, as the stuck role's plugin
@@ -333,6 +349,13 @@ pub(super) fn concede<G: Write>(
     if planned.is_empty() {
         return Err("no open finding to concede".into());
     }
+    // Saved before any thread is answered or resolved: once one may be, the
+    // head goes to the judge, however the rest of this goes, and a restart
+    // concedes what's still open.
+    if record.memory.conceded.as_ref() != Some(&f.revision.head) {
+        record.memory.conceded = Some(f.revision.head.clone());
+        data.save(f.number, record)?;
+    }
     let repo = f.repo.to_string();
     let read = || -> Result<Vec<(bool, bool)>> {
         let snapshot = github.snapshot(&repo, f.number)?;
@@ -374,7 +397,5 @@ pub(super) fn concede<G: Write>(
     if read()?.iter().any(|&(shown, resolved)| !shown || !resolved) {
         return Err(crate::api::ApiError::unavailable("not every answer is on GitHub yet").into());
     }
-    record.memory.conceded = Some(f.revision.head.clone());
-    data.save(f.number, record)?;
     Ok(())
 }

@@ -731,7 +731,9 @@ answer, or with one that doesn't end it (`ask` or `await`: the stuck role's
 job is one turn that ends `done`), leaves a head that isn't clean waiting, overdue in its status, with
 nothing conceded and nothing handed again, until the head moves: then the
 PR is decided afresh. A conceded finding always goes to the judge, even on
-a head the reviewer later calls clean.
+a head the reviewer later calls clean: the head is marked conceded before
+any thread is answered or resolved, so one cut short still owes its judge,
+and the next pass concedes what's still open.
 
 Without a `job` plugin none of this happens: past the limit, what's left
 goes to a fix and then the judge, and the status's switches name the
@@ -898,7 +900,9 @@ With a `job` plugin, a stall still overdue once its recovery had its turn
 (none applied, or GitHub refused it or never answered; not while an
 accepted one may still bring it back) goes to the
 [stuck role](#a-loop-that-wont-settle), `why` `stall` and `detail` the
-wait's status and its recovery's, once for its head and stage. Only a wait
+wait's status and its recovery's, once for its head and stage. Only on a
+PR the flow works (open, ready, trusted, read in full, on no base it waits
+for, and at no person's owner label), and only a wait
 on CI, the merge or a fix, or one failing (three strikes, two lost jobs, a
 proof stalled on its deadlines): never a hold, the owner, the base or a
 slot, never a dependency PR, whose bot or sweep has its branch, never while
