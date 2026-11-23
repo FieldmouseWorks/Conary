@@ -51,16 +51,18 @@ fn ask(f: &Facts, m: &Memory, now: u64, why: &str, description: &str) -> Look {
 }
 
 pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) -> Look {
-    // The stuck role's job, no longer running (or the branch would still be
-    // its), that didn't answer: no loop is broken on nothing.
-    if super::stuck::looped(m).is_some_and(|h| !h.answered) {
-        return wait(Stage::Fix, None, super::stuck::ENDED);
-    }
     let rounds = f.reviewers.values().map(|r| r.rounds).max().unwrap_or(0);
     let mut clean = !f.reviewers.is_empty()
         && f.reviewers
             .values()
             .all(|r| r.verdict == Some(Verdict::Clean));
+    // The stuck role's job, no longer running (or the branch would still be
+    // its), that didn't answer: no loop is broken on nothing, and a head
+    // that isn't clean waits until it moves ([`super::stuck::settle`]).
+    let handed = super::stuck::looped(m);
+    if !clean && handed.is_some_and(|h| !h.answered) {
+        return wait(Stage::Fix, None, super::stuck::ENDED);
+    }
     // Findings the flow conceded to the judge on this head get no other
     // review round ([`super::stuck::concede`]).
     let conceded = m.conceded.as_deref() == Some(f.revision.head.as_str());
@@ -68,7 +70,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     // with a `job` plugin the stuck role, settles what's left on its
     // merits, and a judge decides whether it lands. The reviewer still
     // reviews each push; it just isn't waited for.
-    let mut capped = !clean && (rounds >= f.settings.rounds || conceded);
+    let mut capped = (!clean && rounds >= f.settings.rounds) || conceded;
     // Documentation alone that isn't R2 needs green CI and no review round.
     let unreviewed = !clean && !(f.classified.review() && request_review);
     if unreviewed {
@@ -76,7 +78,7 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     }
     // Once the loop went to the stuck role and its job ended, no fix round
     // follows: the head it left gets one more review, and the judge decides.
-    let broken = super::stuck::looped(m).map(|h| h.head.clone());
+    let broken = handed.filter(|h| h.answered).map(|h| h.head.clone());
     let again = broken.as_ref().is_some_and(|h| *h != f.revision.head);
     capped |= broken.is_some();
     // An answered P2 or P3 raised again blocks nothing when the switch says

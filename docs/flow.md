@@ -718,13 +718,19 @@ workdir `.`, and a prompt of one JSON object, `{"pr", "why", "detail"}`,
 role's job owns the branch as a fix does, across its own pushes. Its
 answer's summary says the outcome on its first line and `follow-up: URL` or
 `follow-up: none` on its second; a URL that isn't an issue of the PR's own
-repository is no follow-up. Once it has ended, whatever it answered, no fix
-round follows: the head it left gets one more review (one it didn't move
-has had its own), then the flow answers each finding still open, saying it
-goes to the judge and naming the follow-up issue, resolves its thread, and
-a judge decides with `round_limit`. CI, the judge and every landing gate
-still hold. The handoff is saved with the job it starts, so no wake, event
-or restart hands the PR over twice.
+repository is no follow-up. A head it says it pushed (`pushed SHA`) is
+authored by its session, as a fix's is. Once it has answered, no fix round
+follows: the head it left gets one more review (one it didn't move has had
+its own), then the flow answers each finding still open, saying it goes to
+the judge and naming the follow-up issue, resolves its thread, and a judge
+decides with `round_limit`. CI, the judge and every landing gate still
+hold. The handoff is saved with the job it starts, so no wake, event or
+restart hands the PR over twice. A job a pause or hold stopped undoes its
+handoff, which is made again once it's wanted. One that ended without its
+answer leaves a head that isn't clean waiting, overdue in its status, with
+nothing conceded and nothing handed again, until the head moves: then the
+PR is decided afresh. A conceded finding always goes to the judge, even on
+a head the reviewer later calls clean.
 
 Without a `job` plugin none of this happens: past the limit, what's left
 goes to a fix and then the judge, and the status's switches name the
@@ -891,9 +897,13 @@ With a `job` plugin, a stall still overdue once its recovery had its turn
 (none applied, or GitHub refused it or never answered; not while an
 accepted one may still bring it back) goes to the
 [stuck role](#a-loop-that-wont-settle), `why` `stall` and `detail` the
-wait's status and its recovery's, once for its head and stage: never while
-a job owns the branch, and never for a hold or a wait on the owner. No
-owner is listed for it: only a door lists the owner. A
+wait's status and its recovery's, once for its head and stage. Only a wait
+on CI, the merge or a fix, or one failing (three strikes, two lost jobs, a
+proof stalled on its deadlines): never a hold, the owner, the base or a
+slot, never a dependency PR, whose bot or sweep has its branch, never while
+a job owns the branch or Renovate has its turn, and never the stuck role's
+own job that ended without its answer. No owner is listed for it: only a
+door lists the owner. A
 PR the owner hears of already (open over a day) has no deadline here, and
 so no recovery, but for two lost jobs ([Asking the owner](#asking-the-owner)).
 

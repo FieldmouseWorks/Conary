@@ -244,6 +244,13 @@ fn a_stuck_role_job_that_ended_without_its_answer_concedes_nothing() {
         assert_eq!(n.description, flow::STUCK_ENDED);
     }
     assert_eq!(c.memory.stuck.len(), 1);
+    // A push moves it on: the PR is decided afresh, and its clean head lands.
+    c.push(&head(4));
+    c.threads(0);
+    c.review("reviewer", Verdict::Clean, 4100 + 31 * 7200);
+    let n = c.pass(4100 + 32 * 7200);
+    assert_eq!(n.step, Step::Merge, "{n:?}");
+    assert!(c.memory.stuck.is_empty());
 }
 
 #[test]

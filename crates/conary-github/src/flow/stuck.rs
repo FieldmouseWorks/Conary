@@ -7,12 +7,14 @@
 //! `settings.rounds` rounds; the fix rounds grew the diff past
 //! `settings.fix_growth` percent of what it was before the first of them;
 //! or a reviewer raised again, unchanged, a finding the flow had answered.
-//! No fix round follows. Once its job has ended, the head it leaves gets
+//! No fix round follows. Once its job has answered, the head it leaves gets
 //! one more review, the flow answers every finding still open with the
 //! PR's follow-up issue and resolves it ([`concede`]), and the judge
-//! decides. A stall still overdue once its recovery had its turn
-//! ([`super::recover`]) goes to the stuck role once for its head and
-//! stage, before anything else.
+//! decides. A job a pause or hold stopped undoes its handoff; one that
+//! ended without its answer leaves the PR waiting ([`ENDED`]) until its
+//! head moves ([`settle`]). A stall still overdue once its recovery had
+//! its turn ([`super::recover`]) goes to the stuck role once for its head
+//! and stage ([`stall`]).
 //!
 //! All of it needs a `job` plugin (`plugins.job`), which serves the stuck
 //! role: without one, none of it happens, and the round limit sends what's
@@ -98,18 +100,25 @@ pub(super) fn looped(m: &Memory) -> Option<&Handoff> {
     m.stuck.iter().find(|h| h.why != Stuck::Stall)
 }
 
-/// Each handoff as its job now stands: undone when the job was stopped,
-/// answered once it answered.
+/// Each handoff as its job now stands: answered once it answered; undone
+/// when the job was stopped, or, for a loop's job that ended without its
+/// answer, once the head moved past where it was handed, so a push starts
+/// the PR afresh rather than leave it waiting on a job that's gone.
 pub(super) fn settle(f: &Facts, m: &mut Memory) {
-    let retired = &m.retired_jobs;
-    m.stuck.retain(|h| !retired.contains(&h.job));
-    if let Some(job) = f.jobs.get(&Kind::Stuck)
+    let job = f.jobs.get(&Kind::Stuck);
+    if let Some(job) = job
         && job.state == JobState::Done
     {
         for h in m.stuck.iter_mut().filter(|h| h.job == job.id) {
             h.answered = true;
         }
     }
+    let retired = &m.retired_jobs;
+    let running = |h: &Handoff| job.is_some_and(|j| j.id == h.job && j.state.live());
+    m.stuck.retain(|h| {
+        !retired.contains(&h.job)
+            && (h.answered || h.why == Stuck::Stall || h.head == f.revision.head || running(h))
+    });
 }
 
 fn by(c: Option<&ThreadComment>, accounts: &BTreeSet<String>) -> bool {
