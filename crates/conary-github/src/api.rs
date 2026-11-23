@@ -94,10 +94,6 @@ pub struct CheckRun {
     /// The suite it ran in: one workflow run's, under GitHub Actions. A
     /// rerun is in the suite of the run it reruns.
     pub check_suite: Option<CheckSuite>,
-    /// What the run's creator named it by. A deferred check's run names the
-    /// dispatch that started it here.
-    #[serde(default)]
-    pub external_id: Option<String>,
     /// What it reports: a service producer's signed statement rides in its
     /// text (`docs/service-attestation.md`).
     #[serde(default)]

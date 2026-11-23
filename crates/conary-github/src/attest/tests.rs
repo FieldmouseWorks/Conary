@@ -31,7 +31,6 @@ fn run(conclusion: &str) -> CheckRun {
         )),
         started_at: None,
         check_suite: Some(CheckSuite { id: 3 }),
-        external_id: None,
         output: None,
     }
 }

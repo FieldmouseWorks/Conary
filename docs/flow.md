@@ -986,9 +986,13 @@ The permission's attested-evidence rules apply to the check run too.
 **The workflow's part.** It receives the inputs `pr`, `head`, `base`, `check`
 and `dispatch_id`. It must (1) set `run-name: conary ${{ inputs.dispatch_id }}`, so the run
 can be found, (2) check out `inputs.head` (a dispatch runs on the ref it was
-sent to, never on the PR's head), and (3) in a job named exactly `check` that
-succeeds only if the work passed (GitHub keeps that job's check run on the
-commit the run is on, the dispatched ref's tip, not on the PR's head), sign the result with
+sent to, never on the PR's head), and (3) in a job whose check run is named
+exactly the configured check's name, which is the value of `inputs.check`
+(`heavy` in the example above: give the job `name: ${{ inputs.check }}`; a job
+in a reusable workflow reports as `CALLER / JOB`, so configure the check under
+that whole name), and that succeeds only if the work passed (GitHub keeps that
+job's check run on the commit the run is on, the dispatched ref's tip, not on
+the PR's head), sign the result with
 `cn attest deferred HEAD DISPATCH_ID ...` (the same token, tree and log rules as
 `cn attest commit`). The evidence is that job's own check run: the dispatch
 owns it because the job belongs to the run Conary dispatched, and the signed

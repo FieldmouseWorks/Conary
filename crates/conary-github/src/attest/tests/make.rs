@@ -29,7 +29,6 @@ fn run(conclusion: &str) -> CheckRun {
         html_url: None,
         started_at: None,
         check_suite: None,
-        external_id: None,
         output: None,
     }
 }
