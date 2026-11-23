@@ -305,6 +305,8 @@ pub enum Reading {
     Tree,
     /// The PR's timeline, for who put the owner label on.
     OwnerLabel,
+    /// The repository's timed proofs, which size a proof's deadline.
+    Durations,
 }
 
 impl std::fmt::Display for Reading {
@@ -329,6 +331,7 @@ impl std::fmt::Display for Reading {
             Self::Pause => "the repository's pause",
             Self::Tree => "the head's tree",
             Self::OwnerLabel => "who put the owner label on",
+            Self::Durations => "the repository's timed proofs",
         })
     }
 }

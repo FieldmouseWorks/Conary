@@ -276,6 +276,13 @@ fn durations_that_dont_read_start_no_proof() {
         "{next:?}"
     );
     assert!(proofs(&c).is_empty());
+    assert!(
+        next.degraded.iter().any(|d| d.what
+            == Degraded::Read {
+                read: Reading::Durations
+            }),
+        "{next:?}"
+    );
     let dry = c.pass(t, true)[0].next.clone().unwrap();
     assert_eq!(dry.description, next.description);
     // Nothing writes over them.

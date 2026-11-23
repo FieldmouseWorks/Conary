@@ -352,7 +352,9 @@ pub struct Settings {
     /// none; `null` sets no limit.
     #[schemars(extend("x-spender" = true))]
     pub proof_slots: Option<u32>,
-    /// Seconds a proof may run before it's stopped.
+    /// Seconds a proof may run before it's stopped: the most its deadline,
+    /// sized from its own history, may be, and its deadline while it has
+    /// none. A proof's preparation has this deadline.
     #[schemars(extend("x-spender" = false))]
     pub proof_timeout: u64,
     /// Seconds a review, fix or judge job may run before it's stopped.

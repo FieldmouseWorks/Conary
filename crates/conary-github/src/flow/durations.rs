@@ -114,11 +114,21 @@ impl Durations {
         self.runs != before
     }
 }
-/// Gives a decision the repository's timed proofs, or why they didn't read.
+/// Gives a decision the repository's timed proofs, or why they didn't read:
+/// the degraded `durations` read, met by a PR with a proof to run, which
+/// starts none until they read.
 pub(crate) fn apply(f: &mut Facts, durations: &std::result::Result<Durations, String>) {
     match durations {
-        Ok(timed) => f.proof_data.durations = timed.clone(),
-        Err(why) => f.proof_data.unread = Some(why.clone()),
+        Ok(timed) => {
+            f.reads.answered(super::Reading::Durations);
+            f.proof_data.durations = timed.clone();
+        }
+        Err(why) => {
+            if !super::proofs::selected(f).is_empty() {
+                f.reads.met(super::Reading::Durations, why.clone());
+            }
+            f.proof_data.unread = Some(why.clone());
+        }
     }
 }
 /// Saves the repository's timed proofs, under its lock.

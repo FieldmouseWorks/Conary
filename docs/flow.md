@@ -535,7 +535,9 @@ paths it records:
     candidate merges it again and checks that); `diff` (the gates count as
     edited); `tree`, the head's tree, read once a check has reached its
     [deadline twice](#deadlines) on one tree (whether this is that tree is
-    unknown, so nothing starts for it); `owner_label`, the timeline read
+    unknown, so nothing starts for it); `durations`, the repository's
+    timed proofs, met by a PR with a proof to run (its deadline can't be
+    sized, so no proof starts: [Deadlines](#deadlines)); `owner_label`, the timeline read
     for who put the owner label on (it waits, neither listed nor gone
     past: [Asking the owner](#asking-the-owner)); `default_branch`, no
     observation of the default branch's CI for a fix of it (the base is
@@ -862,8 +864,8 @@ when one of its checks reached a deadline on the PR as its recipe stands:
 history said too little for it, and a second deadline on its tree is the
 stall above. A preparation's deadline is always `proof_timeout`. Each proof
 keeps the deadline it started with. Timed proofs that don't read are never
-taken as no history: no proof starts, and the PR says why, until they read
-or are removed. Next's `deadline` says the deadline of the proof the
+taken as no history: they're the degraded `durations` read, no proof
+starts, and the PR says why, until they read or are removed. Next's `deadline` says the deadline of the proof the
 decision starts, or of the head's running proof: its `seconds` and where
 it came `from`, `configured`, `reached`, or `history` with its `runs` and
 the `longest`.
