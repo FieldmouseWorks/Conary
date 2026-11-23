@@ -375,8 +375,8 @@ Every pass reads the pause before each PR's decision, so one written during
 a pass stops the PRs after it, and again before each effect: a plugin
 start, a grant of landing permission, a merge or a train admission. An
 effect a pause keeps off is no failure and no strike. Only what takes work
-off goes ahead while paused: stopping a worker, leaving the train and
-taking GitHub's queued merge off. A pause that can't be read stops every
+off goes ahead while paused: stopping a worker or a deferred run, leaving
+the train and taking GitHub's queued merge off. A pause that can't be read stops every
 decision with its error; it never reads as no pause. Permission is checked
 immediately before publication and validated afterward, including renewals
 for PRs already seated in the train.
@@ -393,7 +393,8 @@ still validate fresh worker state. Its proof slot frees when its worker ends, as
 any cancelled proof's does, and nothing new starts. A stopped worker is
 retired: never a failure, a strike or a lost job. Its PR keeps its Memory,
 receipts and branch. A paused PR then waits with its reason, outside every
-stage and never overdue; a held one waits where it always has.
+stage and never overdue; a held one waits where it always has. Its
+deferred runs stop too ([deferred checks](#deferred-checks)).
 
 Lifting either carries on from the saved state. What a worker finished
 stays, so no review, fix, preparation or proof answer is redone, and a
@@ -1029,8 +1030,21 @@ disappearance of a previously adopted run. An unseen obsolete dispatch stays
 owned and is rediscovered every minute even after `start_timeout`; elapsed
 time cannot establish that accepted work will never appear. Until cleanup is
 confirmed the check is not replaced, and removal of its configuration cannot
-bypass this wait. The new head starts its own. Runs on a PR that is closed
-are left to finish.
+bypass this wait. The new head starts its own. A PR that is no longer open
+can land nothing and no decision reads it, so each pass, paused or not, asks
+its runs still going to stop the same way and forgets each once it is seen
+finished.
+
+**Pause and hold.** A paused or held PR vacates its deferred runs as it does
+its workers: once its unanswered workers are asked to stop, each run of its
+still going is asked to stop, obsolete or lost ones first, and asked again
+every minute until it is seen finished, with that minute booked as the PR's
+wake. Nothing is dispatched while either lasts. Such a stop is not a loss:
+the dispatch is marked vacated with the request and forgotten once its run
+has stopped, so it spends none of the check's `attempts`, and lifting the
+pause or hold starts the check afresh. A run that passed despite the request
+keeps its evidence and is not run again, and one that failed goes to a fix as
+before.
 
 **Judged reviews.** Readiness at the review-round limit, or after the PR was
 edited or retargeted since its clean review, needs a judge's pass, or an

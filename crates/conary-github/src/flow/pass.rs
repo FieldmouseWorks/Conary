@@ -108,10 +108,15 @@ impl Pass<'_> {
             Some(Data::open(self.root, repo)?)
         };
         let mut recovery = Vec::new();
+        // Records owning deferred dispatches, for those whose PR is closed.
+        let mut owning = Vec::new();
         if let Some(data) = &data {
             for pr in data.records()? {
                 let result: Result<()> = (|| {
                     let mut record = data.load(pr)?;
+                    if !record.dispatches.is_empty() {
+                        owning.push(pr);
+                    }
                     // The repository's off switch reaches every owned worker,
                     // even when its PR closed or a later GitHub read fails.
                     let cancelled = super::pause::cancel(self.root, repo, pr, &mut record, false)
@@ -178,6 +183,28 @@ impl Pass<'_> {
             }
         }
         let mut pulls = github.pulls(&repo.to_string(), crate::api::Pulls::Open)?;
+        // No decision reads a PR that isn't open: its deferred runs are
+        // stopped here, paused or not, since it can land nothing.
+        if let Some(data) = &data {
+            for pr in owning
+                .into_iter()
+                .filter(|pr| !pulls.iter().any(|p| p.number == *pr))
+            {
+                let result = data.load(pr).and_then(|mut record| {
+                    super::deferred::abandon(
+                        github,
+                        &repo.to_string(),
+                        pr,
+                        &mut record,
+                        data,
+                        self.now,
+                    )
+                });
+                if let Err(error) = result {
+                    recovery.push((pr, format!("stopping its deferred runs: {error}")));
+                }
+            }
+        }
         // Proof slots, train joins and dry runs' virtual slots go in line.
         pulls.sort_by_key(|p| {
             super::Rank::of(&self.config.settings, &self.config.trusted_authors, p)

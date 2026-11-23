@@ -709,6 +709,9 @@ pub struct Facts {
     pub deferred: BTreeMap<String, super::deferred::Deferral>,
     /// Nonces of owned runs to cancel.
     pub deferred_stale: Vec<String>,
+    /// Nonces of owned runs still going that nothing has asked to stop: what
+    /// a pause or a hold stops.
+    pub deferred_running: Vec<String>,
     /// Owned current-head failures and their producer diagnostics.
     pub deferred_failures: BTreeMap<String, super::deferred::DeferredFailure>,
     /// When the owned dispatches next need a look.

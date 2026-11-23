@@ -221,6 +221,7 @@ fn gather(
         dispatches: Vec::new(),
         deferred: BTreeMap::new(),
         deferred_stale: Vec::new(),
+        deferred_running: Vec::new(),
         deferred_failures: BTreeMap::new(),
         deferred_wake: None,
     };

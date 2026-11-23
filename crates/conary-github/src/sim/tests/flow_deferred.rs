@@ -1,5 +1,6 @@
 //! Deferred checks against the simulated GitHub, across successive passes.
 mod recovery;
+mod vacate;
 
 use super::flow_pass_case::{Case, REPO};
 use super::head;

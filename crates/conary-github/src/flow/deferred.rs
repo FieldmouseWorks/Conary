@@ -132,6 +132,11 @@ pub struct Dispatch {
     /// Retry ordering and deadlines belong to each dispatch.
     #[serde(default)]
     pub cancel_attempted: Option<u64>,
+    /// Asked to stop by a pause or a hold, not lost: once its run is seen
+    /// stopped it is forgotten, so the check starts afresh once lifted and
+    /// the stop spends none of its attempts. A run that passed anyway stays.
+    #[serde(default)]
+    pub vacated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,8 +181,12 @@ pub struct DeferredFailure {
 #[derive(Debug, Default)]
 pub(super) struct Observation {
     pub deferrals: BTreeMap<String, Deferral>,
-    /// Nonces of runs to stop: obsolete heads, or lost and still running.
+    /// Nonces of runs to stop: obsolete heads, lost or vacated, and still
+    /// running.
     pub stale: Vec<String>,
+    /// Nonces of current runs still going and never asked to stop: what a
+    /// pause or a hold asks to stop.
+    pub running: Vec<String>,
     /// The earliest moment a dispatch needs another look, whatever else the
     /// pass decides, from the same observed state that decides loss.
     pub wake: Option<u64>,
@@ -233,6 +242,41 @@ fn failed(run: &crate::api::WorkflowRun) -> bool {
         )
 }
 
+/// Each dispatch's run, by nonce: none while it hasn't been seen. A saved run
+/// is read by its id; one not yet seen is looked for in its own workflow's
+/// listing from when the earliest such dispatch was sent.
+fn runs<G: Read + ?Sized>(
+    github: &G,
+    repo: &str,
+    dispatches: &[Dispatch],
+) -> std::result::Result<BTreeMap<String, Option<crate::api::WorkflowRun>>, ApiError> {
+    let mut listed: BTreeMap<&str, Vec<crate::api::WorkflowRun>> = BTreeMap::new();
+    for d in dispatches.iter().filter(|d| d.run.is_none()) {
+        if !listed.contains_key(d.workflow.as_str()) {
+            let since = dispatches
+                .iter()
+                .filter(|o| o.run.is_none() && o.workflow == d.workflow)
+                .map(|o| o.sent_at)
+                .min()
+                .unwrap_or(d.sent_at)
+                .saturating_sub(300);
+            listed.insert(&d.workflow, github.workflow_runs(repo, &d.workflow, since)?);
+        }
+    }
+    let mut run_of = BTreeMap::new();
+    for d in dispatches {
+        let run = match d.run {
+            Some(id) => github.dispatched_run(repo, id)?,
+            None => listed
+                .get(d.workflow.as_str())
+                .and_then(|l| l.iter().find(|r| titled(r, &d.nonce)))
+                .cloned(),
+        };
+        run_of.insert(d.nonce.clone(), run);
+    }
+    Ok(run_of)
+}
+
 /// Populate the same deferred observations for a pass and its scope rereads.
 pub(super) fn hydrate<G: Write>(
     github: &G,
@@ -253,6 +297,7 @@ pub(super) fn hydrate<G: Write>(
     f.deferred.clone_from(&seen.deferrals);
     f.deferred_failures.clone_from(&seen.failures);
     f.deferred_stale.clone_from(&seen.stale);
+    f.deferred_running.clone_from(&seen.running);
     f.deferred_wake = seen.wake;
     Ok(seen)
 }
@@ -275,36 +320,7 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         return Ok(seen);
     }
     let repo = f.repo.to_string();
-    // A saved run is read by its id; one not yet seen is looked for in its own
-    // workflow's listing from when the earliest such dispatch was sent.
-    let mut listed: BTreeMap<&str, Vec<crate::api::WorkflowRun>> = BTreeMap::new();
-    for d in f.dispatches.iter().filter(|d| d.run.is_none()) {
-        if !listed.contains_key(d.workflow.as_str()) {
-            let since = f
-                .dispatches
-                .iter()
-                .filter(|o| o.run.is_none() && o.workflow == d.workflow)
-                .map(|o| o.sent_at)
-                .min()
-                .unwrap_or(d.sent_at)
-                .saturating_sub(300);
-            listed.insert(
-                &d.workflow,
-                github.workflow_runs(&repo, &d.workflow, since)?,
-            );
-        }
-    }
-    let mut run_of: BTreeMap<&str, Option<crate::api::WorkflowRun>> = BTreeMap::new();
-    for d in &f.dispatches {
-        let run = match d.run {
-            Some(id) => github.dispatched_run(&repo, id)?,
-            None => listed
-                .get(d.workflow.as_str())
-                .and_then(|l| l.iter().find(|r| titled(r, &d.nonce)))
-                .cloned(),
-        };
-        run_of.insert(&d.nonce, run);
-    }
+    let run_of = runs(github, &repo, &f.dispatches)?;
     let obsolete = |d: &Dispatch| {
         d.head != f.revision.head
             || config.checks.get(&d.check).is_none_or(|s| {
@@ -327,13 +343,18 @@ pub(super) fn observe<G: Read + Actions + ?Sized>(
         // accepted dispatch will never appear. Only a terminal run or an
         // authoritative lookup of a previously adopted ID settles ownership.
         let settled = !live && (run.is_some() || d.run.is_some());
-        if live && (obsolete(d) || lost) && stop_due(d).is_none_or(|t| now >= t) {
+        let passed = run.is_some_and(|r| r.conclusion.as_deref() == Some("success"));
+        if live && (obsolete(d) || lost || d.vacated) && stop_due(d).is_none_or(|t| now >= t) {
             asks.push((d.cancel_attempted.or(d.cancel_asked), d.nonce.clone()));
         }
-        // Unknown obsolete work remains discoverable until its disposition is known.
-        if obsolete(d) && settled {
+        if live && !(obsolete(d) || lost || d.vacated) {
+            seen.running.push(d.nonce.clone());
+        }
+        // Unknown obsolete work remains discoverable until its disposition is
+        // known. A vacated run is forgotten once stopped, unless it passed.
+        if settled && (obsolete(d) || d.vacated && !passed) {
             seen.retire.insert(d.nonce.clone());
-        } else if !settled && (obsolete(d) || live && lost) {
+        } else if !settled && (obsolete(d) || live && (lost || d.vacated)) {
             unsettled.push(d);
         }
     }
@@ -658,6 +679,7 @@ pub(super) fn begin<G: Write>(
             run: None,
             cancel_asked: None,
             cancel_attempted: None,
+            vacated: false,
         });
         data.save(f.number, record)?;
         github.dispatch(
@@ -672,11 +694,37 @@ pub(super) fn begin<G: Write>(
 
 /// Ask GitHub to stop one run and remember when. Asking is not stopping: the
 /// dispatch stays until its run is seen finished, and is asked again.
+/// A run a pause or a hold stops (one of `f.deferred_running`, which only
+/// they ask to stop) is marked vacated with the attempt.
 pub(super) fn cancel<G: Write>(
     github: &G,
     f: &Facts,
     nonce: &str,
     now: u64,
+    record: &mut Record,
+    data: &Data,
+) -> Result<()> {
+    let vacated = f.deferred_running.iter().any(|n| n == nonce);
+    ask(
+        github,
+        &f.repo.to_string(),
+        f.number,
+        nonce,
+        now,
+        vacated,
+        record,
+        data,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ask<G: Write>(
+    github: &G,
+    repo: &str,
+    pr: u64,
+    nonce: &str,
+    now: u64,
+    vacated: bool,
     record: &mut Record,
     data: &Data,
 ) -> Result<()> {
@@ -687,14 +735,58 @@ pub(super) fn cancel<G: Write>(
         .ok_or("dispatch missing")?;
     let run = d.run.ok_or("run not found")?;
     d.cancel_attempted = Some(now);
-    data.save(f.number, record)?;
-    github.cancel_run(&f.repo.to_string(), run)?;
+    d.vacated |= vacated;
+    data.save(pr, record)?;
+    github.cancel_run(repo, run)?;
     let d = record
         .dispatches
         .iter_mut()
         .find(|d| d.nonce == nonce)
         .expect("saved dispatch");
     d.cancel_asked = Some(now);
-    data.save(f.number, record)?;
+    data.save(pr, record)?;
+    Ok(())
+}
+
+/// A PR no longer open lands nothing, and no decision of the flow reads it
+/// again: its owned runs still going are asked to stop, again each `RETRY`,
+/// and each is forgotten once its run is seen finished. One never seen stays
+/// discoverable until it is. The stop is a vacating one: should the PR be
+/// reopened first, it spends none of the check's attempts.
+pub(super) fn abandon<G: Write>(
+    github: &G,
+    repo: &str,
+    pr: u64,
+    record: &mut Record,
+    data: &Data,
+    now: u64,
+) -> Result<()> {
+    let run_of = runs(github, repo, &record.dispatches)?;
+    let mut finished = BTreeSet::new();
+    for d in record.dispatches.clone() {
+        match &run_of[&d.nonce] {
+            Some(run) if run.status != "completed" => {
+                if let Some(saved) = record.dispatches.iter_mut().find(|o| o.nonce == d.nonce) {
+                    saved.run = Some(run.id);
+                }
+                if stop_due(&d).is_none_or(|t| now >= t) {
+                    ask(github, repo, pr, &d.nonce, now, true, record, data)?;
+                }
+            }
+            // Finished, or its saved run is gone: settled either way.
+            Some(_) => {
+                finished.insert(d.nonce);
+            }
+            None if d.run.is_some() => {
+                finished.insert(d.nonce);
+            }
+            None => {}
+        }
+    }
+    let before = record.dispatches.len();
+    record.dispatches.retain(|d| !finished.contains(&d.nonce));
+    if record.dispatches.len() != before {
+        data.save(pr, record)?;
+    }
     Ok(())
 }

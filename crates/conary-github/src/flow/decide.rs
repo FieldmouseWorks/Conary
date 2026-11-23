@@ -245,8 +245,8 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
 
 /// A paused or held PR keeps nothing running. Every worker of its that
 /// hasn't answered is stopped at once, through the stop path, so a proof's
-/// slot frees as soon as its worker ends; nothing new starts; and what its
-/// workers finished stays, so nothing is redone once it's lifted. A pause
+/// slot frees as soon as its worker ends, and so is every deferred run it
+/// owns; nothing new starts; and what its workers finished stays, so nothing is redone once it's lifted. A pause
 /// then waits here, before anything else is decided. A hold waits where it
 /// always has, after what an owner must hear of first.
 fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
@@ -261,6 +261,15 @@ fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
             None => "On hold (the hold label): stopping its work".into(),
         };
         return Some(at(Stage::None, Step::StopJob(first.clone()), &why));
+    }
+    // Owned deferred runs stop too: whatever was already due to stop first,
+    // then what is still running for this head.
+    if let Some(nonce) = f.deferred_stale.first().or(f.deferred_running.first()) {
+        return Some(at(
+            Stage::None,
+            Step::CancelDeferred(nonce.clone()),
+            "Paused or on hold: stopping its deferred checks",
+        ));
     }
     f.paused
         .as_ref()
