@@ -126,6 +126,33 @@ fn an_apps_push_to_a_forks_branch_is_read_in_the_fork() {
 }
 
 #[test]
+fn a_fork_the_token_cant_read_holds_up_nothing() {
+    // Outside the App's installation, the fork's activity read fails; with
+    // a fix job's account set, the pass still goes on, by the PR's opener.
+    let mut c = unreviewed();
+    c.settings.job_login = Some(APP.to_owned());
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["head"]["repo"] = json!({"full_name": "someone/fork", "default_branch": "main"})
+    });
+    c.hub.fail(Call::Pushes);
+    c.pass(0);
+    let next = c.pass(60);
+    assert_eq!(next.step, Step::Wait { until: Some(QUIET) });
+    assert!(
+        next.description.contains("Waiting for"),
+        "{}",
+        next.description
+    );
+    // The base repository's own branch still needs its pushers read: the
+    // read fails, and the facts with it.
+    let mut c = unreviewed();
+    c.settings.job_login = Some(APP.to_owned());
+    c.hub.fail(Call::Pushes);
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.facts()));
+    assert!(read.is_err());
+}
+
+#[test]
 fn a_push_not_on_record_yet_goes_by_who_opened_the_pr() {
     // A person's PR: the connector's own start is waited for.
     let mut c = unreviewed();

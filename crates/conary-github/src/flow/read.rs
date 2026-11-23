@@ -268,15 +268,19 @@ fn gather(
     )?;
     // A fix job's claim can't be read without its branch's pushers; the
     // reviewer's ask goes on past them, as if the head had no push on record.
-    // A fork's branch is pushed to in the fork, so its activity is there.
+    // A fork's branch is pushed to in the fork, so its activity is there,
+    // and is read only as far as the token reaches: a fork outside the App's
+    // installation can't be read, and no App pushed to it either, so its
+    // head goes by its opener and the pass goes on.
     let pushed_in = pull
         .head
         .repo
         .as_ref()
         .and_then(|r| r.full_name.as_deref())
         .unwrap_or(&repository);
+    let fork = !pushed_in.eq_ignore_ascii_case(&repository);
     let pushes = source.pushes(pushed_in, &pull.head.name);
-    facts.pushes = if facts.settings.job_login.is_some() {
+    facts.pushes = if facts.settings.job_login.is_some() && !fork {
         reads.ask(Reading::Pushes, pushes)?
     } else {
         reads.take(Reading::Pushes, pushes).unwrap_or_default()
