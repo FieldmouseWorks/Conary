@@ -111,6 +111,21 @@ fn a_persons_push_to_an_apps_pr_waits_quiet() {
 }
 
 #[test]
+fn an_apps_push_to_a_forks_branch_is_read_in_the_fork() {
+    let mut c = unreviewed();
+    c.hub.edit_pull(REMI, 3, |p| {
+        p["head"]["repo"] = json!({"full_name": "someone/fork", "default_branch": "main"})
+    });
+    let branch = c.hub.pull_json(REMI, 3)["head"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    c.hub
+        .pushed_by("someone/fork", &branch, &head(3), APP, "Bot");
+    assert!(asked(&c.pass(60).step));
+}
+
+#[test]
 fn a_push_not_on_record_yet_goes_by_who_opened_the_pr() {
     // A person's PR: the connector's own start is waited for.
     let mut c = unreviewed();

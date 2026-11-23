@@ -268,7 +268,14 @@ fn gather(
     )?;
     // A fix job's claim can't be read without its branch's pushers; the
     // reviewer's ask goes on past them, as if the head had no push on record.
-    let pushes = source.pushes(&repository, &pull.head.name);
+    // A fork's branch is pushed to in the fork, so its activity is there.
+    let pushed_in = pull
+        .head
+        .repo
+        .as_ref()
+        .and_then(|r| r.full_name.as_deref())
+        .unwrap_or(&repository);
+    let pushes = source.pushes(pushed_in, &pull.head.name);
     facts.pushes = if facts.settings.job_login.is_some() {
         reads.ask(Reading::Pushes, pushes)?
     } else {
