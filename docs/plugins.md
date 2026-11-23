@@ -143,7 +143,7 @@ A v4 judge request says why the flow asks, and what the judgment is on:
   | `author_engine` | the head's history names an engine `settings.judge_engines` lists, or can't be read in full |
   | `no_ci` | no CI reported on the head |
   | `asked` | someone asked for a judge |
-  | `round_limit` | the review loop reached its round limit with findings open |
+  | `round_limit` | the review loop ended with findings open: at its round limit, after the stuck role, or on a disputed finding the flow lets block nothing |
   | `major_dependency` | a major dependency update, not from the dependency bot |
   | `changed` | the PR was retargeted or its description edited after its head was pushed, which the reviewer's word doesn't cover |
   | `started` | a judge already started on this head and base stays owed, and the reasons it was asked for weren't recorded |

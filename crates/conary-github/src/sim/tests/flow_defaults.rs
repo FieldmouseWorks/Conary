@@ -39,6 +39,8 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         handoff_after: _,
         session_handoff_after: _,
         rounds: _,
+        fix_growth,
+        disputed_p2,
         stall_after: _,
         hold_stall_after: _,
         train_stall_after: _,
@@ -50,6 +52,10 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
     assert_eq!(proof_slots, Some(0));
     assert!(proofs.is_empty());
     assert!(!renovate_sweep);
+    // Nothing breaks a loop the owner didn't ask to, and a disputed P2
+    // blocks, as it always has.
+    assert_eq!(fix_growth, None);
+    assert_eq!(disputed_p2, Disputed::Block);
     // Gates stay closed.
     assert!(require_ci);
     // No machine's accounts, people, keys, label or engines.

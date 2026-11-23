@@ -27,6 +27,8 @@ pub struct Snapshot {
     pub draft: bool,
     pub complete: bool,
     pub merge_state: String,
+    /// Lines its diff adds and deletes, when GitHub said.
+    pub diff: Option<u64>,
     pub open_threads: u32,
     pub threads: BTreeMap<String, ReviewThread>,
     pub resolved_reviews: BTreeSet<u64>,
@@ -195,6 +197,9 @@ fn gather(
             .body
             .as_deref()
             .is_some_and(|b| b.contains("https://claude.ai/code/session_")),
+        stuck_role: false,
+        diff: extra.diff,
+        followup: None,
         failed: None,
         failed_why: None,
         succeeded: BTreeSet::new(),

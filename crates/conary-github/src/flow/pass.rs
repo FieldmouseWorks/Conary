@@ -22,6 +22,11 @@ pub struct Plugins {
     /// The proof plugin's executable.
     #[schemars(extend("x-spender" = true))]
     pub proof: Option<PathBuf>,
+    /// The `job` plugin's executable, which serves the stuck role. Unset, no
+    /// review loop or stall is handed to it, and the round limit sends
+    /// what's left to a fix and a judge.
+    #[schemars(extend("x-spender" = true))]
+    pub job: Option<PathBuf>,
 }
 /// The flow's configuration file, reread at each pass.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -284,6 +289,7 @@ impl Pass<'_> {
                     }
                 };
                 super::approval::labeller(github, &mut facts, &record.memory);
+                facts.stuck_role = self.config.plugins.job.is_some();
                 report.revision = Some(facts.revision.clone());
                 if let Some((_, error)) = recovery.iter().find(|(number, _)| *number == pr) {
                     // Keep advancing strikes while cleanup blocks effects.
@@ -616,6 +622,7 @@ impl Pass<'_> {
             "fix" => self.config.plugins.fix.as_deref(),
             "judge" => self.config.plugins.judge.as_deref(),
             "proof" => self.config.plugins.proof.as_deref(),
+            "job" => self.config.plugins.job.as_deref(),
             _ => None,
         }
     }
@@ -631,6 +638,7 @@ impl Pass<'_> {
         let kind = match purpose {
             Purpose::Fix(_) => "fix",
             Purpose::Judge => "judge",
+            Purpose::Stuck(_) => "job",
             // A proof's preparation is the proof plugin's to answer.
             Purpose::Proof | Purpose::Prepare => "proof",
         };
@@ -640,10 +648,8 @@ impl Pass<'_> {
             .path(kind)
             .ok_or("plugin is not configured")?
             .to_path_buf();
-        record.sequence = record
-            .sequence
-            .checked_add(1)
-            .ok_or("job sequence exhausted")?;
+        let id = job_id(facts, record)?;
+        record.sequence += 1;
         let path = data.job_path(facts.number, record.sequence);
         let timeout = if kind == "proof" {
             facts.settings.proof_timeout
@@ -676,7 +682,7 @@ impl Pass<'_> {
             purpose,
             slotless,
             job: Job {
-                id: format!("{}-{}", facts.number, record.sequence),
+                id,
                 revision: facts.revision.clone(),
                 state: JobState::Running,
                 started: self.now,
@@ -697,11 +703,20 @@ impl Pass<'_> {
         Ok(())
     }
 }
+/// The id the next job [`Pass::start`] starts on the PR gets.
+pub(super) fn job_id(facts: &Facts, record: &Record) -> Result<String> {
+    let sequence = record
+        .sequence
+        .checked_add(1)
+        .ok_or("job sequence exhausted")?;
+    Ok(format!("{}-{sequence}", facts.number))
+}
 pub(super) fn plugin_kind(step: &Step) -> Option<&'static str> {
     match step {
         Step::HandFix(_) => Some("fix"),
         Step::Judge(_) => Some("judge"),
         Step::Prepare | Step::Prove => Some("proof"),
+        Step::Stuck(..) => Some("job"),
         _ => None,
     }
 }

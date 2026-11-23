@@ -303,6 +303,7 @@ pub fn status(root: &Path, repo: &Repo, config: &Config, now: u64) -> Result<Sta
         ("fix", &plugins.fix),
         ("judge", &plugins.judge),
         ("proof", &plugins.proof),
+        ("job", &plugins.job),
     ];
     let settings = &config.settings;
     let off = configured

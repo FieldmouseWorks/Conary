@@ -51,23 +51,40 @@ fn ask(f: &Facts, m: &Memory, now: u64, why: &str, description: &str) -> Look {
 }
 
 pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) -> Look {
+    // The stuck role's job, no longer running (or the branch would still be
+    // its), that didn't answer: no loop is broken on nothing.
+    if super::stuck::looped(m).is_some_and(|h| !h.answered) {
+        return wait(Stage::Fix, None, super::stuck::ENDED);
+    }
     let rounds = f.reviewers.values().map(|r| r.rounds).max().unwrap_or(0);
     let mut clean = !f.reviewers.is_empty()
         && f.reviewers
             .values()
             .all(|r| r.verdict == Some(Verdict::Clean));
-    // Past the limit the flow stops waiting on the reviewers: a fix job
-    // settles what's left on its merits, and a judge decides whether it
-    // lands. The reviewer still reviews each push; it just isn't waited for.
-    let mut capped = rounds >= f.settings.rounds && !clean;
+    // Findings the flow conceded to the judge on this head get no other
+    // review round ([`super::stuck::concede`]).
+    let conceded = m.conceded.as_deref() == Some(f.revision.head.as_str());
+    // Past the limit the flow stops waiting on the reviewers: a fix job, or
+    // with a `job` plugin the stuck role, settles what's left on its
+    // merits, and a judge decides whether it lands. The reviewer still
+    // reviews each push; it just isn't waited for.
+    let mut capped = !clean && (rounds >= f.settings.rounds || conceded);
     // Documentation alone that isn't R2 needs green CI and no review round.
     let unreviewed = !clean && !(f.classified.review() && request_review);
     if unreviewed {
         (clean, capped) = (true, false);
     }
-    let what = f.open_threads > 0 || f.changes_requested;
+    // Once the loop went to the stuck role and its job ended, no fix round
+    // follows: the head it left gets one more review, and the judge decides.
+    let broken = super::stuck::looped(m).map(|h| h.head.clone());
+    let again = broken.as_ref().is_some_and(|h| *h != f.revision.head);
+    capped |= broken.is_some();
+    // An answered P2 or P3 raised again blocks nothing when the switch says
+    // the judge reads it.
+    let disputed = super::stuck::disputed(f);
+    let what = f.open_threads > disputed.len() as u32 || f.changes_requested;
     let age = now.saturating_sub(m.seen);
-    let waiting: Vec<_> = if clean || capped {
+    let waiting: Vec<_> = if clean || capped && !again {
         Vec::new()
     } else {
         f.reviewers
@@ -77,8 +94,8 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     };
     if !waiting.is_empty() || f.reviewers.is_empty() && !unreviewed {
         // One reviewer's threads needn't wait for another to finish.
-        if what {
-            return Look::Next(decide::hand(f, m, now, Kind::Findings, true));
+        if what && broken.is_none() {
+            return findings(f, m, now, (rounds, false), &disputed);
         }
         if f.reviewers.is_empty() {
             return wait(Stage::Review, None, "No reviewer can review it");
@@ -119,13 +136,21 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
             &format!("{name} is reviewing this commit"),
         );
     }
-    if what && capped {
-        let mut decision = decide::hand(f, m, now, Kind::Findings, true);
-        decision.2 = format!("Past the review-round limit ({rounds}): {}", decision.2);
-        return Look::Next(decision);
+    if what && broken.is_some() {
+        if f.open_threads == 0 {
+            return wait(
+                Stage::Review,
+                None,
+                "Changes requested on the stuck role's head: waiting for that review",
+            );
+        }
+        return concede("The stuck role is done: conceding its open findings to the judge");
     }
     if what {
-        return Look::Next(decide::hand(f, m, now, Kind::Findings, true));
+        return findings(f, m, now, (rounds, capped), &disputed);
+    }
+    if !disputed.is_empty() {
+        return concede("Conceding answered P2s raised again to the judge");
     }
     if !clean && !capped {
         // Every finding answered without a new commit: the reviewers that
@@ -147,6 +172,36 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
         capped,
         changed: clean && !unreviewed && f.reviewers.values().any(|r| r.changed),
     }
+}
+
+/// Another fix round is due on open findings after `rounds` rounds
+/// (`capped`, past the limit): the stuck role's instead, when one of its
+/// triggers holds ([`super::stuck::trigger`]). The first fix round fixes
+/// the diff fix growth is measured against.
+fn findings(
+    f: &Facts,
+    m: &mut Memory,
+    now: u64,
+    (rounds, capped): (u32, bool),
+    disputed: &std::collections::BTreeSet<String>,
+) -> Look {
+    if let Some((why, detail)) = super::stuck::trigger(f, m, rounds, disputed) {
+        return Look::Next(decide::stuck(f, m, now, why, detail));
+    }
+    let mut decision = decide::hand(f, m, now, Kind::Findings, true);
+    if decision.1 == Step::HandFix(Kind::Findings)
+        && let Some(diff) = f.diff
+    {
+        m.original.get_or_insert(diff);
+    }
+    if capped {
+        decision.2 = format!("Past the review-round limit ({rounds}): {}", decision.2);
+    }
+    Look::Next(decision)
+}
+
+fn concede(why: &str) -> Look {
+    Look::Next(decide::at(Stage::Review, Step::Concede, why))
 }
 
 fn head_short(f: &Facts) -> &str {

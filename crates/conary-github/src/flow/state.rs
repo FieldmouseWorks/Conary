@@ -123,6 +123,10 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             }
         }
     }
+    if m.followup.is_none() {
+        m.followup = f.followup.clone();
+    }
+    super::stuck::settle(f, &mut m);
     for (kind, job) in &f.jobs {
         if kind.fixes_branch() {
             m.handed.insert(*kind, job.revision.clone());
@@ -326,6 +330,22 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 description = look.recovery.describe();
             }
             recovery = Some(look.recovery);
+        }
+        // A stall its recovery couldn't bring back goes to the stuck role,
+        // once for its head and stage, before any owner hears of it.
+        if let Some(stuck) = super::stuck::stall(
+            f,
+            &m,
+            (stage, &step, failing),
+            &wait,
+            recovery.as_ref(),
+            now,
+        ) {
+            step = stuck;
+            description = format!("Overdue; handing it to the stuck role: {description}")
+                .chars()
+                .take(140)
+                .collect();
         }
         m.wait = Some(wait);
         due

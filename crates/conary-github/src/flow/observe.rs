@@ -147,6 +147,23 @@ fn hydrate_with(
                 }
                 f.jobs.insert(Kind::Judge, job);
             }
+            Purpose::Stuck(_) => {
+                if let Some(Ok(plugin::Response {
+                    answer: plugin::Answer::Job { summary, .. },
+                    by,
+                    ..
+                })) = &completion.result
+                {
+                    // Its pushed head's author is its session, as a fix's is.
+                    if super::stuck::pushed(summary) == Some(f.revision.head.as_str()) {
+                        f.author = Ok(by.clone());
+                    }
+                    if f.followup.is_none() {
+                        f.followup = super::stuck::followup(summary, &f.repo);
+                    }
+                }
+                f.jobs.insert(Kind::Stuck, job);
+            }
             Purpose::Proof => {
                 if job.revision == f.revision
                     && work.recipes == super::proofs::selected(f)

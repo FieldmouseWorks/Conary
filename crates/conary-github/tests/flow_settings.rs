@@ -151,6 +151,7 @@ fn every_spender_defaults_off_and_a_new_one_that_starts_on_fails() {
         spenders,
         [
             "Plugins.fix",
+            "Plugins.job",
             "Plugins.judge",
             "Plugins.proof",
             "Settings.proof_slots",

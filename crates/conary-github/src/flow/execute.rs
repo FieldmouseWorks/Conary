@@ -132,6 +132,41 @@ pub(crate) fn act<G: Write>(
                     data,
                 )?;
             }
+            Step::Stuck(why, detail) => {
+                // Saved with the job it starts, in the same write: a wake or
+                // a restart after this never hands the same loop or stall
+                // again.
+                let job = super::pass::job_id(f, record)?;
+                record.memory.stuck.push(super::Handoff {
+                    why: *why,
+                    head: f.revision.head.clone(),
+                    stage: (*why == super::Stuck::Stall).then_some(next.stage),
+                    at: pass.now,
+                    job: job.clone(),
+                    answered: false,
+                });
+                let started = pass.start(
+                    f,
+                    Purpose::Stuck(*why),
+                    Task::Job {
+                        repo,
+                        workdir: ".".into(),
+                        prompt: super::stuck::prompt(f, *why, detail),
+                        model: None,
+                        effort: None,
+                    },
+                    Vec::new(),
+                    record,
+                    data,
+                );
+                // Not saved with a job, it was never made; saved, its job
+                // answers for it, launched or not.
+                if started.is_err() && !record.jobs.iter().any(|w| w.job.id == job) {
+                    record.memory.stuck.retain(|h| h.job != job);
+                }
+                started?;
+            }
+            Step::Concede => super::stuck::concede(github, f, record, data, pass.now)?,
             Step::Judge(decided) => {
                 // The pass waits, saying why, on a head with no one author.
                 let author = f.author.clone()?;
@@ -438,9 +473,9 @@ fn failure(step: &Step) -> Failure {
         Step::Merge | Step::JoinTrain | Step::LeaveTrain => Failure::Merge,
         Step::CloseAlreadyLanded => Failure::Close,
         Step::AskReview(_) => Failure::Post,
-        Step::PostFix(_) => Failure::Answer,
+        Step::PostFix(_) | Step::Concede => Failure::Answer,
         Step::Prepare | Step::Prove | Step::PostProof => Failure::Build,
-        Step::HandFix(_) | Step::Judge(_) => Failure::Job,
+        Step::HandFix(_) | Step::Judge(_) | Step::Stuck(..) => Failure::Job,
         Step::StopJob(_) => Failure::Stop,
         _ => Failure::Status,
     }

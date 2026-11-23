@@ -498,6 +498,27 @@ fn land(f: &Facts, m: &mut Memory, now: u64) -> Decision {
 }
 
 pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool) -> Decision {
+    gate(f, m, now, delay).unwrap_or_else(|| work(f, m, now, kind))
+}
+
+/// Hand the PR to the stuck role for `why` ([`super::stuck`]), once the
+/// branch is free and the PR as quiet as a fix's handoff waits for.
+pub(super) fn stuck(
+    f: &Facts,
+    m: &mut Memory,
+    now: u64,
+    why: super::Stuck,
+    detail: String,
+) -> Decision {
+    gate(f, m, now, true).unwrap_or_else(|| {
+        let description = format!("Handing it to the stuck role: {detail}");
+        (Stage::Fix, Step::Stuck(why, detail), description)
+    })
+}
+
+/// What a handoff waits on before it's made: the dependency sweep or
+/// Renovate, a job that owns the branch, or, with `delay`, the quiet period.
+pub(super) fn gate(f: &Facts, m: &Memory, now: u64, delay: bool) -> Option<Decision> {
     if f.renovate && f.dependency.is_some() {
         let red = f.checks.iter().any(|c| c.state == Ci::Red);
         let until = f
@@ -509,11 +530,11 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
             .filter(|t| now < *t)
             .max();
         if red || f.rebase_requested || until.is_some() {
-            return wait(
+            return Some(wait(
                 Stage::Fix,
                 until,
                 "Dependency sweep or a Renovate rebase still owns the branch",
-            );
+            ));
         }
     }
     if let Some((_, job)) = f
@@ -521,11 +542,11 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
         .iter()
         .find(|(kind, job)| kind.fixes_branch() && job.state.live())
     {
-        return wait(
+        return Some(wait(
             Stage::Fix,
             Some(job_wake(f, Kind::Findings, job, now)),
             "A fix job still has the branch",
-        );
+        ));
     }
     if delay {
         let quiet = if f.session {
@@ -539,14 +560,14 @@ pub(super) fn hand(f: &Facts, m: &mut Memory, now: u64, kind: Kind, delay: bool)
             .max(m.seen)
             .saturating_add(quiet);
         if now <= due {
-            return wait(
+            return Some(wait(
                 Stage::Fix,
                 Some(due.saturating_add(1)),
                 "Findings or CI await handoff after the quiet period",
-            );
+            ));
         }
     }
-    work(f, m, now, kind)
+    None
 }
 
 fn proof(f: &Facts, m: &mut Memory, now: u64) -> Decision {

@@ -54,8 +54,9 @@ Execution choices are optional entries in the same machine-owned configuration:
 ```
 
 Keys are plugin kinds (`review`, `fix`, `judge`, `proof`, `job`); the landing
-flow starts three of them (fix, judge and proof, a proof's preparation
-included): the reviewer reviews on its own ([Review](#review)). Values select that configured executable's
+flow starts four of them (fix, judge, proof, a proof's preparation
+included, and job, for the [stuck role](#a-loop-that-wont-settle)): the
+reviewer reviews on its own ([Review](#review)). Values select that configured executable's
 engine and an offered model/effort; they do not install or choose a different
 executable. Change `plugins` and `execution` together to switch engines.
 Choices are copied into each durable invocation and verified by the worker.
@@ -404,7 +405,7 @@ isn't stepped ([the train](#the-train)).
 
 A switch is something a person or the configuration turned off: the
 repository's pause, a PR's hold label, an omitted plugin (`plugins.review`,
-`fix`, `judge` or `proof`), the train off (`settings.train`), no person list
+`fix`, `judge`, `proof` or `job`), the train off (`settings.train`), no person list
 (`settings.people`), and no evidence verifier (`evidence` unset, or one that
 requires no gate). Each one shows while it's in effect, with what it holds.
 
@@ -682,7 +683,52 @@ the owner hears of it; asking again doesn't restart that clock. Findings
 with open threads go to a fix; findings whose every thread is answered on
 an unchanged head are asked for again once they've settled
 (`settle_delay`). Past `settings.rounds` rounds and not clean, the flow stops
-waiting for the reviewer: a judge decides with `round_limit`.
+waiting for the reviewer: a judge decides with `round_limit`. Open findings
+there go to one more fix first, or, with a `job` plugin, to the stuck role
+([below](#a-loop-that-wont-settle)).
+
+`settings.disputed_p2` says what an answered P2 or P3 a reviewer raises
+again, unchanged, does (the owner's open question on
+[burrow#939](https://github.com/FieldmouseWorks/burrow/issues/939), whose
+answer this setting holds, not this page). `block`, the default, takes it
+as any finding. `judge` has it block nothing: once nothing else is open,
+the flow answers it as its own account, saying the judge reads it, resolves
+its thread (`Concede`), and a judge decides with `round_limit`, with no
+other review round on that head. A raise is the same words, by a review
+author, on the same file as a resolved thread of theirs that a flow author
+answered; a P1 or P0 raised again blocks either way.
+
+### A loop that won't settle
+
+With a `job` plugin (`plugins.job`), a review loop that won't settle goes to
+the stuck role instead of another fix round, once for the PR
+([review-loop.md](review-loop.md); `flow::stuck`). When a fix round is due
+on open findings, any of these hands it over:
+
+- the reviewers had findings for `settings.rounds` rounds (`round_limit`);
+- the diff, as GitHub counts its added and deleted lines, grew past
+  `settings.fix_growth` percent of what it was when the first fix round was
+  handed, which the PR keeps across heads (`fix_growth`; unset, never);
+- a reviewer raised again, unchanged, a finding the flow answered
+  (`raised_again`), unless `disputed_p2` lets it block nothing.
+
+The request is the `job` kind's ([plugins.md](plugins.md#the-job-kind)):
+workdir `.`, and a prompt of one JSON object, `{"pr", "why", "detail"}`,
+`why` the reason's word above and `detail` what the flow saw. The stuck
+role's job owns the branch as a fix does, across its own pushes. Its
+answer's summary says the outcome on its first line and `follow-up: URL` or
+`follow-up: none` on its second; a URL that isn't an issue of the PR's own
+repository is no follow-up. Once it has ended, whatever it answered, no fix
+round follows: the head it left gets one more review (one it didn't move
+has had its own), then the flow answers each finding still open, saying it
+goes to the judge and naming the follow-up issue, resolves its thread, and
+a judge decides with `round_limit`. CI, the judge and every landing gate
+still hold. The handoff is saved with the job it starts, so no wake, event
+or restart hands the PR over twice.
+
+Without a `job` plugin none of this happens: past the limit, what's left
+goes to a fix and then the judge, and the status's switches name the
+plugin off.
 
 A fix is handed every open review thread (`flow::handoff`), whoever opened
 it: the connector's, or anyone's, as burrow's steward hands them. Each is a
@@ -840,7 +886,14 @@ nothing on GitHub changes to bring a pass, and in every pass of the stall
 after it, a fix that still can't be handed included. An answer that never came (GitHub
 unavailable, or its answer lost) says so the same way, and isn't asked again
 either. The wait itself, its `overdue_at` and its stall clock, stays what
-was decided: after its recovery a stall is overdue in the flow's status. A
+was decided: after its recovery a stall is overdue in the flow's status.
+With a `job` plugin, a stall still overdue once its recovery had its turn
+(none applied, or GitHub refused it or never answered; not while an
+accepted one may still bring it back) goes to the
+[stuck role](#a-loop-that-wont-settle), `why` `stall` and `detail` the
+wait's status and its recovery's, once for its head and stage: never while
+a job owns the branch, and never for a hold or a wait on the owner. No
+owner is listed for it: only a door lists the owner. A
 PR the owner hears of already (open over a day) has no deadline here, and
 so no recovery, but for two lost jobs ([Asking the owner](#asking-the-owner)).
 

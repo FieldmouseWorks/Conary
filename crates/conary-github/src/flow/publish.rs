@@ -16,7 +16,7 @@ use super::*;
 use crate::api::ApiError;
 use conary_core::plugin;
 
-fn ours(f: &Facts, login: Option<&str>) -> bool {
+pub(super) fn ours(f: &Facts, login: Option<&str>) -> bool {
     login.is_some_and(|l| f.settings.flow_authors.contains(l))
 }
 
@@ -30,6 +30,15 @@ pub(crate) const SETTLE: u64 = 600;
 /// How many times one write is ever sent without an acknowledgement.
 pub(crate) const TRIES: u32 = 3;
 
+/// Where a write's progress is kept in the PR's record: a job's, or the
+/// flow's own concessions ([`super::stuck::concede`]).
+pub(super) type Progress = fn(&mut Record, usize) -> &mut jobs::Sent;
+
+/// A job's progress, by its index.
+fn of_job(record: &mut Record, at: usize) -> &mut jobs::Sent {
+    &mut record.jobs[at].sent
+}
+
 /// Send write `key` of job `at` with `send`, unless it was sent already and
 /// may still show: see the module's documentation. The caller sends it
 /// only while GitHub doesn't show it.
@@ -42,7 +51,20 @@ fn write(
     now: u64,
     send: impl FnOnce() -> std::result::Result<(), ApiError>,
 ) -> Result<()> {
-    let previous = record.jobs[at].sent.writes.get(key).cloned();
+    send_once(record, data, pr, (of_job, at), key, now, send)
+}
+
+/// [`write`], its progress kept where `progress` says.
+pub(super) fn send_once(
+    record: &mut Record,
+    data: &Data,
+    pr: u64,
+    (progress, at): (Progress, usize),
+    key: &str,
+    now: u64,
+    send: impl FnOnce() -> std::result::Result<(), ApiError>,
+) -> Result<()> {
+    let previous = progress(record, at).writes.get(key).cloned();
     if let Some(p) = &previous {
         if p.acknowledged || now < p.at.saturating_add(SETTLE) {
             return Ok(());
@@ -55,7 +77,7 @@ fn write(
         }
     }
     let tries = previous.as_ref().map_or(0, |p| p.tries) + 1;
-    record.jobs[at].sent.writes.insert(
+    progress(record, at).writes.insert(
         key.into(),
         jobs::Attempt {
             at: now,
@@ -66,7 +88,7 @@ fn write(
     data.save(pr, record)?;
     match send() {
         Ok(()) => {
-            if let Some(a) = record.jobs[at].sent.writes.get_mut(key) {
+            if let Some(a) = progress(record, at).writes.get_mut(key) {
                 a.acknowledged = true;
             }
             data.save(pr, record)?;
@@ -75,8 +97,8 @@ fn write(
         // GitHub refused it: nothing went up.
         Err(e) if !e.unavailable => {
             match previous {
-                Some(p) => record.jobs[at].sent.writes.insert(key.into(), p),
-                None => record.jobs[at].sent.writes.remove(key),
+                Some(p) => progress(record, at).writes.insert(key.into(), p),
+                None => progress(record, at).writes.remove(key),
             };
             data.save(pr, record)?;
             Err(e.into())

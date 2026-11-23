@@ -14,6 +14,8 @@ pub enum Purpose {
     Proof,
     /// A proof's preparation, which holds no proof slot.
     Prepare,
+    /// The stuck role's job, for this reason ([`super::stuck`]).
+    Stuck(super::Stuck),
 }
 impl Purpose {
     /// The plugin kind this work runs.
@@ -24,6 +26,7 @@ impl Purpose {
             Self::Judge => Kind::Judge,
             Self::Proof => Kind::Proof,
             Self::Prepare => Kind::Prepare,
+            Self::Stuck(_) => Kind::Job,
         }
     }
 }

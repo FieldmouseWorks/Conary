@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
  repository(owner:$owner,name:$name) { defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } pullRequest(number:$number) {
-  headRefOid baseRefName title body isDraft mergeStateStatus updatedAt lastEditedAt
+  headRefOid baseRefName title body isDraft mergeStateStatus updatedAt lastEditedAt additions deletions
   labels(first:100) { pageInfo { hasNextPage } }
   reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved path line originalLine comments(first:100) { pageInfo { hasNextPage } nodes { author { __typename login } body pullRequestReview { databaseId } } } } }
   reviews { totalCount } comments { totalCount }
@@ -109,6 +109,8 @@ struct Pull {
     merge_state_status: String,
     updated_at: String,
     last_edited_at: Option<String>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
     labels: Paged,
     review_threads: Threads,
     reviews: Count,
@@ -513,6 +515,10 @@ impl Read for Api {
                 && p.reviews.total_count <= 100
                 && p.comments.total_count <= 100,
             merge_state: p.merge_state_status,
+            diff: p
+                .additions
+                .zip(p.deletions)
+                .map(|(a, d)| a.saturating_add(d)),
             open_threads: p
                 .review_threads
                 .nodes
