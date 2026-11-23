@@ -379,3 +379,20 @@ fn an_empty_merge_on_a_trunk_since_moved_closes_nothing() {
     assert_ne!(next.step, Step::CloseAlreadyLanded, "{next:?}");
     assert_eq!(c.hub.pull_json(REPO, 3)["state"], "open");
 }
+
+#[test]
+fn a_dependency_update_its_train_found_empty_on_trunk_closes() {
+    // Conary#589: lock file maintenance brought its bump onto trunk first,
+    // and its bot didn't run again to close it.
+    let c = train_repo();
+    c.hub.edit_pull(REPO, 3, |p| {
+        p["head"]["ref"] = serde_json::json!("renovate/dependencies")
+    });
+    held_empty_on_trunk_behind_a_stale_test_merge(&c);
+    let reports = c.pass(jobs::now() + 2, false);
+    assert_eq!(reports[0].error, None);
+    let next = reports[0].next.as_ref().unwrap();
+    assert_eq!(next.step, Step::CloseAlreadyLanded, "{next:?}");
+    assert_eq!(c.hub.pull_json(REPO, 3)["state"], "closed");
+    assert_eq!(c.hub.count(Call::Land), 0);
+}
