@@ -386,9 +386,8 @@ fn lookup<G: Write>(
     Ok(())
 }
 
-/// The head's checks, read again. A read of them that GitHub didn't answer,
-/// or that stopped short, can't tell ([`CantTell`]); a PR that moved is the
-/// answer no.
+/// The head's checks, read again. A read of them that GitHub didn't answer
+/// can't tell ([`CantTell`]); a PR that moved is the answer no.
 fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci::Result> {
     let repo = f.repo.to_string();
     let read = super::Reading::Observations;
@@ -396,12 +395,6 @@ fn observations<G: Write>(github: &G, f: &Facts, head: &str) -> Result<super::ci
     let snapshot = github.snapshot(&repo, f.number).map_err(failed)?;
     if snapshot.revision != f.revision {
         return Err("producer check scope changed".into());
-    }
-    if !snapshot.checks_complete {
-        return Err(cant(
-            read,
-            "GitHub listed more check suites than one read holds".into(),
-        ));
     }
     let paths = github
         .files(

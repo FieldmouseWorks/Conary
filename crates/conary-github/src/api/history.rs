@@ -18,40 +18,38 @@ struct Page {
 
 impl Api {
     pub(super) fn history(&self, repo: &str, base: &str, head: &str) -> Result<History, ApiError> {
-        let mut commits = Vec::new();
-        let mut identity = None;
+        let mut identity: Option<(String, usize)> = None;
         let mut seen = std::collections::BTreeSet::new();
-        for page in 1..=MAX_PAGES {
-            let got: Page = self.get(&format!(
-                "/repos/{repo}/compare/{base}...{head}?per_page=100&page={page}"
-            ))?;
+        let path = format!("/repos/{repo}/compare/{base}...{head}");
+        let commits = paged(&path, self.read_for, |page, left| {
+            let got: Page = self.get_within(&format!("{path}?per_page=100&page={page}"), left)?;
             let scope = (got.merge_base_commit.sha, got.total_commits);
             if identity.as_ref().is_some_and(|i| i != &scope) {
                 return Err(ApiError::new("comparison changed between pages"));
             }
-            let more = got.commits.len() == 100;
-            for c in got.commits {
+            for c in &got.commits {
                 if !seen.insert(c.sha.clone()) {
                     return Err(ApiError::new("comparison repeated a commit"));
                 }
-                commits.push(c);
             }
-            let count = scope.1;
+            let more = got.commits.len() == PER_PAGE && seen.len() < scope.1;
             identity = Some(scope);
-            if !more || commits.len() >= count {
-                if commits.len() > count {
-                    return Err(ApiError::new("comparison count is inconsistent"));
-                }
-                let complete = commits.len() == count;
-                if count == 0 && identity.as_ref().is_none_or(|(fork, _)| fork != head) {
-                    return Err(ApiError::new("empty comparison did not reach the PR head"));
-                }
-                if complete && count > 0 && !seen.contains(head) {
-                    return Err(ApiError::new("comparison did not include the PR head"));
-                }
-                return Ok(History { commits, complete });
-            }
+            Ok(super::Page {
+                items: got.commits,
+                more,
+            })
+        })?;
+        let (fork, count) = identity.expect("a paged read reads its first page");
+        if commits.len() > count {
+            return Err(ApiError::new("comparison count is inconsistent"));
         }
-        Err(ApiError::new("comparison exceeded its page limit"))
+        let complete = commits.len() == count;
+        if count == 0 && fork != head {
+            return Err(ApiError::new("empty comparison did not reach the PR head"));
+        }
+        if complete && count > 0 && !seen.contains(head) {
+            return Err(ApiError::new("comparison did not include the PR head"));
+        }
+        Ok(History { commits, complete })
     }
 }

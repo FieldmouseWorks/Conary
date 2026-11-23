@@ -233,14 +233,18 @@ fn a_major_renovate_proof_waits_for_its_sweeps_verdict() {
     assert_eq!(c.view(1000).step, Step::Prove);
 }
 #[test]
-fn an_unread_check_page_does_not_land_on_its_green_first_page() {
-    // handle.py:978: something beyond the readable check page could be red.
+fn a_red_check_past_the_first_page_of_suites_is_read() {
+    // handle.py:978: something beyond the first check page could be red, and
+    // the suites are read to the end to see it.
     let c = Case::new();
-    c.hub.edit_flow(REMI, 3, |s| s.checks_complete = false);
-    let n = c.view(700);
-    assert_eq!(n.stage, Stage::Ci);
-    assert!(matches!(n.step, Step::Wait { .. }));
-    assert!(n.description.contains("over 100 checks"));
+    let head = c.scope().head;
+    for i in 0..crate::api::PER_PAGE {
+        c.hub
+            .check_run(&head, &format!("shard {i}"), "success", None);
+    }
+    c.hub.check_run(&head, "last", "failure", None);
+    let n = c.view(7200);
+    assert_eq!(n.step, Step::HandFix(Kind::Red), "{}", n.description);
 }
 #[test]
 fn red_negative_and_other_named_checks_request_the_same_ci_fix_kind() {

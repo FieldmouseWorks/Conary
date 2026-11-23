@@ -523,8 +523,7 @@ paths it records:
     it). The PR waits at no stage, naming it, and nothing acts for it. Its
     error books the pass again.
   - Reads it goes on past, each holding what it was for failed: `checks`
-    when GitHub lists more check suites than one read holds, or a run's
-    suite isn't in the snapshot (the check is pending); `fork`, the docs
+    when a run's suite isn't in the snapshot (the check is pending); `fork`, the docs
     lane's fork point (the lane's word is stale); `cancelled`, a cancelled
     run whose suite isn't in the snapshot (taken as not replaced);
     `commits`, a comparison that fails or has a commit without its message,

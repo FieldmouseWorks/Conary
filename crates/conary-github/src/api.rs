@@ -336,10 +336,10 @@ pub struct Api {
     tokens: Tokens,
     etags: Option<Etags>,
     event_queue: Option<std::sync::Arc<crate::events::Queue>>,
+    /// The longest one call may take, and one paged read, all its pages.
+    call_for: Duration,
+    read_for: Duration,
 }
-
-/// Pages are read until one comes back short, up to this many.
-const MAX_PAGES: usize = 50;
 
 /// The longest one call may take, its answer read whole. GitHub answers in
 /// seconds and gives up on a request itself after ten, so a call this long
@@ -347,6 +347,12 @@ const MAX_PAGES: usize = 50;
 /// made it (a train's step, the ledger's lock) until its unit's own limit;
 /// cut off, it's GitHub unavailable, and asked again later.
 const CALL_FOR: Duration = Duration::from_secs(60);
+
+/// The longest one paged read may take, all its pages: one of thousands of
+/// pages goes on reading, and one whose pages keep coming slowly is cut off
+/// as GitHub unavailable, its pass booked again, rather than holding the
+/// pass. Each page's call is cut off at what's left of it.
+pub(crate) const READ_FOR: Duration = Duration::from_secs(5 * 60);
 
 impl Api {
     /// `base` is the API root, `https://api.github.com` on github.com.
@@ -376,6 +382,8 @@ impl Api {
             tokens,
             etags: None,
             event_queue: None,
+            call_for,
+            read_for: READ_FOR,
         }
     }
 
@@ -401,12 +409,31 @@ impl Api {
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
-        self.get_found(path)?
+        self.get_within(path, self.call_for)
+    }
+
+    /// A page of a paged read, its call cut off at what's `left` of the
+    /// read.
+    fn get_within<T: DeserializeOwned>(&self, path: &str, left: Duration) -> Result<T, ApiError> {
+        self.get_found_within(path, left)?
             .ok_or_else(|| ApiError::new(format!("{}{path}: not found", self.base)))
     }
 
     /// `None` for a 404.
     fn get_found<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, ApiError> {
+        self.get_found_within(path, self.call_for)
+    }
+
+    /// The cut-off of a call with `left` of its read: whichever is sooner.
+    fn cut(&self, left: Duration) -> Option<Duration> {
+        Some(left.min(self.call_for))
+    }
+
+    fn get_found_within<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        left: Duration,
+    ) -> Result<Option<T>, ApiError> {
         let url = format!("{}{path}", self.base);
         let kept = self.etags.as_ref().and_then(|e| e.get(&url));
         let mut request = self
@@ -414,7 +441,10 @@ impl Api {
             .get(&url)
             .header("Authorization", &self.authorization(path)?)
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .config()
+            .timeout_global(self.cut(left))
+            .build();
         if let Some((etag, _)) = &kept {
             request = request.header("If-None-Match", etag);
         }
@@ -481,19 +511,51 @@ impl Api {
 
     fn pages<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, ApiError> {
         let sep = if path.contains('?') { '&' } else { '?' };
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: Vec<T> = self.get(&format!("{path}{sep}per_page=100&page={page}"))?;
-            let short = got.len() < 100;
-            all.extend(got);
-            if short {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+        paged(path, self.read_for, |page, left| {
+            let items: Vec<T> =
+                self.get_within(&format!("{path}{sep}per_page=100&page={page}"), left)?;
+            // A short page is the last.
+            let more = items.len() == PER_PAGE;
+            Ok(Page { items, more })
+        })
     }
+}
+
+/// The most GitHub answers in one page.
+pub(crate) const PER_PAGE: usize = 100;
+
+/// One page of a paged read: what it held, and whether GitHub has more.
+pub(crate) struct Page<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) more: bool,
+}
+
+/// Reads `what` page by page to the end of its data, asking `page` for each
+/// from the first with what's left of `within`, the read's deadline. Past
+/// it, the read fails as GitHub unavailable, as a call cut off does.
+pub(crate) fn paged<T>(
+    what: &str,
+    within: Duration,
+    mut page: impl FnMut(usize, Duration) -> Result<Page<T>, ApiError>,
+) -> Result<Vec<T>, ApiError> {
+    let start = std::time::Instant::now();
+    let mut all = Vec::new();
+    for n in 1.. {
+        let left = within.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(ApiError::unavailable(format!(
+                "{what}: not read in full within {}s, {} pages in",
+                within.as_secs(),
+                n - 1
+            )));
+        }
+        let got = page(n, left)?;
+        all.extend(got.items);
+        if !got.more {
+            break;
+        }
+    }
+    Ok(all)
 }
 
 /// The repository (OWNER/NAME) a path is under, `/repos/OWNER/NAME/...`:
@@ -697,18 +759,17 @@ impl Source for Api {
         // Every run, reruns included, not only each check's latest; the runs
         // come wrapped with their count rather than as a bare page.
         let path = format!("/repos/{repo}/commits/{sha}/check-runs?filter=all");
-        let mut all = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let got: CheckRuns = self.get(&format!("{path}&per_page=100&page={page}"))?;
-            let short = got.check_runs.len() < 100;
-            all.extend(got.check_runs);
-            if short || all.len() >= got.total_count {
-                return Ok(all);
-            }
-        }
-        Err(ApiError::new(format!(
-            "{path}: more than {MAX_PAGES} pages"
-        )))
+        let mut read = 0;
+        paged(&path, self.read_for, |page, left| {
+            let got: CheckRuns =
+                self.get_within(&format!("{path}&per_page=100&page={page}"), left)?;
+            read += got.check_runs.len();
+            let more = got.check_runs.len() == PER_PAGE && read < got.total_count;
+            Ok(Page {
+                items: got.check_runs,
+                more,
+            })
+        })
     }
 
     fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {

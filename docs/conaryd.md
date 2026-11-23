@@ -175,6 +175,17 @@ no answer yet and kicks its repository once it's free, its own cancellation
 of that worker included. A worker's deadline stays booked as the backstop for
 one whose exit nobody saw.
 
+Each read of GitHub goes to the end of its data: a list a page of 100 at a
+time until GitHub has no more, and a PR's snapshot with every check suite on
+its head, the rest after its first query's page read a page at a time on
+that same head. No count of pages fails a read. Each call is cut off after a
+minute, and each read, all its pages, has a deadline of its own, five
+minutes (`READ_FOR` in [`api.rs`](../crates/conary-github/src/api.rs)), each
+page's call cut off at what's left of it. A read past its deadline fails as
+GitHub unavailable, like any other read that fails: what the flow does with
+one is [flow](flow.md#degraded-paths)'s, and its pass books its recovery as
+below.
+
 A whole-repository pass that fails before its reports (GitHub unavailable, a
 token command failing) books a durable recovery for that repository instead of
 stopping the worker: 60 seconds after the first failure, counted from when the

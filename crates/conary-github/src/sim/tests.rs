@@ -388,6 +388,7 @@ mod flow_degraded;
 mod flow_degraded_marks;
 mod flow_degraded_reads;
 mod flow_priority;
+mod flow_reads_sized;
 
 mod flow_pause;
 mod flow_switches;

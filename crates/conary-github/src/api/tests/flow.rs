@@ -106,7 +106,7 @@ fn reads_mergeability_threads_and_suite_identity_without_writes() {
         ]
     );
     assert!(s.threads["resolved"].resolved && s.threads["resolved"].comments.is_empty());
-    assert!(s.complete && s.checks_complete);
+    assert!(s.complete);
     assert_eq!(s.suites[&11].status, "in_progress");
     assert_eq!(s.suites[&11].workflow.as_ref().unwrap().id, "w");
     // The workflow run's own id, which its rerun is asked by.
@@ -236,15 +236,6 @@ fn query_caps_labels_threads_and_comments_but_not_workflow_results() {
             .unwrap()
             .complete
     );
-    let mut v = snapshot();
-    v["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["checkSuites"]["pageInfo"]
-        ["hasNextPage"] = json!(true);
-    let (base, _) = github(vec![answer(v)]);
-    let s = Api::new(&base, Tokens::given("t"))
-        .snapshot("o/r", 7)
-        .unwrap();
-    assert!(s.complete);
-    assert!(!s.checks_complete);
 }
 fn commit(sha: &str) -> Value {
     json!({"sha":sha,"parents":[],"committer":null,"commit":{"message":"change: code","author":{"email":"a"},"committer":{"email":"a"},"verification":null}})

@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use crate::api::ApiError;
+use crate::api::{ApiError, PER_PAGE, Page, READ_FOR, paged};
 use crate::train::Mark;
 
 use super::{Hub, World};
@@ -12,6 +12,7 @@ use super::{Hub, World};
 pub(crate) enum Call {
     Pull,
     FlowSnapshot,
+    CheckSuites,
     FlowStatus,
     FlowStage,
     FlowComment,
@@ -115,6 +116,7 @@ impl On {
 }
 
 /// One call being answered, as faults see it.
+#[derive(Clone)]
 pub(super) struct Asked<'a> {
     pub(super) call: Call,
     pub(super) repo: &'a str,
@@ -278,6 +280,28 @@ impl Hub {
         }
         drop(stale);
         answer(&self.world.borrow())
+    }
+
+    /// Answers a list read as GitHub does, a page of [`PER_PAGE`] at a
+    /// time, each page its own call, through the pager the API reads
+    /// GitHub's pages with. `list` is the whole list, as it is.
+    pub(super) fn read_pages<T: serde::de::DeserializeOwned>(
+        &self,
+        asked: Asked<'_>,
+        args: &[&str],
+        list: impl Fn(&World) -> Result<Vec<&serde_json::Value>, ApiError>,
+    ) -> Result<Vec<T>, ApiError> {
+        paged(&format!("{:?}", asked.call), READ_FOR, |n, _| {
+            self.read(asked.clone(), args, |w| {
+                let all = list(w)?;
+                let from = ((n - 1) * PER_PAGE).min(all.len());
+                let to = (n * PER_PAGE).min(all.len());
+                Ok(Page {
+                    items: all[from..to].iter().map(|v| super::parse(v)).collect(),
+                    more: to < all.len(),
+                })
+            })
+        })
     }
 
     /// Makes a write, and loses its answer if it's losing.

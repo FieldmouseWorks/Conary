@@ -17,13 +17,25 @@ const QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!) {
   timelineItems(last:50,itemTypes:[UNLABELED_EVENT,RENAMED_TITLE_EVENT]) { pageInfo { hasPreviousPage } nodes { ... on UnlabeledEvent { createdAt label { name } } ... on RenamedTitleEvent { createdAt previousTitle } } }
   retargets: timelineItems(last:1,itemTypes:[BASE_REF_CHANGED_EVENT]) { nodes { ... on BaseRefChangedEvent { createdAt } } }
   renames: timelineItems(last:1,itemTypes:[RENAMED_TITLE_EVENT]) { nodes { ... on RenamedTitleEvent { createdAt } } }
-  commits(last:1) { nodes { commit { oid checkSuites(first:100) {
-   pageInfo { hasNextPage } nodes { databaseId createdAt status conclusion app { slug }
-    workflowRun { databaseId file { path } workflow { id name } }
-   }
-  } } } }
+  commits(last:1) { nodes { commit { oid checkSuites(first:100) { ...Suites } } } }
  } }
-}"#;
+}
+fragment Suites on CheckSuiteConnection { pageInfo { hasNextPage endCursor } nodes {
+ databaseId createdAt status conclusion app { slug }
+ workflowRun { databaseId file { path } workflow { id name } }
+} }"#;
+
+/// The head's check suites after the page that ended at `$after`, read on
+/// the head the first page was of, so a push between pages can't mix two.
+const SUITES: &str = r#"query($owner:String!,$name:String!,$head:GitObjectID!,$after:String!) {
+ repository(owner:$owner,name:$name) { object(oid:$head) { ... on Commit {
+  checkSuites(first:100,after:$after) { ...Suites }
+ } } }
+}
+fragment Suites on CheckSuiteConnection { pageInfo { hasNextPage endCursor } nodes {
+ databaseId createdAt status conclusion app { slug }
+ workflowRun { databaseId file { path } workflow { id name } }
+} }"#;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,9 +71,22 @@ struct Rollup {
     state: String,
 }
 #[derive(Deserialize)]
-struct Envelope {
-    data: Option<Data>,
+struct Envelope<D> {
+    data: Option<D>,
     errors: Option<Vec<serde_json::Value>>,
+}
+#[derive(Deserialize)]
+struct SuitesData {
+    repository: Option<SuitesRepository>,
+}
+#[derive(Deserialize)]
+struct SuitesRepository {
+    object: Option<SuitesHead>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuitesHead {
+    check_suites: Suites,
 }
 #[derive(Deserialize)]
 struct Data {
@@ -197,8 +222,14 @@ struct Head {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Suites {
-    page_info: More,
+    page_info: Cursor,
     nodes: Vec<SuiteNode>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Cursor {
+    has_next_page: bool,
+    end_cursor: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -236,6 +267,45 @@ pub(super) struct Annotation {
 }
 
 impl Api {
+    /// The answer to a GraphQL `query` about `repo`, its call cut off at
+    /// what's `left` of its read.
+    fn query<D: serde::de::DeserializeOwned>(
+        &self,
+        repo: &str,
+        query: &str,
+        variables: serde_json::Value,
+        left: Duration,
+    ) -> Result<D, ApiError> {
+        let url = self.graphql();
+        let mut response = self
+            .agent
+            .post(&url)
+            .header(
+                "Authorization",
+                &format!("Bearer {}", self.tokens.of(repo)?),
+            )
+            .config()
+            .timeout_global(self.cut(left))
+            .build()
+            .send_json(serde_json::json!({"query": query, "variables": variables}))
+            .map_err(|e| unreachable(&url, e))?;
+        if !response.status().is_success() {
+            return Err(failed(&url, &mut response));
+        }
+        let body = read(&url, &mut response)?;
+        let envelope: Envelope<D> = parse(&url, &body)?;
+        if let Some(errors) = envelope.errors.filter(|e| !e.is_empty()) {
+            return Err(if errors.iter().any(|e| e["type"] == "RATE_LIMITED") {
+                ApiError::unavailable("GitHub GraphQL rate limit")
+            } else {
+                ApiError::new("GitHub GraphQL returned errors instead of a complete snapshot")
+            });
+        }
+        envelope
+            .data
+            .ok_or_else(|| ApiError::new("GitHub GraphQL returned no data"))
+    }
+
     /// GitHub's GraphQL endpoint beside this REST root, Enterprise's too.
     pub(super) fn graphql(&self) -> String {
         if let Some(root) = self.base.strip_suffix("/api/v3") {
@@ -279,27 +349,77 @@ impl Read for Api {
         let (owner, name) = repo
             .split_once('/')
             .ok_or_else(|| ApiError::new("repository is not owner/name"))?;
-        let url = self.graphql();
-        let mut response=self.agent.post(&url)
-            .header("Authorization",&format!("Bearer {}",self.tokens.of(repo)?))
-            .send_json(serde_json::json!({"query":QUERY,"variables":{"owner":owner,"name":name,"number":number}}))
-            .map_err(|e|unreachable(&url,e))?;
-        if !response.status().is_success() {
-            return Err(failed(&url, &mut response));
-        }
-        let body = read(&url, &mut response)?;
-        let envelope: Envelope = parse(&url, &body)?;
-        if let Some(errors) = envelope.errors.filter(|e| !e.is_empty()) {
-            return Err(if errors.iter().any(|e| e["type"] == "RATE_LIMITED") {
-                ApiError::unavailable("GitHub GraphQL rate limit")
-            } else {
-                ApiError::new("GitHub GraphQL returned errors instead of a complete snapshot")
-            });
-        }
-        let repository = envelope
-            .data
-            .and_then(|d| d.repository)
-            .ok_or_else(|| ApiError::new("GitHub did not return the repository snapshot"))?;
+        // The PR and its head's first page of check suites, then the rest
+        // of them a page at a time: one read, under one deadline.
+        let mut first = None;
+        let mut cursor: Option<String> = None;
+        let mut head = String::new();
+        let nodes = paged(
+            &format!("{repo}#{number}'s snapshot"),
+            self.read_for,
+            |page, left| {
+                let suites = if page == 1 {
+                    let data: Data = self.query(
+                        repo,
+                        QUERY,
+                        serde_json::json!({"owner":owner,"name":name,"number":number}),
+                        left,
+                    )?;
+                    let mut repository = data.repository.ok_or_else(|| {
+                        ApiError::new("GitHub did not return the repository snapshot")
+                    })?;
+                    let p = repository
+                        .pull_request
+                        .as_mut()
+                        .ok_or_else(|| ApiError::new("GitHub did not return the PR snapshot"))?;
+                    head.clone_from(&p.head_ref_oid);
+                    let commits = std::mem::take(&mut p.commits.nodes);
+                    first = Some(repository);
+                    let mut suites = None;
+                    for node in commits {
+                        if node.commit.oid != head {
+                            return Err(ApiError::new("PR moved within its GraphQL snapshot"));
+                        }
+                        suites = Some(node.commit.check_suites);
+                    }
+                    match suites {
+                        Some(suites) => suites,
+                        None => {
+                            return Ok(Page {
+                                items: Vec::new(),
+                                more: false,
+                            });
+                        }
+                    }
+                } else {
+                    let data: SuitesData = self.query(
+                        repo,
+                        SUITES,
+                        serde_json::json!({"owner":owner,"name":name,"head":head,"after":cursor}),
+                        left,
+                    )?;
+                    data.repository
+                        .and_then(|r| r.object)
+                        .ok_or_else(|| {
+                            ApiError::new("GitHub did not return the head's check suites")
+                        })?
+                        .check_suites
+                };
+                let more = suites.page_info.has_next_page;
+                if more {
+                    let next = suites.page_info.end_cursor;
+                    if next.is_none() || next == cursor {
+                        return Err(ApiError::new("check suites' pages did not advance"));
+                    }
+                    cursor = next;
+                }
+                Ok(Page {
+                    items: suites.nodes,
+                    more,
+                })
+            },
+        )?;
+        let repository = first.expect("a paged read reads its first page");
         let default_branch = repository.default_branch_ref.and_then(|b| {
             b.target.map(|t| BaseObservation {
                 name: b.name,
@@ -313,36 +433,29 @@ impl Read for Api {
         });
         let p = repository
             .pull_request
-            .ok_or_else(|| ApiError::new("GitHub did not return the PR snapshot"))?;
+            .expect("the first page holds the PR");
         let mut suites = BTreeMap::new();
-        let mut checks_complete = true;
         // When GitHub got the head, as near as it says: the earliest check
         // suite on it, each App that checks the repo getting one as the
         // push comes in. A commit's own dates say when it was made.
         let mut pushed: Option<u64> = None;
-        for node in p.commits.nodes {
-            if node.commit.oid != p.head_ref_oid {
-                return Err(ApiError::new("PR moved within its GraphQL snapshot"));
-            }
-            checks_complete &= !node.commit.check_suites.page_info.has_next_page;
-            for s in node.commit.check_suites.nodes {
-                let at = crate::flow::reviews::timestamp(&s.created_at)?;
-                pushed = Some(pushed.map_or(at, |p| p.min(at)));
-                suites.insert(
-                    s.database_id,
-                    Suite {
-                        status: s.status.to_lowercase(),
-                        conclusion: s.conclusion.map(|s| s.to_lowercase()),
-                        app: s.app.map_or_else(String::new, |a| a.slug),
-                        workflow: s.workflow_run.map(|r| Workflow {
-                            id: r.workflow.id,
-                            name: r.workflow.name,
-                            path: r.file.map(|f| f.path),
-                            run: r.database_id,
-                        }),
-                    },
-                );
-            }
+        for s in nodes {
+            let at = crate::flow::reviews::timestamp(&s.created_at)?;
+            pushed = Some(pushed.map_or(at, |p| p.min(at)));
+            suites.insert(
+                s.database_id,
+                Suite {
+                    status: s.status.to_lowercase(),
+                    conclusion: s.conclusion.map(|s| s.to_lowercase()),
+                    app: s.app.map_or_else(String::new, |a| a.slug),
+                    workflow: s.workflow_run.map(|r| Workflow {
+                        id: r.workflow.id,
+                        name: r.workflow.name,
+                        path: r.file.map(|f| f.path),
+                        run: r.database_id,
+                    }),
+                },
+            );
         }
         let mut resolved_reviews = std::collections::BTreeSet::new();
         let mut unresolved_reviews = std::collections::BTreeSet::new();
@@ -451,7 +564,6 @@ impl Read for Api {
             },
             updated_at: crate::flow::reviews::timestamp(&p.updated_at)?,
             suites,
-            checks_complete,
         })
     }
 }
