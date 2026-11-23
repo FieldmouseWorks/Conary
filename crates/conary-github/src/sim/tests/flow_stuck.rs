@@ -135,6 +135,20 @@ fn an_answered_finding_raised_again_unchanged_hands_over_and_a_changed_one_doesn
         raised("someone", FINDING).view(4000).step,
         Step::HandFix(Kind::Findings)
     );
+    // Nor one review author's finding in another's words: each repeats
+    // only what it raised itself, with either switch.
+    for disputed in [Disputed::Block, Disputed::Judge] {
+        let mut c = raised("other-reviewer[bot]", FINDING);
+        c.settings
+            .review_authors
+            .insert("other-reviewer[bot]".into());
+        c.settings.disputed_p2 = disputed;
+        assert_eq!(
+            c.view(4000).step,
+            Step::HandFix(Kind::Findings),
+            "{disputed:?}"
+        );
+    }
     // Without a job plugin, as on main, a repeat is a finding to fix.
     let mut c = raised(CONNECTOR, FINDING);
     c.stuck_role = false;
@@ -384,6 +398,16 @@ const FOLLOW_UP: &str = "https://github.com/conary-test/flow-simulation/issues/9
 /// The stuck role's job `work` answers, done, saying `summary`, as the
 /// stuck role's plugin says it.
 fn answer(c: &pass::Case, work: &flow::jobs::Work, summary: &str) {
+    answer_next(c, work, summary, conary_core::plugin::Next::Done);
+}
+
+/// [`answer`], ending `next`.
+fn answer_next(
+    c: &pass::Case,
+    work: &flow::jobs::Work,
+    summary: &str,
+    next: conary_core::plugin::Next,
+) {
     let completion = flow::jobs::Completion {
         at: flow::jobs::now(),
         result: Some(Ok(conary_core::plugin::Response {
@@ -395,7 +419,7 @@ fn answer(c: &pass::Case, work: &flow::jobs::Work, summary: &str) {
             execution: None,
             answer: conary_core::plugin::Answer::Job {
                 summary: summary.into(),
-                next: conary_core::plugin::Next::Done,
+                next,
             },
         })),
     };
@@ -405,6 +429,51 @@ fn answer(c: &pass::Case, work: &flow::jobs::Work, summary: &str) {
     )
     .unwrap();
     c.deferred.0.borrow_mut().retain(|p| *p != work.path);
+}
+
+#[test]
+fn a_stuck_role_job_that_asks_or_awaits_settles_nothing() {
+    for next in [
+        conary_core::plugin::Next::Ask {
+            question: "Drop the feature?".into(),
+            default: "Keep it".into(),
+            one_way: true,
+        },
+        conary_core::plugin::Next::Await {
+            url: "https://github.com/conary-test/flow-simulation/pull/9".into(),
+        },
+    ] {
+        let mut c = with_job_plugin(pass::Case::new());
+        c.config.settings.rounds = 1;
+        let now = flow::jobs::now();
+        let finding = Finding {
+            path: "src/lib.rs".into(),
+            line: 2,
+            severity: Severity::P1,
+            text: "A finding".into(),
+        };
+        let threads = c.connector_findings(&[finding], now);
+        step(&c, now);
+        assert_eq!(
+            handed(&report(&c, now + 1).next.unwrap()),
+            Some(Stuck::RoundLimit)
+        );
+        let job = stuck_jobs(&c).remove(0);
+        answer_next(
+            &c,
+            &job,
+            "unchanged\nfollow-up: none\nWaiting on a call.",
+            next.clone(),
+        );
+        // Its loop isn't broken on it: nothing is conceded or judged, no
+        // fix round or second job starts, and the PR waits, overdue in time.
+        for t in [2, 60, 7200, 30 * 7200] {
+            let n = report(&c, now + t).next.unwrap();
+            assert_eq!(n.description, flow::STUCK_ENDED, "{next:?}: {n:?}");
+        }
+        assert!(!pass_threads(&c)[&threads[0]].resolved);
+        assert_eq!(c.record().jobs.len(), 1, "{next:?}");
+    }
 }
 
 #[test]

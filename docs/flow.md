@@ -727,7 +727,8 @@ decides with `round_limit`. CI, the judge and every landing gate still
 hold. The handoff is saved with the job it starts, so no wake, event or
 restart hands the PR over twice. A job a pause or hold stopped undoes its
 handoff, which is made again once it's wanted. One that ended without its
-answer leaves a head that isn't clean waiting, overdue in its status, with
+answer, or with one that doesn't end it (`ask` or `await`: the stuck role's
+job is one turn that ends `done`), leaves a head that isn't clean waiting, overdue in its status, with
 nothing conceded and nothing handed again, until the head moves: then the
 PR is decided afresh. A conceded finding always goes to the judge, even on
 a head the reviewer later calls clean.

@@ -91,9 +91,11 @@ pub struct Handoff {
     pub answered: bool,
 }
 
-/// What the PR waits on once its stuck-role job ended without its answer:
+/// What the PR waits on once its stuck-role job ended without its answer,
+/// or with one that doesn't end it (`ask` or `await`, where the stuck
+/// role's job is one turn that ends `done`):
 /// overdue in its status, never conceded or handed again.
-pub const ENDED: &str = "The stuck role's job ended without its answer";
+pub const ENDED: &str = "The stuck role's job ended without settling the PR";
 
 /// The PR's loop handoff, once there is one: never a second.
 pub(super) fn looped(m: &Memory) -> Option<&Handoff> {
@@ -129,11 +131,13 @@ fn by(c: Option<&ThreadComment>, accounts: &BTreeSet<String>) -> bool {
 /// Each open thread a review author opened that raises again, unchanged, a
 /// finding of theirs on the same file whose thread the flow answered and
 /// that was resolved: the open thread's id, and its severity. Unchanged is
-/// the same words, as [`super::fingerprint`] reads them.
+/// the same words, as [`super::fingerprint`] reads them, by the same
+/// review author: one reviewer's finding never repeats another's.
 fn repeats(f: &Facts) -> Vec<(&str, Severity)> {
     let opened = |t: &ReviewThread| {
         let first = t.comments.first()?;
-        by(Some(first), &f.settings.review_authors).then(|| super::fingerprint(&first.body))
+        by(Some(first), &f.settings.review_authors)
+            .then(|| (first.author.clone(), super::fingerprint(&first.body)))
     };
     let answered: Vec<_> = f
         .threads

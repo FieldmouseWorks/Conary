@@ -149,11 +149,17 @@ fn hydrate_with(
             }
             Purpose::Stuck(_) => {
                 if let Some(Ok(plugin::Response {
-                    answer: plugin::Answer::Job { summary, .. },
+                    answer: plugin::Answer::Job { summary, next },
                     by,
                     ..
                 })) = &completion.result
                 {
+                    // The stuck role's job is one turn that ends `done`: one
+                    // that asks or awaits settled nothing, and its loop isn't
+                    // broken on it ([`super::stuck::ENDED`]).
+                    if *next != plugin::Next::Done {
+                        job.state = JobState::Broken;
+                    }
                     // Its pushed head's author is its session, as a fix's is.
                     if super::stuck::pushed(summary) == Some(f.revision.head.as_str()) {
                         f.author = Ok(by.clone());
