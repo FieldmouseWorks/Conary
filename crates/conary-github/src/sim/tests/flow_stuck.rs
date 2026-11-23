@@ -180,6 +180,21 @@ fn the_disputed_p2_switch_blocks_by_default_and_otherwise_sends_it_to_the_judge(
 }
 
 #[test]
+fn a_conceded_documentation_head_still_goes_to_the_judge() {
+    // Documentation alone needs no review round, and a concession on it
+    // still owes the judge it promised.
+    let mut c = raised(CONNECTOR, FINDING);
+    c.hub.touch(&head(3), &["docs/a.md"]);
+    c.settings.disputed_p2 = Disputed::Judge;
+    c.hub.flow_thread(REMI, 3, "T2", true);
+    c.memory.conceded = Some(c.scope().head);
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::RoundLimit]));
+    // Without it, as on main, that head would land.
+    c.memory.conceded = None;
+    assert_eq!(c.view(4000).step, Step::Merge);
+}
+
+#[test]
 fn findings_on_the_stuck_roles_head_go_to_the_judge_with_no_fix_round() {
     let mut c = looping(3);
     c.threads(1);

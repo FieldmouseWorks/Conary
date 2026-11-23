@@ -63,14 +63,11 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     if !clean && handed.is_some_and(|h| !h.answered) {
         return wait(Stage::Fix, None, super::stuck::ENDED);
     }
-    // Findings the flow conceded to the judge on this head get no other
-    // review round ([`super::stuck::concede`]).
-    let conceded = m.conceded.as_deref() == Some(f.revision.head.as_str());
     // Past the limit the flow stops waiting on the reviewers: a fix job, or
     // with a `job` plugin the stuck role, settles what's left on its
     // merits, and a judge decides whether it lands. The reviewer still
     // reviews each push; it just isn't waited for.
-    let mut capped = (!clean && rounds >= f.settings.rounds) || conceded;
+    let mut capped = !clean && rounds >= f.settings.rounds;
     // Documentation alone that isn't R2 needs green CI and no review round.
     let unreviewed = !clean && !(f.classified.review() && request_review);
     if unreviewed {
@@ -80,7 +77,12 @@ pub(super) fn look(f: &Facts, m: &mut Memory, now: u64, request_review: bool) ->
     // follows: the head it left gets one more review, and the judge decides.
     let broken = handed.filter(|h| h.answered).map(|h| h.head.clone());
     let again = broken.as_ref().is_some_and(|h| *h != f.revision.head);
-    capped |= broken.is_some();
+    // Findings the flow conceded to the judge on this head get no other
+    // review round ([`super::stuck::concede`]). Neither this nor a broken
+    // loop is undone by documentation's waiver or a clean word: what the
+    // flow sent to the judge, the judge decides.
+    let conceded = m.conceded.as_deref() == Some(f.revision.head.as_str());
+    capped |= broken.is_some() || conceded;
     // An answered P2 or P3 raised again blocks nothing when the switch says
     // the judge reads it.
     let disputed = super::stuck::disputed(f);
