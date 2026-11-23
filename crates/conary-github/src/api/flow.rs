@@ -337,9 +337,10 @@ impl Read for Api {
             })
             .collect();
         // Every kind of record that puts a head on the branch: a force push
-        // or the branch's creation is no `push` record.
-        let records: Vec<Push> = self.pages(&format!(
-            "/repos/{repo}/activity?ref=refs%2Fheads%2F{encoded}"
+        // or the branch's creation is no `push` record. Only the newest page:
+        // what's read of it is the current head's, never older history.
+        let records: Vec<Push> = self.get(&format!(
+            "/repos/{repo}/activity?ref=refs%2Fheads%2F{encoded}&direction=desc&per_page=100"
         ))?;
         let mut result = BTreeMap::new();
         for p in records {

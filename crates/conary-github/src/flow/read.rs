@@ -42,7 +42,8 @@ pub struct Snapshot {
 }
 
 pub trait Read: Source + crate::branches::Branches {
-    /// Who put each head on `branch`, by its head commit, newest first.
+    /// Who put each of `branch`'s newest heads on it, by its head commit:
+    /// GitHub's newest page of its activity, enough for the current head.
     fn pushes(
         &self,
         repo: &str,
@@ -135,7 +136,8 @@ fn gather(
         open: pull.state == "open",
         draft: extra.draft,
         trusted: trusted_authors.contains(&pull.user.login),
-        head_by_app: false,
+        // Until the head's pusher is read, the PR's opener says.
+        head_by_app: super::review::by_app(&pull.user, None),
         complete: extra.complete,
         labels,
         labelled_by: None,
