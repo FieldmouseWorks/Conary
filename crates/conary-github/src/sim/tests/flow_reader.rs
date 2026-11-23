@@ -306,9 +306,11 @@ fn a_coauthor_on_the_251st_bot_commit_removes_the_ci_only_exemption() {
             let f = c.facts();
             assert_eq!(f.bot_edited, Some(edited));
             assert_eq!(
-                next(&f, &c.memory, 700).0.step,
+                next(&f, &c.memory, 200).0.step,
                 if edited {
-                    Step::Wait { until: Some(1800) }
+                    Step::Wait {
+                        until: Some(crate::flow::QUIET),
+                    }
                 } else {
                     Step::Merge
                 }

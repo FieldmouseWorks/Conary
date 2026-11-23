@@ -42,7 +42,13 @@ pub struct Snapshot {
 }
 
 pub trait Read: Source + crate::branches::Branches {
-    fn pushes(&self, repo: &str, branch: &str) -> Result<BTreeMap<String, String>, ApiError>;
+    /// Who put each of `branch`'s newest heads on it, by its head commit:
+    /// GitHub's newest page of its activity, enough for the current head.
+    fn pushes(
+        &self,
+        repo: &str,
+        branch: &str,
+    ) -> Result<BTreeMap<String, crate::api::User>, ApiError>;
     fn snapshot(&self, repo: &str, pr: u64) -> Result<Snapshot, ApiError>;
 }
 
@@ -130,7 +136,8 @@ fn gather(
         open: pull.state == "open",
         draft: extra.draft,
         trusted: trusted_authors.contains(&pull.user.login),
-        by_app: pull.user.kind == "Bot",
+        // Until the head's pusher is read, the PR's opener says.
+        head_by_app: super::review::by_app(&pull.user, None),
         complete: extra.complete,
         labels,
         labelled_by: None,
@@ -259,9 +266,26 @@ fn gather(
         &facts.settings,
         reads,
     )?;
-    if facts.settings.job_login.is_some() {
-        facts.pushes = reads.ask(Reading::Pushes, source.pushes(&repository, &pull.head.name))?;
-    }
+    // A fix job's claim can't be read without its branch's pushers; the
+    // reviewer's ask goes on past them, as if the head had no push on record.
+    // A fork's branch is pushed to in the fork, so its activity is there,
+    // and is read only as far as the token reaches: a fork outside the App's
+    // installation can't be read, and no App pushed to it either, so its
+    // head goes by its opener and the pass goes on.
+    let pushed_in = pull
+        .head
+        .repo
+        .as_ref()
+        .and_then(|r| r.full_name.as_deref())
+        .unwrap_or(&repository);
+    let fork = !pushed_in.eq_ignore_ascii_case(&repository);
+    let pushes = source.pushes(pushed_in, &pull.head.name);
+    facts.pushes = if facts.settings.job_login.is_some() && !fork {
+        reads.ask(Reading::Pushes, pushes)?
+    } else {
+        reads.take(Reading::Pushes, pushes).unwrap_or_default()
+    };
+    facts.head_by_app = super::review::by_app(&pull.user, facts.pushes.get(&pull.head.sha));
     let records = reads.ask(Reading::Reviews, source.reviews(&repository, pr))?;
     let comments = reads.ask(Reading::Reviews, source.comments(&repository, pr))?;
     let markers = super::markers::read(&repository, &pull, &comments, &facts.settings);

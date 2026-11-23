@@ -102,7 +102,7 @@ pub(crate) struct World {
     /// Check runs by commit, as GitHub lists them.
     checks: HashMap<String, Vec<Value>>,
     annotations: HashMap<u64, Vec<String>>,
-    pushes: HashMap<(String, String), BTreeMap<String, String>>,
+    pushes: HashMap<(String, String), BTreeMap<String, crate::api::User>>,
     history_limits: HashMap<(String, String), usize>,
     commit_records: HashMap<String, Value>,
     diffs: HashMap<(String, String), String>,

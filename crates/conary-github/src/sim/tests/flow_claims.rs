@@ -55,7 +55,7 @@ fn only_the_actual_pushed_head_allows_fix_answers_to_post() {
 #[test]
 fn a_foreign_push_stops_a_live_fix_but_an_apps_push_does_not() {
     // unpushed.py:160 / 171: GitHub's push actor distinguishes somebody else's head.
-    for (who, stop) in [("person", true), ("workers[bot]", false)] {
+    for (who, kind, stop) in [("person", "User", true), ("workers[bot]", "Bot", false)] {
         let mut c = claim();
         c.settings.job_login = Some("workers[bot]".into());
         c.claims[0].job.state = JobState::Running;
@@ -64,7 +64,7 @@ fn a_foreign_push_stops_a_live_fix_but_an_apps_push_does_not() {
             .as_str()
             .unwrap()
             .to_owned();
-        c.hub.pushed_by(REMI, &branch, PUSHED, who);
+        c.hub.pushed_by(REMI, &branch, PUSHED, who, kind);
         assert_eq!(c.view(2400).step == Step::StopJob("fix-1".into()), stop);
         if !stop {
             assert!(matches!(c.view(2400).step, Step::Wait { .. }));

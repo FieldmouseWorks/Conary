@@ -75,9 +75,9 @@ fn documentation_policy_waives_only_the_review_round_not_findings_or_ci() {
         c.roles(&["reviewer"]);
         c.hub.touch(&c.scope().head, paths);
         assert_eq!(
-            c.view(700).step,
+            c.view(200).step,
             if review {
-                Step::Wait { until: Some(1800) }
+                Step::Wait { until: Some(QUIET) }
             } else {
                 Step::Merge
             }
@@ -337,11 +337,11 @@ fn only_the_connectors_rest_login_can_supply_a_review() {
             &format!("<!-- codex-review-state:v1 {state} -->"),
         );
         assert_eq!(
-            c.view(700).step,
+            c.view(200).step,
             if accepted {
                 Step::Merge
             } else {
-                Step::Wait { until: Some(1800) }
+                Step::Wait { until: Some(QUIET) }
             },
             "{who}"
         );

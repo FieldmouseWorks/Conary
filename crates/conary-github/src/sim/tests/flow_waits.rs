@@ -7,14 +7,14 @@ fn quiet_wakeups_do_not_extend_the_stall_deadline() {
     // watched.py:67 / 86: wait deadlines follow phase/revision, not scheduled rechecks.
     let mut c = Case::new();
     c.roles(&["reviewer"]);
-    let n = c.pass(700);
-    assert_eq!(n.step, Step::Wait { until: Some(1800) });
-    assert_eq!(n.overdue_at, Some(7900));
+    let n = c.pass(200);
+    assert_eq!(n.step, Step::Wait { until: Some(QUIET) });
+    assert_eq!(n.overdue_at, Some(7400));
     assert_eq!(n.wait_on, Some(WaitOn::Steward));
-    assert_eq!(c.pass(800).overdue_at, n.overdue_at);
+    assert_eq!(c.pass(250).overdue_at, n.overdue_at);
     c.threads(1);
-    let n = c.pass(810);
-    assert_eq!(n.overdue_at, Some(8010));
+    let n = c.pass(260);
+    assert_eq!(n.overdue_at, Some(7460));
     assert_eq!(n.step, Step::Wait { until: Some(1801) });
 }
 #[test]
