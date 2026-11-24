@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "5dftwm4n40ypf6mpjefcx5nkpr",
+  "repo": {
+    "owner": "FieldmouseWorks",
+    "name": "Conary"
+  },
+  "pr": 607,
+  "url": "https://github.com/FieldmouseWorks/Conary/pull/607",
+  "summary": "deps: update rust crate toml to v1.2.2",
+  "task": null,
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "5943d15d19c70c0de79e92c9d8316b4de15befbfb3943dd865f3ed65da9948e5",
+    "before": "c5aedcbb2251a908da71a7e9b5fd3fffc29ba366",
+    "after": "bfb1751a1966c5547d1133fd0ce47ab6642f9333",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795509490611
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733866/job/138302939146"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733866/job/138302939033"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733866/job/138302938622"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733729/job/138302937841"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019/job/138302934265"
+    },
+    {
+      "kind": "ci",
+      "check": "renovate/stability-days",
+      "result": "pass",
+      "source": "https://docs.renovatebot.com/key-concepts/minimum-release-age/"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#607)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733019"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733729/job/138303168545"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733866/job/138302982611"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "none",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45352733866/job/138302938622"
+    }
+  ]
+}
