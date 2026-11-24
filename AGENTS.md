@@ -147,7 +147,7 @@ For reviewers, Codex included. Flag as P1:
   author may only raise it)
 - trunk moving by any path other than a `land` operation, or an `outside` op
   treated as anything but a violation for the owner; an R2 change landing
-  without a person
+  without a passing judgment (or a person when the judge asks for one)
 - evidence counted when it was produced inside the authoring session's
   sandbox or lacks its producer's attestation (conaryd's signature on the op
   doesn't count); a new test accepted without a failing `negative` result
