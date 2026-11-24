@@ -202,11 +202,25 @@ fn self_authored_pr_accepts_commented_review_with_scoped_marker_only() {
     assert!(!c.facts().owner_approved);
     assert_eq!(c.view(4000).step, Step::ListOwner(Door::Judge));
 
-    // Author COMMENTED review on the wrong head does not approve.
-    c.hub
-        .person_review(REMI, 3, "owner", "User", &head(4), &marker, "COMMENTED");
-    assert!(!c.facts().owner_approved);
-    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Judge));
+    // Author COMMENTED review on a mismatched commit_id does not approve and
+    // stays in discussion context (never excluded as a valid marker).
+    let mut wrong_head = Case::new();
+    wrong_head.settings.people.insert("owner".into());
+    wrong_head.secret();
+    wrong_head.judge("owner");
+    let wrong_scope = wrong_head.scope();
+    let wrong_marker = owner_approval(&REMI.parse().unwrap(), 3, &wrong_scope);
+    wrong_head.hub.person_review(
+        REMI,
+        3,
+        "owner",
+        "User",
+        &head(4),
+        &wrong_marker,
+        "COMMENTED",
+    );
+    assert!(!wrong_head.facts().owner_approved);
+    assert_ne!(wrong_head.view(4001).step, Step::Merge);
 
     // Author COMMENTED review on exact head with exact marker approves without
     // invalidating the judge's discussion context.
