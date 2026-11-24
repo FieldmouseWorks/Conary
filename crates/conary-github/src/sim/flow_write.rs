@@ -148,6 +148,21 @@ impl Write for Hub {
             || Ok(()),
         )
     }
+    fn rerun_failed_jobs(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.write(
+            Asked::new(Call::FlowRerunFailedJobs, repo),
+            &[repo, &run.to_string()],
+            || {
+                let suite = self
+                    .world
+                    .borrow()
+                    .suite_of(repo, run)
+                    .ok_or_else(|| ApiError::new("Not Found").saying("Not Found"))?;
+                self.run_again(suite);
+                Ok(())
+            },
+        )
+    }
     fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
         self.write(
             Asked::new(Call::FlowRerequest, repo),

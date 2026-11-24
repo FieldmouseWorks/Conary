@@ -363,6 +363,7 @@ impl Pass<'_> {
                     self.config.evidence.as_ref(),
                     self.now,
                 )?;
+                super::uncertain::hydrate(github, &mut facts, self.config.evidence.as_ref());
                 if !self.dry_run
                     && seen.apply(&mut record)
                     && let Some(data) = &data

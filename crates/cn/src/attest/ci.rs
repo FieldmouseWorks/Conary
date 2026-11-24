@@ -149,7 +149,8 @@ pub fn attest(cli: &Cli, args: &CiArgs) -> Result<()> {
             AttestCommand::Negative {
                 base: plan.base,
                 head: head.clone(),
-                result,
+                result: result.word().to_owned(),
+                error: None,
                 tree: plan.tree,
                 tests: plan.tests,
                 checks: if result == super::Negative::None {

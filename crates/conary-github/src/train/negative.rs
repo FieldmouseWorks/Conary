@@ -58,6 +58,7 @@ pub(super) fn negative(
         Err(why) => return Ok(Err(why)),
     };
     let result = a.result;
+    let error = a.error;
     record(
         store,
         Body::Evidence {
@@ -75,6 +76,11 @@ pub(super) fn negative(
     )?;
     Ok(if counts(result) {
         Ok(())
+    } else if result == Outcome::Error {
+        Err(match error {
+            Some(why) => format!("{}: negative run couldn't tell: {why}", n.check),
+            None => format!("{}: negative run couldn't tell", n.check),
+        })
     } else {
         Err(format!(
             "{}: its new tests pass on {base}, the code they'd test the change against",
@@ -109,6 +115,11 @@ pub fn verify(
         checked(forge, source, repo, base, head, n)?.and_then(|(_, a)| {
             if counts(a.result) {
                 Ok(())
+            } else if a.result == Outcome::Error {
+                Err(match a.error {
+                    Some(why) => format!("{}: negative run couldn't tell: {why}", n.check),
+                    None => format!("{}: negative run couldn't tell", n.check),
+                })
             } else {
                 Err(format!("{}: new tests pass on old code", n.check))
             }

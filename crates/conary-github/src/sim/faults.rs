@@ -20,6 +20,7 @@ pub(crate) enum Call {
     FlowResolve,
     FlowUpdate,
     FlowRerun,
+    FlowRerunFailedJobs,
     FlowRerequest,
     FlowClose,
     FlowOwner,

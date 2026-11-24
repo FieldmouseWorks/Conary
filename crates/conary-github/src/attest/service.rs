@@ -262,9 +262,11 @@ pub(super) fn check(
             }
             let result = negative_result(&s.result, run)?;
             // Tests that ran ran on a tree; none to run ran on none.
+            // An errored run may or may not have constructed a tree.
             match (&s.tree, result) {
-                (None, Outcome::None) => {}
-                (Some(tree), Outcome::Fail | Outcome::Pass) if is_commit(tree) => {}
+                (None, Outcome::None | Outcome::Error) => {}
+                (Some(tree), Outcome::Fail | Outcome::Pass | Outcome::Error) if is_commit(tree) => {
+                }
                 _ => return Err("its statement's tree doesn't fit its result".into()),
             }
             result
@@ -289,6 +291,7 @@ pub(super) fn check(
         },
         result,
         log: Some(s.log.sha256),
+        error: None,
     })
 }
 

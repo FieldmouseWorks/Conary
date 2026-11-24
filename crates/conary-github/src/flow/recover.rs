@@ -15,15 +15,87 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+/// Whether a repository's attested workflow runs require single-attempt
+/// attestation cohesion (every job in the workflow run from the same attempt),
+/// structurally forbidding partial `rerun-failed-jobs` recovery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RerunPolicy {
+    /// Single-attempt attestation cohesion is required: only full workflow
+    /// reruns (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun`) are
+    /// permitted.
+    #[default]
+    FullWorkflowOnly,
+    /// No single-attempt attestation cohesion is required: partial
+    /// `rerun-failed-jobs` recovery is allowed.
+    FailedJobsAllowed,
+}
+
+impl RerunPolicy {
+    /// Derive the rerun policy structurally from the repository's evidence
+    /// configuration: any `conaryd`-attested repository requires single-attempt
+    /// attestation cohesion and can never select partial `rerun-failed-jobs`.
+    pub fn for_evidence(evidence: Option<&Evidence>) -> Self {
+        match evidence {
+            Some(_) => Self::FullWorkflowOnly,
+            None => Self::FailedJobsAllowed,
+        }
+    }
+
+    /// Select the workflow rerun recovery primitive permitted by this policy
+    /// for workflow run `run`.
+    pub fn workflow_recovery(self, run: u64) -> Recovery {
+        match self {
+            Self::FullWorkflowOnly => Recovery::Rerun(run),
+            Self::FailedJobsAllowed => Recovery::RerunFailedJobs(run),
+        }
+    }
+
+    /// Rewrite a recovery candidate according to this policy.
+    pub fn apply(self, recovery: Recovery) -> Recovery {
+        match recovery {
+            Recovery::Rerun(run) | Recovery::RerunFailedJobs(run) => self.workflow_recovery(run),
+            other => other,
+        }
+    }
+
+    /// Whether `recovery` is permitted under this policy.
+    pub fn permits(self, recovery: &Recovery) -> bool {
+        !matches!(
+            (self, recovery),
+            (Self::FullWorkflowOnly, Recovery::RerunFailedJobs(_))
+        )
+    }
+}
+
 /// One way GitHub brings a stalled stage back.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Recovery {
     /// Update the head with its base, which it's behind and merges cleanly.
     Update,
-    /// Run a GitHub Actions workflow run again, by the run's id.
+    /// Run a GitHub Actions workflow run again in full, by the run's id
+    /// (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun`).
     Rerun(u64),
+    /// Run only the failed jobs of a GitHub Actions workflow run again, by the
+    /// run's id (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs`).
+    /// Structurally forbidden on single-attempt-attested repositories.
+    RerunFailedJobs(u64),
     /// Ask the App whose check suite it is to run it again, by the suite's id.
     Rerequest(u64),
+}
+
+impl Recovery {
+    /// Whether `self` and `other` target the same underlying GitHub resource
+    /// (treating full and failed-jobs reruns of the same workflow run id as
+    /// one target so a workflow run is never asked twice on one head).
+    pub(super) fn same_target(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Rerun(a) | Self::RerunFailedJobs(a),
+                Self::Rerun(b) | Self::RerunFailedJobs(b),
+            ) => a == b,
+            _ => self == other,
+        }
+    }
 }
 
 /// What became of a recovery the flow asked GitHub for.
@@ -50,6 +122,10 @@ pub struct Recovered {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<String>,
     pub answer: Answer,
+    /// True when triggered immediately for an uncertain CI outcome rather than
+    /// after an overdue stall deadline.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub immediate: bool,
 }
 
 impl Recovered {
@@ -59,14 +135,25 @@ impl Recovered {
         let what = match self.recovery {
             Recovery::Update => "update the head with its base".to_owned(),
             Recovery::Rerun(_) => format!("rerun {}", self.checks.join(", ")),
+            Recovery::RerunFailedJobs(_) => {
+                format!("rerun failed jobs for {}", self.checks.join(", "))
+            }
             Recovery::Rerequest(_) => format!("rerequest {}", self.checks.join(", ")),
         };
+        let prefix = if self.immediate {
+            "Uncertain CI"
+        } else {
+            "Overdue"
+        };
         let text = match &self.answer {
-            Answer::Asked => format!("Overdue; asking GitHub to {what}"),
-            Answer::Accepted => format!("Overdue; GitHub was asked to {what}"),
+            Answer::Asked => format!("{prefix}; asking GitHub to {what}"),
+            Answer::Accepted => format!("{prefix}; GitHub was asked to {what}"),
+            Answer::Refused(said) if self.immediate => {
+                format!("{said} (GitHub, refusing to {what})")
+            }
             Answer::Refused(said) => format!("{said} (GitHub, refusing to {what}; overdue)"),
             Answer::Unanswered(why) => {
-                format!("Overdue; GitHub didn't answer the ask to {what}: {why}")
+                format!("{prefix}; GitHub didn't answer the ask to {what}: {why}")
             }
         };
         text.chars().take(140).collect()
@@ -119,6 +206,7 @@ pub(super) fn look(
                 recovery,
                 checks,
                 answer: Answer::Asked,
+                immediate: false,
             },
         });
     }
@@ -134,7 +222,7 @@ fn first(f: &Facts, m: &Memory, stage: Stage) -> Option<(Recovery, Vec<String>)>
     let spent = |r: &Recovery| {
         m.recovered
             .iter()
-            .any(|d| d.head == f.revision.head && &d.recovery == r)
+            .any(|d| d.head == f.revision.head && d.recovery.same_target(r))
     };
     if matches!(stage, Stage::Ci | Stage::Merge)
         && f.merging == Merge::Update
@@ -156,7 +244,7 @@ fn first(f: &Facts, m: &Memory, stage: Stage) -> Option<(Recovery, Vec<String>)>
     stopped
         .iter()
         .find(|(r, _)| !spent(r))
-        .map(|(r, checks)| (r.clone(), checks.clone()))
+        .map(|(r, checks)| (f.rerun_policy.apply(r.clone()), checks.clone()))
 }
 
 /// After the effect, what the decision shows of the recovery it asked for:

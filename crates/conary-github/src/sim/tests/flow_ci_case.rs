@@ -190,7 +190,7 @@ impl Scenario {
         match state {
             Ci::Green => assert_eq!(n.step, Step::Merge),
             Ci::Red => assert_eq!(n.step, Step::HandFix(Kind::Red)),
-            Ci::Pending => assert_eq!(n.stage, Stage::Ci),
+            Ci::Pending | Ci::Uncertain => assert_eq!(n.stage, Stage::Ci),
             Ci::None => panic!("these scenarios all have CI"),
         }
     }

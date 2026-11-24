@@ -85,6 +85,10 @@ impl Reads {
     pub(crate) fn met(&mut self, read: Reading, why: String) {
         self.meet(Degraded::Read { read }, why);
     }
+    /// Looking up `check`'s attestation or run metadata couldn't reach GitHub.
+    pub(crate) fn lookup(&mut self, check: String, why: String) {
+        self.meet(Degraded::Lookup { check }, why);
+    }
     fn meet(&mut self, what: Degraded, why: String) {
         if !self.met.iter().any(|d| d.what == what) {
             self.met.push(Degradation { what, why });

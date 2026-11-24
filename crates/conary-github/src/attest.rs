@@ -200,11 +200,14 @@ pub enum Subject<'a> {
 pub struct Attested {
     pub attest: Attest,
     /// A gate's pass, or what a negative run's new tests did on the old
-    /// code: failed, passed, or had nothing to run.
+    /// code: failed, passed, had nothing to run, or couldn't tell (`Error`).
     pub result: Outcome,
     /// The SHA-256 of the run's log its producer signed, when it signed one:
     /// what binds a review's or a judgment's exact receipt.
     pub log: Option<String>,
+    /// Why a gate or negative run could not judge the change, when `result` is
+    /// [`Outcome::Error`].
+    pub error: Option<String>,
 }
 
 /// The attestation of `run`'s result on `subject`, by a producer `trust`
@@ -430,6 +433,9 @@ struct Predicate {
     skipped: Vec<String>,
     #[serde(default)]
     log: Option<PredicateLog>,
+    /// Why a gate broke when `result` is `error`.
+    #[serde(default)]
+    error: Option<String>,
     /// Which gate ran, as its workflow says (burrow's `gate-reuse`):
     /// [`crate::reuse`] matches a request's against it.
     #[serde(default)]
@@ -448,6 +454,8 @@ struct NegativePredicate {
     result: String,
     revision: Revision,
     skipped: Vec<String>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,18 +531,22 @@ fn check(
             run.id
         ));
     }
-    let (result, log) = match subject {
+    let (result, log, error) = match subject {
         Subject::Commit { commit, tree, .. } => {
             // A PR's token is for GitHub's merge as its event found it,
             // which nothing checks, so only a push's is held to its commit.
             if said("sha") != commit {
                 return Err(format!("its token is for {}, not {commit}", said("sha")));
             }
-            pushed(&statement, commit, tree, run)?
+            let (result, log) = pushed(&statement, commit, tree, run)?;
+            (result, log, None)
         }
-        Subject::Negative { base, head } => (negative(&statement, base, head, run)?, None),
+        Subject::Negative { base, head } => {
+            let (result, error) = negative(&statement, base, head, run)?;
+            (result, None, error)
+        }
         Subject::Gate { commit, tree } => {
-            if statement.starts_with("conary commit v1\n") {
+            let (result, log) = if statement.starts_with("conary commit v1\n") {
                 if said("sha") != commit {
                     return Err(format!("its token is for {}, not {commit}", said("sha")));
                 }
@@ -544,7 +556,8 @@ fn check(
                 // and nothing checks: what counts is the tree it says it
                 // ran on, under the signer's signature.
                 revised(&statement, commit, tree, run)?
-            }
+            };
+            (result, log, None)
         }
         Subject::Deferred {
             commit,
@@ -557,7 +570,8 @@ fn check(
                     said("event_name")
                 ));
             }
-            deferred(&statement, commit, tree, dispatch_id, run)?
+            let (result, log) = deferred(&statement, commit, tree, dispatch_id, run)?;
+            (result, log, None)
         }
     };
     Ok(Claimed {
@@ -568,6 +582,7 @@ fn check(
             },
             result,
             log,
+            error,
         },
         workflow_sha: workflow_sha.to_owned(),
         hosted: hosted(&claims),
@@ -760,8 +775,14 @@ fn deferred(
 
 /// A negative run's statement, as one of `head` on `base`, its result the
 /// one its check run concluded with: `success` for a failure on the old
-/// code or nothing to run, `failure` for a pass there.
-fn negative(statement: &str, base: &str, head: &str, run: &CheckRun) -> Result<Outcome, String> {
+/// code or nothing to run, `failure` for a pass there or an `error` when
+/// the run couldn't tell.
+fn negative(
+    statement: &str,
+    base: &str,
+    head: &str,
+    run: &CheckRun,
+) -> Result<(Outcome, Option<String>), String> {
     let mut lines = statement.lines();
     let (Some("conary negative v1"), Some(on), Some(of), Some(predicate), None) = (
         lines.next(),
@@ -789,18 +810,27 @@ fn negative(statement: &str, base: &str, head: &str, run: &CheckRun) -> Result<O
             predicate.revision.head, predicate.revision.base
         ));
     }
+    if predicate.result == "error" {
+        let outcome = negative_result(&predicate.result, run)?;
+        let why = predicate
+            .error
+            .filter(|w| !w.trim().is_empty() && !w.contains(['\n', '\r']))
+            .ok_or("a negative error says why on one line")?;
+        return Ok((outcome, Some(why)));
+    }
     skipped_none(&predicate.skipped)?;
-    negative_result(&predicate.result, run)
+    Ok((negative_result(&predicate.result, run)?, None))
 }
 
 /// A negative's result, its check run's conclusion the one it says:
 /// `success` for a failure on the old code or nothing to run, `failure`
-/// for a pass there.
+/// for a pass there or an `error` when the run couldn't tell.
 fn negative_result(result: &str, run: &CheckRun) -> Result<Outcome, String> {
     let (outcome, concluded) = match result {
         "fail" => (Outcome::Fail, "success"),
         "none" => (Outcome::None, "success"),
         "pass" => (Outcome::Pass, "failure"),
+        "error" => (Outcome::Error, "failure"),
         other => {
             return Err(format!(
                 "it says {other:?}, which isn't a negative's result"
@@ -888,6 +918,8 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 pub mod ci;
+mod gate_error;
+pub use gate_error::gate_error;
 pub mod job;
 pub mod make;
 pub mod service;

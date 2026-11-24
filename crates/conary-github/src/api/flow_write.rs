@@ -146,6 +146,13 @@ impl Write for Api {
             json!({"expected_head_sha":head}),
         )
     }
+    fn rerun_failed_jobs(&self, repo: &str, run: u64) -> Result<(), ApiError> {
+        self.flow_call(
+            false,
+            &format!("/repos/{repo}/actions/runs/{run}/rerun-failed-jobs"),
+            json!({}),
+        )
+    }
     fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError> {
         self.flow_call(
             false,

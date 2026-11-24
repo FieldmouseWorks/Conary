@@ -227,14 +227,70 @@ fn a_statement_names_object_ids_and_a_negatives_tree_as_its_result_has_one() {
     ] {
         assert_eq!(Gate::named(word, why).ok(), gate, "{word} {why:?}");
     }
-    for (word, result) in [
-        ("fail", Some(Negative::Fail)),
-        ("pass", Some(Negative::Pass)),
-        ("skipped", Some(Negative::Skipped)),
-        ("none", Some(Negative::None)),
-        ("", None),
+    for (word, why, result) in [
+        ("fail", None, Some(Negative::Fail)),
+        ("pass", None, Some(Negative::Pass)),
+        ("skipped", None, Some(Negative::Skipped)),
+        ("none", None, Some(Negative::None)),
+        (
+            "error",
+            Some("base failed"),
+            Some(Negative::Error("base failed".into())),
+        ),
+        ("error", None, None),
+        ("fail", Some("base failed"), None),
+        ("pass", Some("base failed"), None),
+        ("none", Some("base failed"), None),
+        ("", None, None),
     ] {
-        assert_eq!(word.parse::<Negative>().ok(), result, "{word}");
+        assert_eq!(Negative::named(word, why).ok(), result, "{word} {why:?}");
+    }
+}
+
+#[test]
+fn a_negative_that_couldnt_tell_is_made_with_why_on_one_line_and_verifies_as_error() {
+    let why = "the same check on the base, fails too, so it can't tell";
+    let pr = Subject::Negative {
+        base: BASE,
+        head: HEAD,
+    };
+    for tree in [Some(TREE.to_owned()), None] {
+        let claim = Claim::Negative {
+            base: BASE.into(),
+            head: HEAD.into(),
+            result: Negative::Error(why.into()),
+            tree,
+            tests: vec!["tests/new.rs".into()],
+            checks: vec!["crates".into()],
+            skipped: Vec::new(),
+            unrun: Vec::new(),
+            log: log(),
+        };
+        let made_pred = statement(&claim).unwrap().predicate;
+        assert!(
+            made_pred.ends_with(&format!(r#""artifact":"gate-log-1"}},"error":"{why}"}}"#)),
+            "{made_pred}"
+        );
+        let checked = made(&claim, pr, "failure").unwrap();
+        assert_eq!(checked.result, Outcome::Error);
+        assert_eq!(checked.error.as_deref(), Some(why));
+        let wrong = made(&claim, pr, "success").unwrap_err();
+        assert!(wrong.contains("check run success"), "{wrong}");
+    }
+    for bad in ["", "   ", "base\nfailed", "base\rfailed"] {
+        let claim = Claim::Negative {
+            base: BASE.into(),
+            head: HEAD.into(),
+            result: Negative::Error(bad.into()),
+            tree: None,
+            tests: Vec::new(),
+            checks: Vec::new(),
+            skipped: Vec::new(),
+            unrun: Vec::new(),
+            log: log(),
+        };
+        let refused = statement(&claim).unwrap_err();
+        assert!(refused.contains("one line"), "{bad:?}: {refused}");
     }
 }
 

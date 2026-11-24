@@ -280,6 +280,9 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     if f.checks.iter().any(|c| c.state == Ci::Red) {
         return Ci::Red;
     }
+    if f.checks.iter().any(|c| c.state == Ci::Uncertain) {
+        return Ci::Uncertain;
+    }
     if f.checks.iter().any(|c| c.state == Ci::Pending) {
         return Ci::Pending;
     }
@@ -330,6 +333,16 @@ fn after_review(
     }
     if ci == Ci::Red || f.proof == Proof::Failed {
         return hand(f, m, now, Kind::Red, true);
+    }
+    if let Some(decision) = super::uncertain::decide(f, m) {
+        return decision;
+    }
+    if ci == Ci::Uncertain {
+        return wait(
+            Stage::Ci,
+            None,
+            "Settled; waiting on uncertain CI before landing",
+        );
     }
     let why = judge_why(f, ci, capped, changed);
     let verdict = judgment(f, &why);

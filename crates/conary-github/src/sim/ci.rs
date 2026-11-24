@@ -34,6 +34,27 @@ impl World {
     /// The workflow run of job `id`, as it stands.
     pub(super) fn workflow_run(&self, id: u64) -> crate::train::WorkflowRun {
         let all = self.suite_runs(id).map(|(_, all)| all).unwrap_or_default();
+        self.workflow_run_from_runs(&all)
+    }
+
+    /// The workflow run `run` in `repo`, resolving through a named flow suite
+    /// first and falling back to the `job * 10` convention.
+    pub(super) fn workflow_run_for(&self, repo: &str, run: u64) -> crate::train::WorkflowRun {
+        if let Some(suite) = self.suite_of(repo, run) {
+            let all: Vec<&Value> = self
+                .checks
+                .values()
+                .flatten()
+                .filter(|r| r["check_suite"]["id"].as_u64() == Some(suite))
+                .collect();
+            if !all.is_empty() {
+                return self.workflow_run_from_runs(&all);
+            }
+        }
+        self.workflow_run(run / 10)
+    }
+
+    fn workflow_run_from_runs(&self, all: &[&Value]) -> crate::train::WorkflowRun {
         let attempts = all.iter().filter_map(|r| r["id"].as_u64());
         let done = all.iter().all(|r| r["status"] == "completed");
         crate::train::WorkflowRun {
@@ -218,9 +239,21 @@ impl Hub {
         self.world.borrow_mut().checks.insert(sha.into(), runs);
     }
 
-    /// GitHub running a suite's runs that didn't pass again: each a new
-    /// run, queued, in the same suite, as a rerun is.
+    /// GitHub running a suite's latest runs again: when `failed_only` is true,
+    /// only the jobs that didn't pass (partial `rerun-failed-jobs`); otherwise
+    /// every job in the suite (full workflow `rerun`), preserving single-attempt
+    /// cohesion.
     pub(crate) fn run_again(&self, suite: u64) {
+        self.requeue_suite(suite, true);
+    }
+
+    /// Full workflow rerun: re-queues the latest completed run of every job in
+    /// `suite`, advancing `run_attempt` cohesively for all jobs in the run.
+    pub(crate) fn run_all_again(&self, suite: u64) {
+        self.requeue_suite(suite, false);
+    }
+
+    fn requeue_suite(&self, suite: u64, failed_only: bool) {
         let mut w = self.world.borrow_mut();
         let mut id = w
             .checks
@@ -230,15 +263,31 @@ impl Hub {
             .max()
             .unwrap_or(0);
         for runs in w.checks.values_mut() {
-            let again: Vec<Value> = runs
+            let mut latest: std::collections::BTreeMap<String, Value> =
+                std::collections::BTreeMap::new();
+            for c in runs
                 .iter()
+                .filter(|c| c["check_suite"]["id"].as_u64() == Some(suite))
+            {
+                let Some(name) = c["name"].as_str() else {
+                    continue;
+                };
+                if latest
+                    .get(name)
+                    .is_none_or(|old| old["id"].as_u64() < c["id"].as_u64())
+                {
+                    latest.insert(name.to_owned(), c.clone());
+                }
+            }
+            let again: Vec<Value> = latest
+                .into_values()
                 .filter(|c| {
-                    c["check_suite"]["id"].as_u64() == Some(suite)
-                        && c["status"] == "completed"
-                        && !matches!(
-                            c["conclusion"].as_str(),
-                            Some("success" | "neutral" | "skipped")
-                        )
+                    c["status"] == "completed"
+                        && (!failed_only
+                            || !matches!(
+                                c["conclusion"].as_str(),
+                                Some("success" | "neutral" | "skipped")
+                            ))
                 })
                 .map(|c| {
                     id += 1;
