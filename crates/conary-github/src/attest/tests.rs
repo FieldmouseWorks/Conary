@@ -391,6 +391,31 @@ fn a_negative_counts_for_its_revision_with_what_its_tests_did_on_the_old_code() 
     let why =
         negative_says(&negative_statement(BASE, HEAD, "fail"), &run("cancelled")).unwrap_err();
     assert!(why.contains("check run cancelled"), "{why}");
+    // An error negative concludes failure, carries its one-line reason, and
+    // is never mistaken for a passing negative.
+    let err_stmt = format!(
+        "conary negative v1\n{BASE}\n{HEAD}\n{}\n",
+        json!({
+            "result": "error",
+            "revision": {"base": BASE, "head": HEAD},
+            "tree": null,
+            "tests": ["tests/new.rs"],
+            "checks": ["crates"],
+            "skipped": ["vm"],
+            "log": {"sha256": "0".repeat(64), "artifact": "negative-log-1"},
+            "error": "base check flaked",
+        })
+    );
+    let claimed = negative_says(&err_stmt, &run("failure")).unwrap();
+    assert_eq!(claimed.attested.result, Outcome::Error);
+    assert_eq!(claimed.attested.error.as_deref(), Some("base check flaked"));
+    assert!(negative_says(&err_stmt, &run("success")).is_err());
+    // An error negative without a reason is refused.
+    assert!(
+        negative_says(&negative_statement(BASE, HEAD, "error"), &run("failure"))
+            .unwrap_err()
+            .contains("one line")
+    );
 }
 
 #[test]

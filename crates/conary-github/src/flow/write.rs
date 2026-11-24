@@ -23,6 +23,9 @@ pub trait Write: Read + crate::train::Forge {
     /// Resolve review thread `thread`.
     fn resolve(&self, repo: &str, pr: u64, thread: &str) -> Result<(), ApiError>;
     fn update(&self, repo: &str, pr: u64, head: &str) -> Result<(), ApiError>;
+    /// Run only the failed jobs of workflow run `run` again. Permitted only
+    /// where single-attempt attestation cohesion is not required.
+    fn rerun_failed_jobs(&self, repo: &str, run: u64) -> Result<(), ApiError>;
     /// Ask the App whose check suite `suite` is to run it again.
     fn rerequest(&self, repo: &str, suite: u64) -> Result<(), ApiError>;
     fn close(&self, repo: &str, pr: u64) -> Result<(), ApiError>;

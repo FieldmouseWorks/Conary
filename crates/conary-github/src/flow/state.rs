@@ -252,7 +252,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                 && description == s.to_string().chars().take(140).collect::<String>()
         });
         let lost = description == super::decide::LOST;
-        let failing = m.strikes.values().any(|n| *n >= 3) || stalled || lost;
+        let uncertain_escalated = super::uncertain::escalated(f, &m, stage, &step);
+        let failing = m.strikes.values().any(|n| *n >= 3) || stalled || lost || uncertain_escalated;
         // A wait on CI counts from its runs' start, never their queue.
         let clock = if stage == Stage::Ci && !failing {
             super::ci::clock(&f.checks)
@@ -313,6 +314,26 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
             since,
             due: due.unwrap_or(u64::MAX),
         };
+        // An immediate recovery decided for an uncertain CI check carries its
+        // own record without waiting for an overdue stall deadline.
+        if let Step::Recover(ref rec) = step {
+            let checks = f
+                .uncertain
+                .iter()
+                .filter(|u| u.recovery.as_ref() == Some(rec))
+                .map(|u| u.name.clone())
+                .collect();
+            let asked = Recovered {
+                head: f.revision.head.clone(),
+                since,
+                recovery: rec.clone(),
+                checks,
+                answer: Answer::Asked,
+                immediate: true,
+            };
+            description = asked.describe();
+            recovery = Some(asked);
+        }
         // Past its deadline, a wait is brought back as GitHub allows, once
         // in its stall. The wait stays what was decided, so the stall's
         // clock runs on whatever the status says.

@@ -168,6 +168,7 @@ fn a_rerun_and_a_rerequest_are_asked_as_github_takes_them_and_a_refusal_keeps_it
     let (base, heads) = github(vec![
         whole("201 Created", "").leak(),
         whole("403 Forbidden", refused).leak(),
+        whole("201 Created", "").leak(),
         whole("201 Created", "{}").leak(),
     ]);
     let api = Api::new(&base, Tokens::given("t"));
@@ -187,6 +188,13 @@ fn a_rerun_and_a_rerequest_are_asked_as_github_takes_them_and_a_refusal_keeps_it
     );
     assert!(err.to_string().contains("http status: 403"), "{err}");
     heads.recv().unwrap();
+    api.rerun_failed_jobs("o/r", 42).unwrap();
+    assert!(
+        heads
+            .recv()
+            .unwrap()
+            .starts_with("post /repos/o/r/actions/runs/42/rerun-failed-jobs http/1.1")
+    );
     api.rerequest("o/r", 9).unwrap();
     assert!(
         heads

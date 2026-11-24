@@ -203,6 +203,39 @@ fn attest_says_why_a_gate_broke_and_only_of_one_that_did() {
         assert_eq!(predicate["result"], json!("error"));
         assert_eq!(predicate["error"], json!("the disk is full"));
     }
+    // Negative error works the same way, with or without a negative tree.
+    let out = dir.path().join("out-neg");
+    let neg = |said: &[&str]| {
+        let mut args = vec![
+            "negative",
+            BASE,
+            HEAD,
+            "--log",
+            log.to_str().unwrap(),
+            "--log-artifact",
+            "negative-log-1",
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(said);
+        attest(&args, None)
+    };
+    for refused in [
+        &["--result", "error"][..],
+        &["--result", "fail", "--tree", TREE, "--error", "base failed"],
+        &["--result", "none", "--error", "base failed"],
+        &["--result", "error", "--error", "base\nfailed"],
+    ] {
+        assert!(!neg(refused).status.success(), "{refused:?}");
+        assert!(!out.exists(), "{refused:?}");
+    }
+    let run = neg(&["--result", "error", "--error", "base check flaked"]);
+    assert!(run.status.success(), "{run:?}");
+    let made: Value = serde_json::from_slice(&run.stdout).unwrap();
+    let predicate: Value = serde_json::from_str(&read(&made["predicate"])).unwrap();
+    assert_eq!(predicate["result"], json!("error"));
+    assert_eq!(predicate["error"], json!("base check flaked"));
+    assert!(predicate["tree"].is_null());
 }
 
 // A token GitHub refuses, or one the job can't ask for, leaves nothing

@@ -78,10 +78,15 @@ pub enum AttestCommand {
         /// fail when a check failed on the negative tree; pass when every
         /// check passed and runs every new test; skipped when every check
         /// built passed but not all were built or some new test none runs;
-        /// none when the change needs no negative.
-        #[arg(long)]
-        result: Negative,
-        /// The negative tree. Every result but none has one.
+        /// none when the change needs no negative; error when the negative
+        /// run couldn't tell, which --error says why.
+        #[arg(long, value_parser = ["fail", "pass", "skipped", "none", "error"])]
+        result: String,
+        /// Why the negative run couldn't tell, on one line: with --result
+        /// error, and only then.
+        #[arg(long, value_name = "WHY")]
+        error: Option<String>,
+        /// The negative tree. Every result but none (and optionally error) has one.
         #[arg(long)]
         tree: Option<String>,
         /// Each new test file.
@@ -314,6 +319,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
             base,
             head,
             result,
+            error,
             tree,
             tests,
             checks,
@@ -324,7 +330,7 @@ fn claim(command: &AttestCommand) -> Result<(Claim, &Out)> {
             Claim::Negative {
                 base: base.clone(),
                 head: head.clone(),
-                result: *result,
+                result: Negative::named(result, error.as_deref())?,
                 tree: tree.clone(),
                 tests: tests.clone(),
                 checks: checks.clone(),

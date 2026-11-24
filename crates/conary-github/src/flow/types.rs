@@ -52,6 +52,7 @@ pub enum Ci {
     None,
     Green,
     Pending,
+    Uncertain,
     Red,
 }
 
@@ -612,6 +613,15 @@ pub struct Facts {
     pub labelled_by: Option<super::Labeller>,
     pub merging: Merge,
     pub checks: Vec<Check>,
+    /// Check suites on the head from the snapshot, by suite id.
+    pub suites: BTreeMap<u64, super::Suite>,
+    /// Effective check runs on the head, after scope/replacement selection.
+    pub effective_runs: Vec<crate::api::CheckRun>,
+    /// Whether single-attempt attestation cohesion forbids partial reruns.
+    pub rerun_policy: super::RerunPolicy,
+    /// Completed failed checks whose attestation contract says they could not
+    /// judge the PR (uncertain `negative` or attested gate `error`).
+    pub uncertain: Vec<super::UncertainCheck>,
     /// Each cancelled check run nothing replaced that GitHub has a way to
     /// run again, by that way, with the checks it brings back.
     pub stopped: BTreeMap<super::Recovery, Vec<String>>,

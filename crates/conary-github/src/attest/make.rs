@@ -24,8 +24,7 @@ pub enum Gate {
 
 /// What a negative run's new tests did on the old code
 /// (`docs/ci-attestation.md`, "Negative runs").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Negative {
     /// A check failed on the negative tree: what rule 2 asks for.
     Fail,
@@ -36,6 +35,18 @@ pub enum Negative {
     Skipped,
     /// The change needs no negative.
     None,
+    /// The negative run could not judge the change (for example, the base
+    /// check failed or infrastructure broke), and why, on one line: the
+    /// predicate's `error`.
+    Error(String),
+}
+
+fn single_line<'a>(what: &str, why: &'a str) -> Result<&'a str, String> {
+    if why.trim().is_empty() || why.contains(['\n', '\r']) {
+        Err(format!("{what} is one line, not {why:?}"))
+    } else {
+        Ok(why)
+    }
 }
 
 impl Gate {
@@ -68,26 +79,47 @@ impl Gate {
     fn error(&self) -> Result<Option<&str>, String> {
         match self {
             Self::Pass | Self::Fail => Ok(None),
-            Self::Error(why) if why.trim().is_empty() || why.contains(['\n', '\r']) => {
-                Err(format!("why a gate broke is one line, not {why:?}"))
-            }
-            Self::Error(why) => Ok(Some(why)),
+            Self::Error(why) => single_line("why a gate broke", why).map(Some),
         }
     }
 }
 
-impl std::str::FromStr for Negative {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "fail" => Ok(Self::Fail),
-            "pass" => Ok(Self::Pass),
-            "skipped" => Ok(Self::Skipped),
-            "none" => Ok(Self::None),
-            _ => Err(format!(
-                "a negative's result is fail, pass, skipped or none, not {s:?}"
+impl Negative {
+    /// The result a negative job names `word`, with why it couldn't tell when
+    /// that's `error`.
+    pub fn named(word: &str, error: Option<&str>) -> Result<Self, String> {
+        match (word, error) {
+            ("fail", None) => Ok(Self::Fail),
+            ("pass", None) => Ok(Self::Pass),
+            ("skipped", None) => Ok(Self::Skipped),
+            ("none", None) => Ok(Self::None),
+            ("error", Some(why)) => Ok(Self::Error(why.to_owned())),
+            ("error", None) => Err("a negative run that couldn't tell says why".into()),
+            ("fail" | "pass" | "skipped" | "none", Some(_)) => Err(format!(
+                "only an error says why it couldn't tell, not a {word}"
             )),
+            _ => Err(format!(
+                "a negative's result is fail, pass, skipped, none or error, not {word:?}"
+            )),
+        }
+    }
+
+    /// Its word, the predicate's `result`.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Self::Fail => "fail",
+            Self::Pass => "pass",
+            Self::Skipped => "skipped",
+            Self::None => "none",
+            Self::Error(_) => "error",
+        }
+    }
+
+    /// Why it couldn't tell, if it couldn't. Refused unless that's one line.
+    fn error(&self) -> Result<Option<&str>, String> {
+        match self {
+            Self::Fail | Self::Pass | Self::Skipped | Self::None => Ok(None),
+            Self::Error(why) => single_line("why a negative run couldn't tell", why).map(Some),
         }
     }
 }
@@ -175,7 +207,7 @@ struct GatePredicate<'a> {
 
 #[derive(Serialize)]
 struct NegativePredicate<'a> {
-    result: Negative,
+    result: &'static str,
     revision: Revision<'a>,
     tree: Option<&'a str>,
     tests: &'a [String],
@@ -183,6 +215,8 @@ struct NegativePredicate<'a> {
     skipped: &'a [String],
     unrun: &'a [String],
     log: &'a Log,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 /// What a claim attests, in the parts a job keeps: the subject, named as
@@ -320,11 +354,13 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
                         "a change that needs no negative has no tree and lists nothing".into(),
                     );
                 }
+                (Negative::Error(_), Some(tree)) => ids(&[tree])?,
+                (Negative::Error(_), None) => {}
                 (_, Some(tree)) => ids(&[tree])?,
                 (_, None) => return Err("a negative run names the tree it ran on".into()),
             }
             let predicate = NegativePredicate {
-                result: *result,
+                result: result.word(),
                 revision: Revision { base, head },
                 tree: tree.as_deref(),
                 tests,
@@ -332,6 +368,7 @@ pub fn statement(claim: &Claim) -> Result<Statement, String> {
                 skipped,
                 unrun,
                 log,
+                error: result.error()?,
             };
             (
                 "conary-negative",

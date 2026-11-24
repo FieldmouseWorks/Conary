@@ -290,13 +290,23 @@ fn a_negative_counts_for_its_revision_with_what_its_tests_did_on_the_old_code() 
         negative("pass", Some(TREE), "failure").unwrap().result,
         Outcome::Pass
     );
+    assert_eq!(
+        negative("error", Some(TREE), "failure").unwrap().result,
+        Outcome::Error
+    );
+    assert_eq!(
+        negative("error", None, "failure").unwrap().result,
+        Outcome::Error
+    );
     for (result, tree, conclusion, says) in [
         ("fail", Some(TREE), "failure", "check run failure"),
         ("pass", Some(TREE), "success", "check run success"),
-        ("error", Some(TREE), "success", "isn't a negative's result"),
+        ("error", Some(TREE), "success", "check run success"),
+        ("maybe", Some(TREE), "success", "isn't a negative's result"),
         ("fail", None, "success", "tree doesn't fit"),
         ("none", Some(TREE), "success", "tree doesn't fit"),
         ("fail", Some("tree"), "success", "tree doesn't fit"),
+        ("error", Some("tree"), "failure", "tree doesn't fit"),
     ] {
         let why = negative(result, tree, conclusion).unwrap_err();
         assert!(why.contains(says), "{result} {tree:?}: {why}");

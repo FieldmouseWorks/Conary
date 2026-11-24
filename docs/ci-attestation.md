@@ -285,18 +285,23 @@ type is `https://github.com/FieldmouseWorks/Conary/blob/main/docs/ci-attestation
   tests weren't built (`build-skip`) or some new tests none of them runs
   (`unrun`), so where they'd fail is for wherever those are built or run;
   `none` when the PR needs no negative (`tree` is then `null`, and the
-  lists empty). There's no `error`: a negative run that broke attests
-  nothing.
+  lists empty); `error` when the negative run could not judge the change
+  (for example, the base check flaked or infrastructure broke), with its
+  one-line reason in `error` after `log` (`cn attest negative --result error
+  --error WHY`, matching the gate predicate's `error`). A negative run that
+  broke without attesting anything is also treated as uncertain.
 - `tests`: the test files the PR changes.
 - `checks`: the checks it built (or that didn't evaluate), those whose
   derivation differs from the base's.
 - `skipped`: those it would have built but `build-skip` names.
 - `unrun`: the new tests no check that passed runs.
+- `error`: with the result `error`, why the negative run could not tell, as
+  one line of text, after `log`; left out otherwise.
 
 The job's check run is named `negative`, and concludes `success` when the
-result is `fail`, `skipped` or `none`, and `failure` when it's `pass`: a red
-check that says the new tests don't test the change. Only `fail` and `none`
-count as a change's negative. A private repo signs the
+result is `fail`, `skipped` or `none`, and `failure` when it's `pass` (a red
+check that says the new tests don't test the change) or `error` (uncertain;
+no PR verdict). Only `fail` and `none` count as a change's negative. A private repo signs the
 statement with the job's token as above, under the same audience format.
 Checking one is as for the gate's result, with this subject and predicate,
 and rule 7's conclusion reads `success` for `fail`, `skipped` or `none`.

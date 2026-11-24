@@ -421,7 +421,7 @@ impl Forge for Hub {
     fn workflow_run(&self, repo: &str, run: u64) -> Result<WorkflowRun, ApiError> {
         let n = run.to_string();
         self.read(Asked::new(Call::WorkflowRun, repo), &[repo, &n], |w| {
-            Ok(w.workflow_run(run / 10))
+            Ok(w.workflow_run_for(repo, run))
         })
     }
 
@@ -435,7 +435,7 @@ impl Forge for Hub {
                     .borrow()
                     .suite_of(repo, run)
                     .ok_or_else(|| ApiError::new("Not Found").saying("Not Found"))?;
-                self.run_again(suite);
+                self.run_all_again(suite);
                 Ok(())
             },
         )

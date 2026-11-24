@@ -158,6 +158,10 @@ fn gather(
         labelled_by: None,
         merging: Merge::from_github(&extra.merge_state),
         checks: Vec::new(),
+        suites: BTreeMap::new(),
+        effective_runs: Vec::new(),
+        rerun_policy: RerunPolicy::default(),
+        uncertain: Vec::new(),
         stopped: BTreeMap::new(),
         timed_out: BTreeMap::new(),
         has_ci: false,
@@ -416,6 +420,8 @@ fn gather(
         };
     }
     facts.has_ci = ci.has_ci;
+    facts.suites = extra.suites;
+    facts.effective_runs = ci.runs;
     facts.stopped = ci.stopped;
     facts.timed_out = ci.timed_out;
     facts.checks = ci

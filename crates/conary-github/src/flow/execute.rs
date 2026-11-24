@@ -261,6 +261,14 @@ pub(crate) fn act<G: Write>(
             }
             Step::UpdateBranch => github.update(&repo, f.number, &f.revision.head)?,
             Step::Recover(recovery) => {
+                // Defense in depth: single-attempt-attested repositories are
+                // structurally forbidden from issuing partial rerun-failed-jobs.
+                if !RerunPolicy::for_evidence(pass.config.evidence.as_ref()).permits(recovery) {
+                    return Err(
+                        "single-attempt attestation cohesion forbids partial rerun-failed-jobs"
+                            .into(),
+                    );
+                }
                 let mut asked = next
                     .recovery
                     .clone()
@@ -277,6 +285,7 @@ pub(crate) fn act<G: Write>(
                 let asking = match recovery {
                     Recovery::Update => github.update(&repo, f.number, &f.revision.head),
                     Recovery::Rerun(run) => github.rerun(&repo, *run),
+                    Recovery::RerunFailedJobs(run) => github.rerun_failed_jobs(&repo, *run),
                     Recovery::Rerequest(suite) => github.rerequest(&repo, *suite),
                 };
                 asked.answer = match asking {

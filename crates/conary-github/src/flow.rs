@@ -18,7 +18,11 @@ pub use priority::{Level, RED_FIX_BRANCH, Rank, StallAfter, red_fix};
 mod proofs;
 mod read;
 mod recover;
-pub use recover::{Answer, Recovered, Recovery};
+pub use recover::{Answer, Recovered, Recovery, RerunPolicy};
+mod uncertain;
+pub use uncertain::UncertainCheck;
+#[cfg(test)]
+pub(crate) use uncertain::hydrate as hydrate_uncertain_for_test;
 mod state;
 #[cfg(test)]
 pub(crate) use approval::labeller;
@@ -51,6 +55,8 @@ pub use write::{SETTLED, Write, review_body};
 
 mod ask;
 mod execute;
+#[cfg(test)]
+pub(crate) use execute::act as execute_for_test;
 pub(crate) mod observe;
 mod pass;
 pub mod schema;
