@@ -636,6 +636,38 @@ fn r2_approval_requires_a_covering_pass_and_scope_catches_late_judge_asked() {
         "covering pass should waive owner approval: {after_cover:?}"
     );
 
+    // Empty checks with merge trains enabled or require_ci=false still count
+    // as Ci::Green, so a pass without Trigger::NoCi still waives approval;
+    // with require_ci=true and no train, empty checks require Trigger::NoCi.
+    let saved_checks = std::mem::take(&mut f.checks);
+    f.settings.train = true;
+    let empty_train = check_auth(&f);
+    assert!(
+        empty_train
+            .as_ref()
+            .err()
+            .is_none_or(|e| !e.contains("scoped approval is required")),
+        "train-covered empty checks should not require Trigger::NoCi: {empty_train:?}"
+    );
+    f.settings.train = false;
+    f.settings.require_ci = false;
+    let empty_no_ci_req = check_auth(&f);
+    assert!(
+        empty_no_ci_req
+            .as_ref()
+            .err()
+            .is_none_or(|e| !e.contains("scoped approval is required")),
+        "require_ci=false empty checks should not require Trigger::NoCi: {empty_no_ci_req:?}"
+    );
+    f.settings.require_ci = true;
+    assert!(
+        check_auth(&f)
+            .unwrap_err()
+            .contains("scoped approval is required"),
+        "require_ci=true without train must require Trigger::NoCi coverage"
+    );
+    f.checks = saved_checks;
+
     // New review discussion invalidates coverage -> approval required again.
     f.review_bodies.insert(
         99,

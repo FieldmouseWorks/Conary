@@ -18,11 +18,7 @@ pub fn owner_approval(repo: &conary_core::op::Repo, pr: u64, revision: &Revision
     )
 }
 pub(crate) fn required(f: &Facts) -> bool {
-    let ci = if f.checks.is_empty() {
-        Ci::None
-    } else {
-        Ci::Green
-    };
+    let ci = super::decide::effective_ci(f);
     let why = super::decide::judge_why(f, ci, false, false);
     let passed = f.judgment.as_ref().is_some_and(|j| {
         j.revision == f.revision
