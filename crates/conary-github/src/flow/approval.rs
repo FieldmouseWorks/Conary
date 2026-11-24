@@ -18,10 +18,21 @@ pub fn owner_approval(repo: &conary_core::op::Repo, pr: u64, revision: &Revision
     )
 }
 pub(crate) fn required(f: &Facts) -> bool {
-    let passed = f
-        .judgment
-        .as_ref()
-        .is_some_and(|j| j.revision == f.revision && j.verdict == Judgment::Pass);
+    let ci = if f.checks.is_empty() {
+        Ci::None
+    } else {
+        Ci::Green
+    };
+    let why = super::decide::judge_why(f, ci, false, false);
+    let passed = f.judgment.as_ref().is_some_and(|j| {
+        j.revision == f.revision
+            && j.verdict == Judgment::Pass
+            && j.covers(&why, &f.context())
+            && (!f.judge_asked
+                || j.basis
+                    .as_ref()
+                    .is_some_and(|b| b.why.contains(&Trigger::Asked)))
+    });
     (f.classified.class == conary_core::Class::R2 && !passed)
         || f.judgment
             .as_ref()

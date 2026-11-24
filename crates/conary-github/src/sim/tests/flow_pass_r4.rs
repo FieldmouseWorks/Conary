@@ -563,3 +563,137 @@ fn only_required_checks_and_proofs_need_a_producers_attestation() {
         Err("Blocking or changed CI observations before permission".into())
     );
 }
+
+#[test]
+fn r2_approval_requires_a_covering_pass_and_scope_catches_late_judge_asked() {
+    let mut c = Case::new();
+    let key = SealKey::from_hex(&"a".repeat(64)).unwrap();
+    c.config.settings.judge_key = Some(key.clone());
+    c.config.settings.verdict_authors = ["owner".into()].into();
+    c.clean_review();
+
+    let mut f = read(
+        &c.hub,
+        &REPO.parse().unwrap(),
+        3,
+        &c.policy,
+        c.config.settings.clone(),
+        &c.config.trusted_authors,
+    )
+    .unwrap();
+    f.classified.class = conary_core::Class::R2;
+    let ctx = f.context();
+    let check_auth = |facts: &Facts| {
+        let pass = Pass {
+            config: &c.config,
+            policy: &c.policy,
+            root: c.dir.path(),
+            launcher: &c.deferred,
+            now: jobs::now(),
+            dry_run: true,
+            ledger: None,
+        };
+        crate::flow::evidence::authorize(
+            &pass,
+            &c.hub,
+            facts,
+            &Step::Merge,
+            &mut Default::default(),
+        )
+        .map_err(|e| e.to_string())
+    };
+
+    // Unbased legacy pass does not cover -> person approval still required.
+    f.judgment = Some(Judged {
+        revision: f.revision.clone(),
+        verdict: Judgment::Pass,
+        provenance: None,
+        basis: None,
+    });
+    assert!(
+        check_auth(&f)
+            .unwrap_err()
+            .contains("scoped approval is required")
+    );
+
+    // Covering pass on current revision & discussion waives person approval.
+    f.judgment = Some(Judged {
+        revision: f.revision.clone(),
+        verdict: Judgment::Pass,
+        provenance: None,
+        basis: Some(Basis {
+            why: vec![Trigger::R2],
+            context: ctx.clone(),
+        }),
+    });
+    // Authorized past approval check (only attested judgment check remains).
+    let after_cover = check_auth(&f);
+    assert!(
+        after_cover
+            .as_ref()
+            .err()
+            .is_none_or(|e| !e.contains("scoped approval is required")),
+        "covering pass should waive owner approval: {after_cover:?}"
+    );
+
+    // New review discussion invalidates coverage -> approval required again.
+    f.review_bodies.insert(
+        99,
+        ThreadComment {
+            author: Some("alice".into()),
+            body: "Check this edge case.".into(),
+        },
+    );
+    assert!(
+        check_auth(&f)
+            .unwrap_err()
+            .contains("scoped approval is required")
+    );
+    f.review_bodies.clear();
+
+    // Legacy judge-request flag without Trigger::Asked in basis -> required again.
+    f.judge_asked = true;
+    assert!(
+        check_auth(&f)
+            .unwrap_err()
+            .contains("scoped approval is required")
+    );
+    f.judgment = Some(Judged {
+        revision: f.revision.clone(),
+        verdict: Judgment::Pass,
+        provenance: None,
+        basis: Some(Basis {
+            why: vec![Trigger::R2, Trigger::Asked],
+            context: ctx,
+        }),
+    });
+    let after_asked = check_auth(&f);
+    assert!(
+        after_asked
+            .as_ref()
+            .err()
+            .is_none_or(|e| !e.contains("scoped approval is required")),
+        "pass covering Trigger::Asked should waive owner approval: {after_asked:?}"
+    );
+
+    // Scope recheck withdraws permission if an authenticated legacy
+    // judge-request marker arrives after the pass read and before permission
+    // is published.
+    let tag = key.seal(REPO, 3, "autoland-judgment", "failed", &head(3), "main");
+    let marker = format!("<!-- autoland-judgment: failed {} {tag} -->", head(3));
+    c.hub
+        .race(On::from(Call::FlowStatus).mark(Mark::Landing), move |h| {
+            h.flow_comment(REPO, 3, "owner", &marker);
+        });
+    let reports = c.pass(jobs::now(), false);
+    assert!(
+        reports[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("scope changed")),
+        "expected scope change on late judge_asked, got: {:?}",
+        reports[0]
+    );
+    assert_ne!(permission(&c), "success");
+    assert!(!c.hub.pull(REPO, 3).unwrap().is_merged());
+}

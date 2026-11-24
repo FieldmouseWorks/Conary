@@ -124,6 +124,7 @@ fn validate<G: Write>(
         || fresh.trusted != f.trusted
         || fresh.authorship_known != f.authorship_known
         || fresh.needs_judge != f.needs_judge
+        || fresh.judge_asked != f.judge_asked
         || fresh.author != f.author
         || fresh.bot_edited != f.bot_edited
         || fresh.gate_edited != f.gate_edited
