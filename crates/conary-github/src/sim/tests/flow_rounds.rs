@@ -65,12 +65,13 @@ fn an_authors_r2_raise_cannot_be_taken_back_with_the_label() {
     c.label(&["r2"]);
     assert_eq!(c.pass(4000).step, Step::Judge(vec![Trigger::R2]));
     c.label(&[]);
-    c.judge("pass");
-    assert_eq!(c.pass(4001).step, Step::ListOwner(Door::R2));
+    c.judge("owner");
+    assert_eq!(c.pass(4001).step, Step::ListOwner(Door::Judge));
     c.push(&head(4));
     c.review("reviewer", Verdict::Clean, 4002);
+    assert_eq!(c.pass(5000).step, Step::Judge(vec![Trigger::R2]));
     c.judge("pass");
-    assert_eq!(c.view(5000).step, Step::ListOwner(Door::R2));
+    assert_eq!(c.view(5001).step, Step::Merge);
 }
 #[test]
 fn a_review_raise_survives_label_removal_on_documentation() {

@@ -219,7 +219,7 @@ fn pass_direct_r2_by_a_person_or_renovate_requires_the_candidate_train_after_own
             .judgment_by(
                 REPO,
                 3,
-                Judgment::Pass,
+                Judgment::Owner,
                 &revision,
                 1,
                 super::super::judge_provenance(),
@@ -230,7 +230,7 @@ fn pass_direct_r2_by_a_person_or_renovate_requires_the_candidate_train_after_own
         let now = flow::jobs::now();
         assert_eq!(
             c.pass(now, false)[0].next.as_ref().unwrap().step,
-            Step::ListOwner(Door::R2)
+            Step::ListOwner(Door::Judge)
         );
         c.hub
             .edit_pull(REPO, 3, |p| p["labels"] = json!([{"name":"needs-peter"}]));

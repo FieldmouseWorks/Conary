@@ -4,9 +4,11 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// The authorized person posts this exact scope in an APPROVED GitHub review.
-/// GitHub authenticates its account and commit; the body also binds intent
-/// and target, which a head-only review cannot establish after a retarget.
+/// The authorized person posts this exact scope in an APPROVED GitHub review
+/// (or a COMMENTED review when that person opened the PR, since GitHub forbids
+/// approving one's own PR). GitHub authenticates its account and commit; the
+/// body also binds intent and target, which a head-only review cannot establish
+/// after a retarget.
 pub fn owner_approval(repo: &conary_core::op::Repo, pr: u64, revision: &Revision) -> String {
     format!(
         "<!-- conary-owner:v1 {} -->",
@@ -16,7 +18,11 @@ pub fn owner_approval(repo: &conary_core::op::Repo, pr: u64, revision: &Revision
     )
 }
 pub(crate) fn required(f: &Facts) -> bool {
-    f.classified.class == conary_core::Class::R2
+    let passed = f
+        .judgment
+        .as_ref()
+        .is_some_and(|j| j.revision == f.revision && j.verdict == Judgment::Pass);
+    (f.classified.class == conary_core::Class::R2 && !passed)
         || f.judgment
             .as_ref()
             .is_some_and(|j| j.revision == f.revision && j.verdict == Judgment::Owner)
@@ -32,6 +38,7 @@ pub(crate) fn approved<G: Read>(pass: &Pass<'_>, github: &G, f: &Facts) -> Resul
         &f.revision,
         &records,
         &pass.config.settings.people,
+        &f.opened_by,
     ))
 }
 pub(crate) fn from_reviews(
@@ -40,6 +47,7 @@ pub(crate) fn from_reviews(
     revision: &Revision,
     records: &[crate::api::Review],
     people: &std::collections::BTreeSet<String>,
+    opened_by: &str,
 ) -> bool {
     let mut latest = BTreeMap::new();
     for review in records {
@@ -57,8 +65,10 @@ pub(crate) fn from_reviews(
         }
     }
     let marker = owner_approval(repo, pr, revision);
-    latest.values().any(|(_, r)| {
-        r.state.as_deref() == Some("APPROVED")
+    latest.iter().any(|(login, (_, r))| {
+        let state_ok = r.state.as_deref() == Some("APPROVED")
+            || (login == opened_by && r.state.as_deref() == Some("COMMENTED"));
+        state_ok
             && r.commit_id.as_deref() == Some(&revision.head)
             && r.body
                 .as_deref()

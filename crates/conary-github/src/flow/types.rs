@@ -600,6 +600,8 @@ pub struct Facts {
     pub base_tip: Option<String>,
     pub open: bool,
     pub draft: bool,
+    /// Login of the GitHub account that opened the PR.
+    pub opened_by: String,
     pub trusted: bool,
     /// Its head was put there by an App ([`super::review::by_app`]): the
     /// review connector reviews no such head unasked, so the flow asks at

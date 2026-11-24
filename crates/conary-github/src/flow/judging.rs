@@ -77,14 +77,18 @@ pub fn read_judging_context(
 /// The review bodies a judge reads, by review id: every submitted review
 /// whose body says something, findings and answers included. An approval is
 /// a person's permission, not discussion: counting it would make the owner's
-/// own release of an owner verdict ask for another judgment. A pending
-/// review isn't published yet.
+/// own release of an owner verdict ask for another judgment. A self-authored
+/// PR's pure `conary-owner:v1` COMMENTED review is permission too, not
+/// discussion. A pending review isn't published yet.
 pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComment> {
     records
         .iter()
         .filter(|r| {
             !matches!(r.state.as_deref(), Some("APPROVED" | "PENDING"))
-                && r.body.as_deref().is_some_and(|b| !b.trim().is_empty())
+                && r.body.as_deref().is_some_and(|b| {
+                    !b.trim().is_empty()
+                        && !(r.state.as_deref() == Some("COMMENTED") && is_pure_owner_approval(b))
+                })
         })
         .filter_map(|r| {
             Some((
@@ -96,6 +100,13 @@ pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComm
             ))
         })
         .collect()
+}
+
+fn is_pure_owner_approval(body: &str) -> bool {
+    let trimmed = body.trim();
+    !trimmed.contains('\n')
+        && trimmed.starts_with("<!-- conary-owner:v1 ")
+        && trimmed.ends_with(" -->")
 }
 
 /// What a judge job was asked to judge on, which the issuance answering it

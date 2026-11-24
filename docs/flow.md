@@ -146,8 +146,12 @@ burrow's, imports this schema rather than declaring the options again.
 
 ## Person approval
 
-R2 and a judge's Owner decision require an APPROVED GitHub review from an
-account in machine-owned `settings.people`. The account must be a GitHub User, not a
+A judge's Owner decision — or an R2 change without a passing judgment — requires
+an APPROVED GitHub review from an account in machine-owned `settings.people`
+(when that account is also the PR's author, where GitHub forbids self-APPROVED
+reviews, a COMMENTED review from that account on the exact head counts). An R2
+change that receives a passing judgment (`pass`) lands through the merge train
+without waiting for a person. The account must be a GitHub User, not a
 Bot. The review must name the exact head and include the exact marker returned
 as `owner_approval` in pass/dry-run output. `flow::owner_approval` produces the
 same marker for callers. It binds repo, PR, head, target branch and the current

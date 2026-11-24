@@ -454,12 +454,6 @@ fn after_review(
     if let Some(decision) = super::deferred::gate(f) {
         return decision;
     }
-    if requires_judge {
-        // A judge's land verdict cannot replace the person's word for R2.
-        if f.classified.class == Class::R2 && !f.owner_approved {
-            return owner(f, Door::R2);
-        }
-    }
     if !f.authorship_known {
         return wait(
             Stage::Review,

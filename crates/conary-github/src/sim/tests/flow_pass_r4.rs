@@ -23,7 +23,7 @@ fn owner_case(r2: bool) -> Case {
         c.config.settings.train = true;
         c.hub.label(REPO, 3, &["r2"]);
     }
-    c.judgment(1, if r2 { Judgment::Pass } else { Judgment::Owner }, true);
+    c.judgment(1, Judgment::Owner, true);
     c
 }
 #[test]
@@ -126,6 +126,48 @@ fn authorized_scoped_person_approval_allows_owner_decisions_and_revocation_block
             assert!(c.hub.pull(REPO, 3).unwrap().is_merged());
         }
     }
+}
+#[test]
+fn r2_passing_judgment_joins_train_without_owner_approval() {
+    let mut c = Case::new();
+    c.clean_review();
+    c.config.settings.train = true;
+    c.hub.label(REPO, 3, &["r2"]);
+    c.judgment(1, Judgment::Pass, true);
+    let reports = c.pass(jobs::now(), false);
+    assert_eq!(reports[0].error, None, "{:?}", reports[0]);
+    assert_eq!(reports[0].next.as_ref().unwrap().step, Step::JoinTrain);
+    assert_eq!(permission(&c), "success");
+    assert_eq!(reports[0].owner_approval, None);
+}
+#[test]
+fn self_authored_owner_decision_joins_train_via_commented_review() {
+    let mut c = owner_case(true);
+    let author = c.hub.pull(REPO, 3).unwrap().user.login;
+    c.config.settings.people.insert(author.clone());
+    let revision = Revision::from(&c.hub.pull(REPO, 3).unwrap());
+    let marker = owner_approval(&REPO.parse().unwrap(), 3, &revision);
+    c.hub
+        .person_review(REPO, 3, &author, "User", &head(3), &marker, "COMMENTED");
+    let now = jobs::now();
+    let reports = c.pass(now, false);
+    assert_eq!(reports[0].error, None, "{:?}", reports[0]);
+    assert_eq!(reports[0].next.as_ref().unwrap().step, Step::JoinTrain);
+    assert_eq!(permission(&c), "success");
+    // A later COMMENTED review without the marker supersedes the approval.
+    c.hub
+        .person_review(REPO, 3, &author, "User", &head(3), "withdrawn", "COMMENTED");
+    c.pass(now + 1, false);
+    assert_ne!(permission(&c), "success");
+    assert!(
+        c.store
+            .borrow()
+            .ledger()
+            .train(&REPO.parse().unwrap())
+            .unwrap()
+            .joined()
+            .is_empty()
+    );
 }
 #[test]
 fn owner_approval_is_rechecked_when_permission_is_published() {

@@ -186,6 +186,12 @@ pub(crate) fn authorize<G: Write>(
     if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
         return Err("An authorized person's scoped approval is required".into());
     }
+    if f.classified.class == conary_core::Class::R2
+        && !super::approval::required(f)
+        && f.judgment_generation.is_none()
+    {
+        return Err("R2 landing requires an attested passing judgment".into());
+    }
     let evidence = pass
         .config
         .evidence

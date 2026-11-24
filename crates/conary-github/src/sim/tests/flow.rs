@@ -164,12 +164,69 @@ fn retargeted_verdict_cannot_land() {
 }
 
 #[test]
-fn r2_requires_person_even_after_judge_land() {
-    // gates.py: a judge's land verdict never replaces the R2 person's answer.
+fn r2_with_judge_pass_lands_without_person_approval() {
+    // An R2 change is judged first; a passing judgment lands without needing
+    // a person, while an owner verdict still blocks on person approval.
     let mut c = Case::new();
     c.secret();
+    assert_eq!(c.view(4000).step, Step::Judge(vec![Trigger::R2]));
+    c.judge("owner");
+    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Judge));
     c.judge("pass");
-    assert_eq!(c.view(4000).step, Step::ListOwner(Door::R2));
+    assert_eq!(c.view(4002).step, Step::Merge);
+}
+
+#[test]
+fn self_authored_pr_accepts_commented_review_with_scoped_marker_only() {
+    // GitHub forbids approving one's own PR; when an authorized person is the
+    // PR's author, a COMMENTED review on the exact head carrying the exact
+    // owner_approval marker counts (and a later review supersedes it).
+    let mut c = Case::new();
+    c.settings.people.insert("owner".into());
+    c.settings.people.insert("maintainer".into());
+    c.secret();
+    c.judge("owner");
+    let scope = c.scope();
+    let marker = owner_approval(&REMI.parse().unwrap(), 3, &scope);
+
+    // Non-author COMMENTED review never approves, even with the exact marker.
+    c.hub.person_review(
+        REMI,
+        3,
+        "maintainer",
+        "User",
+        &scope.head,
+        &marker,
+        "COMMENTED",
+    );
+    assert!(!c.facts().owner_approved);
+    assert_eq!(c.view(4000).step, Step::ListOwner(Door::Judge));
+
+    // Author COMMENTED review on the wrong head does not approve.
+    c.hub
+        .person_review(REMI, 3, "owner", "User", &head(4), &marker, "COMMENTED");
+    assert!(!c.facts().owner_approved);
+    assert_eq!(c.view(4001).step, Step::ListOwner(Door::Judge));
+
+    // Author COMMENTED review on exact head with exact marker approves without
+    // invalidating the judge's discussion context.
+    c.hub
+        .person_review(REMI, 3, "owner", "User", &scope.head, &marker, "COMMENTED");
+    assert!(c.facts().owner_approved);
+    assert_eq!(c.view(4002).step, Step::Merge);
+
+    // A later review by the author without the marker supersedes the approval.
+    c.hub.person_review(
+        REMI,
+        3,
+        "owner",
+        "User",
+        &scope.head,
+        "hold on",
+        "COMMENTED",
+    );
+    assert!(!c.facts().owner_approved);
+    assert_ne!(c.view(4003).step, Step::Merge);
 }
 
 #[test]
@@ -726,19 +783,19 @@ fn other_suites_failure_prevents_landing() {
 }
 
 #[test]
-fn r2_land_is_released_by_the_owner_for_its_revision_only() {
+fn r2_owner_decision_is_released_by_the_owner_for_its_revision_only() {
     // Labels never authorize; an authenticated approval covers only its revision.
     for change in 0..3 {
         let mut c = Case::new();
         c.secret();
-        c.judge("pass");
-        assert_eq!(c.pass(4000).step, Step::ListOwner(Door::R2));
+        c.judge("owner");
+        assert_eq!(c.pass(4000).step, Step::ListOwner(Door::Judge));
         assert!(!c.facts().owner_approved);
-        assert_eq!(c.pass(4001).step, Step::ListOwner(Door::R2));
+        assert_eq!(c.pass(4001).step, Step::ListOwner(Door::Judge));
         c.label(&["needs-peter"]);
         c.pass(4002);
         c.label(&[]);
-        assert_eq!(c.view(4003).step, Step::ListOwner(Door::R2));
+        assert_eq!(c.view(4003).step, Step::ListOwner(Door::Judge));
         c.approve();
         assert_eq!(c.view(4003).step, Step::Merge);
         match change {
@@ -752,8 +809,8 @@ fn r2_land_is_released_by_the_owner_for_its_revision_only() {
         }
         c.secret();
         c.review("reviewer", Verdict::Clean, 4005);
-        c.judge("pass");
-        assert_eq!(c.view(5000).step, Step::ListOwner(Door::R2));
+        c.judge("owner");
+        assert_eq!(c.view(5000).step, Step::ListOwner(Door::Judge));
     }
 }
 

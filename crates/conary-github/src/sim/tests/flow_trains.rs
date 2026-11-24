@@ -153,21 +153,30 @@ fn train_ci_can_cover_missing_pr_ci_but_never_unknown_authorship() {
     );
 }
 #[test]
-fn train_admission_keeps_class_raises_and_requires_a_person_for_r2() {
+fn train_admission_keeps_class_raises_and_gates_r2_through_judgment() {
     // trains.py:80,119,131,440,457: raised class persists and gates admission.
-    // R2 deliberately requires the person specified by #263, even after a judge's land.
+    // An R2 raise requires judgment; an owner verdict requires person approval,
+    // while a passing judgment admits the PR to the train.
     for labels in [&["review"][..], &["r2"][..], &["Review", "r2"][..]] {
         let mut c = train();
         c.label(labels);
         if labels.contains(&"r2") {
-            c.judge("pass");
-            assert_eq!(c.pass(800).step, Step::ListOwner(Door::R2));
+            assert_eq!(c.pass(799).step, Step::Judge(vec![Trigger::R2]));
+            c.judge("owner");
+            assert_eq!(c.pass(800).step, Step::ListOwner(Door::Judge));
             c.label(&["needs-peter", "r2"]);
             c.pass(810);
             c.label(&[]);
-            assert_eq!(c.pass(819).step, Step::ListOwner(Door::R2));
+            assert_eq!(c.pass(819).step, Step::ListOwner(Door::Judge));
             c.approve();
             assert_eq!(c.pass(820).step, Step::JoinTrain);
+            // On a fresh head with the r2 label still removed, the persisted
+            // raise still demands judgment; a passing judgment joins the train.
+            c.push("raised-r2-head");
+            c.review("reviewer", Verdict::Clean, 900);
+            assert_eq!(c.pass(1300).step, Step::Judge(vec![Trigger::R2]));
+            c.judge("pass");
+            assert_eq!(c.pass(1301).step, Step::JoinTrain);
         } else {
             assert_eq!(c.pass(800).step, Step::JoinTrain);
             c.label(&[]);
