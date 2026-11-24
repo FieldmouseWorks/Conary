@@ -150,6 +150,7 @@ fn gather(
             .map_or_else(String::new, |r| r.default_branch.clone()),
         open: pull.state == "open",
         draft: extra.draft,
+        opened_by: pull.user.login.clone(),
         trusted: trusted_authors.contains(&pull.user.login),
         // Until the head's pusher is read, the PR's opener says.
         head_by_app: super::review::by_app(&pull.user, None),
@@ -317,8 +318,14 @@ fn gather(
     reads.mark(super::Mark::Verdict, markers.unparsed);
     facts.changes_requested = super::reviews::changes_requested(&records);
     facts.review_bodies = super::judging::review_bodies(&records);
-    facts.owner_approved =
-        super::approval::from_reviews(repo, pr, &facts.revision, &records, &facts.settings.people);
+    facts.owner_approved = super::approval::from_reviews(
+        repo,
+        pr,
+        &facts.revision,
+        &records,
+        &facts.settings.people,
+        &facts.opened_by,
+    );
     facts.reviewers = super::reviews::read(
         &pull.head.sha,
         &records,

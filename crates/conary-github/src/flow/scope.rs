@@ -120,9 +120,11 @@ fn validate<G: Write>(
         || fresh.deferred != f.deferred
         || fresh.deferred_failures != f.deferred_failures
         || fresh.classified != f.classified
+        || fresh.opened_by != f.opened_by
         || fresh.trusted != f.trusted
         || fresh.authorship_known != f.authorship_known
         || fresh.needs_judge != f.needs_judge
+        || fresh.judge_asked != f.judge_asked
         || fresh.author != f.author
         || fresh.bot_edited != f.bot_edited
         || fresh.gate_edited != f.gate_edited

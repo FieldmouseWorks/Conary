@@ -25,22 +25,22 @@ fn too_much_to_read_is_the_flows_own_wait_not_the_owners() {
 }
 
 #[test]
-fn an_r2_request_joins_across_base_merge_heads() {
+fn an_owner_request_joins_across_base_merge_heads() {
     let mut c = Case::new();
     c.secret();
-    c.judge("pass");
+    c.judge("owner");
     let first = c.scope();
     let n = c.pass(4000);
     assert!(matches!(n.step, Step::ListOwner { .. }), "{n:?}");
     let asked = request(&n);
     let marker = owner_approval(&REMI.parse().unwrap(), 3, &first);
     assert_eq!(asked["marker"], json!(marker));
-    assert_eq!(asked["key"]["door"], json!("r2"));
+    assert_eq!(asked["key"]["door"], json!("judge"));
     for (i, at) in [(4, 5000), (5, 6000)] {
         c.push(&head(i));
         c.secret();
         c.review("reviewer", Verdict::Clean, at);
-        c.judge("pass");
+        c.judge("owner");
         let n = c.pass(at + 1);
         assert!(matches!(n.step, Step::ListOwner { .. }), "{n:?}");
         let joined = request(&n);
@@ -73,11 +73,11 @@ fn an_r2_request_joins_across_base_merge_heads() {
 fn a_new_intent_is_a_new_decision() {
     let mut c = Case::new();
     c.secret();
-    c.judge("pass");
+    c.judge("owner");
     let asked = request(&c.pass(4000));
     c.description("another intent", 4500);
     c.review("reviewer", Verdict::Clean, 4600);
-    c.judge("pass");
+    c.judge("owner");
     let n = c.pass(5000);
     assert_ne!(request(&n)["key"], asked["key"]);
     let open = serde_json::to_value(&c.memory).unwrap()["owner"].clone();
@@ -137,14 +137,14 @@ fn a_hold_past_its_deadline_is_a_stall_never_an_owner_listing() {
 fn the_flows_own_label_is_no_door() {
     let mut c = Case::new();
     c.secret();
-    c.judge("pass");
-    assert_eq!(c.pass(4000).step, Step::ListOwner(Door::R2));
+    c.judge("owner");
+    assert_eq!(c.pass(4000).step, Step::ListOwner(Door::Judge));
     // The pass put the label on for the request.
     c.label(&["needs-peter"]);
     c.memory.labelled = true;
     c.memory.owner[0].listed = true;
     let n = c.pass(4001);
-    assert_eq!(n.step, Step::ListOwner(Door::R2));
+    assert_eq!(n.step, Step::ListOwner(Door::Judge));
     assert_eq!(request(&n)["listed"], json!(true));
     // Once a pass reads it off, a person's label is their door.
     c.label(&[]);

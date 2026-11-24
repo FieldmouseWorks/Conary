@@ -295,17 +295,17 @@ fn owner_release_requires_an_authenticated_review_for_this_revision() {
         REMI,
         3,
         "owner",
-        &marker(&h, &s, "autoland-judgment", "pass"),
+        &marker(&h, &s, "autoland-judgment", "owner"),
     );
     let (n, m) = next(&read_f(&h, s.clone()), &m, 4000);
-    assert_eq!(n.step, Step::ListOwner(Door::R2));
+    assert_eq!(n.step, Step::ListOwner(Door::Judge));
     assert!(!read_f(&h, s.clone()).owner_approved);
     h.label(REMI, 3, &["needs-peter"]);
     let (_, m) = next(&read_f(&h, s.clone()), &m, 4001);
     h.label(REMI, 3, &[]);
     assert_eq!(
         next(&read_f(&h, s.clone()), &m, 4002).0.step,
-        Step::ListOwner(Door::R2)
+        Step::ListOwner(Door::Judge)
     );
     let revision = Revision::from(&crate::api::Source::pull(&h, REMI, 3).unwrap());
     h.person_review(

@@ -77,14 +77,19 @@ pub fn read_judging_context(
 /// The review bodies a judge reads, by review id: every submitted review
 /// whose body says something, findings and answers included. An approval is
 /// a person's permission, not discussion: counting it would make the owner's
-/// own release of an owner verdict ask for another judgment. A pending
-/// review isn't published yet.
+/// own release of an owner verdict ask for another judgment. A self-authored
+/// PR's validated `conary-owner:v1` COMMENTED review (exact canonical marker
+/// matching its `commit_id`, by a `User` account, with no extra text or
+/// fields) is permission too, not discussion. A pending review isn't
+/// published yet.
 pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComment> {
     records
         .iter()
         .filter(|r| {
             !matches!(r.state.as_deref(), Some("APPROVED" | "PENDING"))
-                && r.body.as_deref().is_some_and(|b| !b.trim().is_empty())
+                && r.body
+                    .as_deref()
+                    .is_some_and(|b| !b.trim().is_empty() && !is_pure_owner_approval(r, b))
         })
         .filter_map(|r| {
             Some((
@@ -96,6 +101,57 @@ pub fn review_bodies(records: &[crate::api::Review]) -> BTreeMap<u64, ThreadComm
             ))
         })
         .collect()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnerApprovalPayload {
+    repo: String,
+    pr: u64,
+    revision: Revision,
+}
+
+fn is_lower_hex(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn is_ref_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'))
+}
+
+fn is_pure_owner_approval(review: &crate::api::Review, body: &str) -> bool {
+    if review.state.as_deref() != Some("COMMENTED")
+        || review.user.as_ref().map(|u| u.kind.as_str()) != Some("User")
+    {
+        return false;
+    }
+    let trimmed = body.trim();
+    if trimmed.contains('\n') {
+        return false;
+    }
+    let Some(inner) = trimmed
+        .strip_prefix("<!-- conary-owner:v1 ")
+        .and_then(|rest| rest.strip_suffix(" -->"))
+    else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_str::<OwnerApprovalPayload>(inner) else {
+        return false;
+    };
+    let Ok(repo) = payload.repo.parse::<conary_core::op::Repo>() else {
+        return false;
+    };
+    if payload.pr == 0
+        || !is_lower_hex(&payload.revision.head)
+        || !is_lower_hex(&payload.revision.description)
+        || !is_ref_name(&payload.revision.base)
+    {
+        return false;
+    }
+    review.commit_id.as_deref() == Some(payload.revision.head.as_str())
+        && trimmed == super::approval::owner_approval(&repo, payload.pr, &payload.revision)
 }
 
 /// What a judge job was asked to judge on, which the issuance answering it
@@ -276,6 +332,76 @@ mod tests {
         assert_eq!(kept.keys().copied().collect::<Vec<_>>(), [1, 2, 3]);
         assert_eq!(kept[&1].author.as_deref(), Some("someone"));
         assert_eq!(kept[&1].body, "a finding");
+    }
+
+    #[test]
+    fn only_validated_canonical_self_approval_commented_reviews_are_excluded() {
+        let repo: conary_core::op::Repo = "acme/widget".parse().unwrap();
+        let rev = Revision {
+            head: "a1b2c3d4e5f60708".into(),
+            base: "main".into(),
+            description: "0123456789abcdef".into(),
+        };
+        let valid_marker = super::super::approval::owner_approval(&repo, 7, &rev);
+        let mk = |id: u64, kind: &str, commit: Option<&str>, body: String| crate::api::Review {
+            id: Some(id),
+            state: Some("COMMENTED".into()),
+            user: Some(crate::api::User {
+                login: "owner".into(),
+                kind: kind.into(),
+            }),
+            body: Some(body),
+            commit_id: commit.map(str::to_owned),
+            html_url: None,
+            submitted_at: None,
+        };
+        let kept = review_bodies(&[
+            // Valid canonical marker on matching commit by User -> excluded.
+            mk(1, "User", Some(&rev.head), valid_marker.clone()),
+            // Arbitrary feedback wrapped in the comment prefix/suffix -> kept.
+            mk(
+                2,
+                "User",
+                Some(&rev.head),
+                "<!-- conary-owner:v1 Please fix the bug on line 42 -->".into(),
+            ),
+            // Extra JSON field smuggled inside valid shape -> kept.
+            mk(
+                3,
+                "User",
+                Some(&rev.head),
+                format!(
+                    "<!-- conary-owner:v1 {{\"pr\":7,\"repo\":\"acme/widget\",\"revision\":{{\"base\":\"main\",\"description\":\"0123456789abcdef\",\"head\":\"{}\"}},\"note\":\"fix\"}} -->",
+                    rev.head
+                ),
+            ),
+            // Mismatched commit_id -> kept.
+            mk(4, "User", Some("deadbeef"), valid_marker.clone()),
+            // Bot account -> kept.
+            mk(5, "Bot", Some(&rev.head), valid_marker.clone()),
+            // Valid marker plus substantive second line -> kept.
+            mk(
+                6,
+                "User",
+                Some(&rev.head),
+                format!("{valid_marker}\nPlease also fix the error handling."),
+            ),
+            // Prose stuffed into description field -> kept.
+            mk(
+                7,
+                "User",
+                Some(&rev.head),
+                super::super::approval::owner_approval(
+                    &repo,
+                    7,
+                    &Revision {
+                        description: "please fix this".into(),
+                        ..rev.clone()
+                    },
+                ),
+            ),
+        ]);
+        assert_eq!(kept.keys().copied().collect::<Vec<_>>(), [2, 3, 4, 5, 6, 7]);
     }
 
     #[test]

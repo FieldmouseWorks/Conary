@@ -276,7 +276,10 @@ fn vacate(f: &Facts, m: &mut Memory) -> Option<Decision> {
         .map(|pause| wait(Stage::None, None, &format!("Paused: {}", pause.reason)))
 }
 
-fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
+/// The CI state from `f` alone (without `no_checks_since` grace timing):
+/// empty checks still count as `Ci::Green` when merge trains cover the target
+/// branch or `require_ci` is false, and `Ci::None` otherwise.
+pub(super) fn effective_ci(f: &Facts) -> Ci {
     if f.checks.iter().any(|c| c.state == Ci::Red) {
         return Ci::Red;
     }
@@ -286,17 +289,24 @@ fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
     if f.checks.iter().any(|c| c.state == Ci::Pending) {
         return Ci::Pending;
     }
-    if !f.checks.is_empty() {
-        return Ci::Green;
-    }
-    if by_train(f) || !f.settings.require_ci {
-        return Ci::Green;
-    }
-    let first = *m.no_checks_since.get_or_insert(now);
-    if now < first.saturating_add(300) {
-        Ci::Pending
+    if !f.checks.is_empty() || by_train(f) || !f.settings.require_ci {
+        Ci::Green
     } else {
         Ci::None
+    }
+}
+
+fn ci(f: &Facts, m: &mut Memory, now: u64) -> Ci {
+    match effective_ci(f) {
+        Ci::None => {
+            let first = *m.no_checks_since.get_or_insert(now);
+            if now < first.saturating_add(300) {
+                Ci::Pending
+            } else {
+                Ci::None
+            }
+        }
+        state => state,
     }
 }
 
@@ -453,12 +463,6 @@ fn after_review(
     // After the judgment, which readiness may need before any evidence exists.
     if let Some(decision) = super::deferred::gate(f) {
         return decision;
-    }
-    if requires_judge {
-        // A judge's land verdict cannot replace the person's word for R2.
-        if f.classified.class == Class::R2 && !f.owner_approved {
-            return owner(f, Door::R2);
-        }
     }
     if !f.authorship_known {
         return wait(

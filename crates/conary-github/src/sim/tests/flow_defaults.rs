@@ -99,8 +99,8 @@ fn zero_proof_slots_start_no_proof_of_any_recipe() {
 fn an_unset_owner_label_leaves_the_owner_step_waiting_unlisted() {
     let mut c = Case::new();
     c.secret();
-    c.judge("pass");
-    assert_eq!(c.view(4000).step, Step::ListOwner(Door::R2));
+    c.judge("owner");
+    assert_eq!(c.view(4000).step, Step::ListOwner(Door::Judge));
     c.settings.owner_label = None;
     let next = c.view(4000);
     assert_eq!(
