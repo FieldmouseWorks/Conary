@@ -2,12 +2,11 @@
 //! writer lock.
 //!
 //! [`OpLog::prepare`] reads and verifies every complete line currently in the
-//! log before the lock is taken, keeping the file's identity and a streaming
-//! BLAKE3 state over those exact verified bytes. Once the caller holds the
-//! [`Lock`], [`OpLog::open_prepared`] checks that the log is still the same
-//! file and hasn't shrunk or been modified in place, then reads and verifies
-//! only the bytes appended since. Anything else falls back to verifying from
-//! byte 0 under the lock.
+//! log before the lock is taken, keeping a streaming BLAKE3 state over those
+//! exact verified bytes. Once the caller holds the [`Lock`],
+//! [`OpLog::open_prepared`] checks that the on-disk prefix still hashes to that
+//! digest, then reads and verifies only the bytes appended since. Anything else
+//! falls back to verifying from byte 0 under the lock.
 //!
 //! [`Opening`] holds the lock before the mark is updated or any torn tail is
 //! mended, so its caller can verify every anchor checkpoint against the
@@ -16,7 +15,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -27,14 +25,25 @@ use crate::op::Op;
 use super::verified::{self, Mark};
 use super::{Anchor, LOG_FILE, Lock, LogError, OpLog, Tail, mend, sync_dir, verify, verify_whole};
 
-/// Identity of the log file when [`OpLog::prepare`] read it: `(dev, ino,
-/// ctime, ctime_nsec)`. If the file under the lock has a different `(dev, ino)`,
-/// shrunk below the prepared offset, or kept the same length with a moved
-/// change time, the prepared prefix isn't reused.
-type Stamp = (u64, u64, i64, i64);
-
-fn file_stamp(meta: &std::fs::Metadata) -> Stamp {
-    (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+/// Whether the first `len` bytes of `file` hash to `expected` under BLAKE3.
+/// Leaves `file` positioned at `len` when it returns `Ok(true)`.
+fn prefix_matches(file: &mut File, len: u64, expected: &blake3::Hash) -> io::Result<bool> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut remaining = len;
+    let mut buf = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = (remaining as usize).min(buf.len());
+        let n = match file.read(&mut buf[..want]) {
+            Ok(0) => return Ok(false),
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        hasher.update(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(hasher.finalize() == *expected)
 }
 
 /// Hashes `whole` once with BLAKE3, checking `mark` at `mark.len()` along the
@@ -61,7 +70,6 @@ fn hash_prefix(whole: &[u8], key: &VerifyingKey, mark: Option<&Mark>) -> (usize,
 /// Complete lines of the log read and verified before taking the writer lock.
 pub struct Prepared {
     key: VerifyingKey,
-    stamp: Option<Stamp>,
     ids: Vec<OpId>,
     ops: Vec<Op>,
     /// Byte offset of the end of the last complete `\n`-terminated line verified.
@@ -168,7 +176,6 @@ impl OpLog {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Ok(Prepared {
                     key: verifying,
-                    stamp: None,
                     ids: Vec::new(),
                     ops: Vec::new(),
                     len: 0,
@@ -177,9 +184,6 @@ impl OpLog {
             }
             Err(e) => return Err(e.into()),
         };
-        // Capture the stamp before reading so any later write (including an
-        // in-place overwrite of the same length) moves `ctime` past it.
-        let stamp = file_stamp(&file.metadata()?);
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         // Leave any trailing bytes after the last newline for the locked open:
@@ -192,7 +196,6 @@ impl OpLog {
         let ids = ops.iter().map(|o| o.id).collect();
         Ok(Prepared {
             key: verifying,
-            stamp: Some(stamp),
             ids,
             ops,
             len: end as u64,
@@ -220,66 +223,59 @@ impl OpLog {
         file.sync_all()?;
         sync_dir(&dir)?;
 
-        let meta = file.metadata()?;
-        let size = meta.len();
+        let size = file.metadata()?.len();
         let verifying = key.verifying_key();
 
-        if let Some(mut p) = prepared {
-            let can_reuse = p.key == verifying
-                && match p.stamp {
-                    None => size == 0 && p.len == 0,
-                    Some((dev, ino, ctime, ctime_nsec)) => {
-                        meta.dev() == dev
-                            && meta.ino() == ino
-                            && (size > p.len
-                                || (size == p.len
-                                    && meta.ctime() == ctime
-                                    && meta.ctime_nsec() == ctime_nsec))
-                    }
-                };
-            if can_reuse {
-                let mut tail_bytes = Vec::new();
-                let (tail_ops, tail) = if size > p.len {
-                    file.seek(SeekFrom::Start(p.len))?;
-                    (&file).read_to_end(&mut tail_bytes)?;
-                    verify(
-                        &tail_bytes,
-                        &verifying,
-                        p.ids.len(),
-                        p.ids.last().copied(),
-                        None,
-                    )?
-                } else {
-                    (Vec::new(), Tail::Whole)
-                };
-                let tail_whole = tail_bytes
-                    .iter()
-                    .rposition(|&b| b == b'\n')
-                    .map_or(0, |i| i + 1);
-                p.hasher.update(&tail_bytes[..tail_whole]);
-                p.ids.extend(tail_ops.iter().map(|o| o.id));
-                p.ops.extend(tail_ops);
-                let whole_len = usize::try_from(p.len)
-                    .ok()
-                    .and_then(|n| n.checked_add(tail_whole))
-                    .ok_or_else(|| LogError::Io(io::Error::other("op log length overflow")))?;
-                return Ok(Opening {
-                    lock,
-                    file,
-                    key,
-                    ids: p.ids,
-                    ops: p.ops,
-                    reused_prefix: true,
-                    from: p.len,
-                    tail_bytes,
-                    tail,
-                    whole_len,
-                    hasher: p.hasher,
-                });
-            }
+        if let Some(mut p) = prepared
+            && p.key == verifying
+            && ((p.len == 0 && size == 0)
+                || (p.len > 0
+                    && size >= p.len
+                    && prefix_matches(&mut file, p.len, &p.hasher.finalize())?))
+        {
+            let mut tail_bytes = Vec::new();
+            // `file` is at byte 0 when `p.len == 0`, or at `p.len` after
+            // `prefix_matches`.
+            (&file).read_to_end(&mut tail_bytes)?;
+            let (tail_ops, tail) = if tail_bytes.is_empty() {
+                (Vec::new(), Tail::Whole)
+            } else {
+                verify(
+                    &tail_bytes,
+                    &verifying,
+                    p.ids.len(),
+                    p.ids.last().copied(),
+                    None,
+                )?
+            };
+            let tail_whole = tail_bytes
+                .iter()
+                .rposition(|&b| b == b'\n')
+                .map_or(0, |i| i + 1);
+            p.hasher.update(&tail_bytes[..tail_whole]);
+            p.ids.extend(tail_ops.iter().map(|o| o.id));
+            p.ops.extend(tail_ops);
+            let whole_len = usize::try_from(p.len)
+                .ok()
+                .and_then(|n| n.checked_add(tail_whole))
+                .ok_or_else(|| LogError::Io(io::Error::other("op log length overflow")))?;
+            return Ok(Opening {
+                lock,
+                file,
+                key,
+                ids: p.ids,
+                ops: p.ops,
+                reused_prefix: true,
+                from: p.len,
+                tail_bytes,
+                tail,
+                whole_len,
+                hasher: p.hasher,
+            });
         }
 
         let mark = Mark::load(&dir);
+        file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
