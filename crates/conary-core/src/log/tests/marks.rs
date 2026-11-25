@@ -258,3 +258,186 @@ fn a_writer_catching_up_checks_each_appended_signature_and_leaves_the_mark() {
         Err(LogError::Corrupt { line: 7, .. })
     ));
 }
+
+#[test]
+fn a_prepared_open_under_the_lock_reads_only_what_was_appended_since() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut log = open(dir.path(), key());
+    append(&mut log, 20);
+    drop(log);
+    // Mark the first 20 ops.
+    drop(open(dir.path(), key()));
+
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    // Another writer appends 3 ops after prepare and before we take the lock.
+    let mut other = open(dir.path(), key());
+    append(&mut other, 3);
+    drop(other);
+
+    CHECKED.set(0);
+    let before = lines_read();
+    let lock = Lock::take(dir.path()).unwrap();
+    let opening = OpLog::open_prepared(Some(prepared), lock, key()).unwrap();
+    let (log, ops) = opening.finish().unwrap();
+    assert_eq!(lines_read() - before, 3);
+    assert_eq!(CHECKED.get(), 3);
+    assert_eq!(ops.len(), 23);
+    assert_eq!(log.head().map(|h| h.seq), Some(23));
+
+    // The verified mark now covers all 23 ops.
+    CHECKED.set(0);
+    assert_eq!(
+        read_marked(dir.path(), &key().verifying_key(), log.head())
+            .unwrap()
+            .len(),
+        23
+    );
+    assert_eq!(CHECKED.get(), 0);
+}
+
+#[test]
+fn a_prepared_open_falls_back_when_the_log_was_replaced_truncated_or_edited_in_place() {
+    let (dir, head) = marked();
+    let path = log_path(dir.path());
+    let honest = fs::read(&path).unwrap();
+
+    // 1. Truncated between prepare and lock.
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    let cut = honest[..honest.len() - 1]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .unwrap();
+    fs::write(&path, &honest[..=cut]).unwrap();
+    let opening =
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()).unwrap();
+    assert!(matches!(opening.check(head), Err(LogError::Unanchored(_))));
+    drop(opening);
+    fs::write(&path, &honest).unwrap();
+
+    // 2. Replaced with a new inode of the same length, signed by another key.
+    let thief = SigningKey::from_bytes(&[9; 32]);
+    let theirs = tempfile::tempdir().unwrap();
+    let mut tlog = open(theirs.path(), thief.clone());
+    append(&mut tlog, 3);
+    drop(tlog);
+    let forged = fs::read(log_path(theirs.path())).unwrap();
+    assert_eq!(forged.len(), honest.len());
+
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, &forged).unwrap();
+    assert!(matches!(
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()),
+        Err(LogError::Corrupt { line: 1, .. })
+    ));
+    fs::write(&path, &honest).unwrap();
+
+    // 3. Overwritten in place (same inode, same length) between prepare and lock.
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    let mut edited = honest.clone();
+    edited[10] ^= 1;
+    let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+    file.write_all(&edited).unwrap();
+    file.sync_data().unwrap();
+    drop(file);
+    assert!(matches!(
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()),
+        Err(LogError::Corrupt { line: 1, .. })
+    ));
+    fs::write(&path, &honest).unwrap();
+
+    // 4. Prepared under another key is never reused under this key.
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    assert!(matches!(
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), thief),
+        Err(LogError::Corrupt { line: 1, .. })
+    ));
+}
+
+#[test]
+fn a_prepared_open_handles_a_torn_or_unterminated_tail_without_rereading_the_prefix() {
+    let (dir, head) = marked();
+    let path = log_path(dir.path());
+    let whole = fs::read(&path).unwrap();
+
+    // 1. Torn tail present when prepare runs.
+    fs::write(&path, [&whole[..], b"{\"id\":\"1234"].concat()).unwrap();
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    CHECKED.set(0);
+    let before = lines_read();
+    let opening =
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()).unwrap();
+    opening.check(head).unwrap();
+    let (log, ops) = opening.finish().unwrap();
+    assert_eq!(lines_read() - before, 0);
+    assert_eq!(CHECKED.get(), 0);
+    assert_eq!((ops.len(), log.head()), (3, Some(head)));
+    assert_eq!(fs::read(&path).unwrap(), whole);
+
+    // 2. Unterminated 4th op present when prepare runs.
+    let mut log = open(dir.path(), key());
+    append(&mut log, 1);
+    drop(log);
+    let four = fs::read(&path).unwrap();
+    let unterminated = &four[..four.len() - 1];
+    fs::write(&path, unterminated).unwrap();
+
+    let prepared = OpLog::prepare(dir.path(), key()).unwrap();
+    CHECKED.set(0);
+    let before = lines_read();
+    let opening =
+        OpLog::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()).unwrap();
+    let (log, ops) = opening.finish().unwrap();
+    assert_eq!(lines_read() - before, 1);
+    assert_eq!(CHECKED.get(), 1);
+    assert_eq!((ops.len(), log.head().map(|h| h.seq)), (4, Some(4)));
+    assert_eq!(fs::read(&path).unwrap(), four);
+}
+
+#[test]
+fn a_prepared_store_replays_only_appended_tail_ops_under_the_lock() {
+    use crate::Store;
+    use crate::op::{Actor, ActorKind, Repo};
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo {
+        owner: "FieldmouseWorks".into(),
+        name: "Conary".into(),
+    };
+    let observe = |store: &mut Store, pr: u64| {
+        store
+            .record(Body::Observe {
+                change: ChangeId::new().unwrap(),
+                repo: repo.clone(),
+                pr,
+                author: Actor {
+                    kind: ActorKind::Person,
+                    login: "TusanHomichi".into(),
+                    session: None,
+                },
+            })
+            .unwrap();
+    };
+    let mut store = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+    for pr in 1..=5 {
+        observe(&mut store, pr);
+    }
+    drop(store);
+
+    let prepared = Store::prepare(dir.path(), key()).unwrap();
+    let mut other = Store::open(Lock::take(dir.path()).unwrap(), key(), None).unwrap();
+    for pr in 6..=7 {
+        observe(&mut other, pr);
+    }
+    drop(other);
+
+    let before = lines_read();
+    let opening =
+        Store::open_prepared(Some(prepared), Lock::take(dir.path()).unwrap(), key()).unwrap();
+    let store = opening.finish().unwrap();
+    assert_eq!(lines_read() - before, 2);
+    assert_eq!(store.head().map(|h| h.seq), Some(7));
+    for pr in 1..=7 {
+        assert!(store.ledger().by_pr(&repo, pr).is_some(), "missing PR {pr}");
+    }
+}

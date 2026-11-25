@@ -22,9 +22,8 @@ const MARK_FILE: &str = "verified";
 /// Opens every mark's signed message, which so is never an op id's 32 bytes.
 const HEADER: &str = "conary op log verified prefix v1";
 
-fn message(prefix: &[u8]) -> String {
-    let hash = blake3::hash(prefix).to_hex();
-    format!("{HEADER}\n{} {hash}\n", prefix.len())
+fn message_for(len: usize, hash: &blake3::Hash) -> String {
+    format!("{HEADER}\n{len} {}\n", hash.to_hex())
 }
 
 #[derive(PartialEq, Eq)]
@@ -45,33 +44,42 @@ impl Mark {
         })
     }
 
+    pub(super) fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether this mark vouches for the `self.len` bytes whose BLAKE3 digest
+    /// is `hash`, under `key`.
+    pub(super) fn verify_hash(&self, hash: &blake3::Hash, key: &VerifyingKey) -> bool {
+        key.verify_strict(message_for(self.len, hash).as_bytes(), &self.sig)
+            .is_ok()
+    }
+
     /// How many bytes from the start of `log` this mark vouches for under
     /// `key`: all it covers, or none.
     pub(super) fn covers(&self, log: &[u8], key: &VerifyingKey) -> usize {
         log.get(..self.len)
-            .filter(|prefix| {
-                key.verify_strict(message(prefix).as_bytes(), &self.sig)
-                    .is_ok()
-            })
+            .filter(|prefix| self.verify_hash(&blake3::hash(prefix), key))
             .map_or(0, <[u8]>::len)
     }
 }
 
-/// Marks the whole lines of `log`, which its caller holds the lock on and
-/// has just verified under `key`, in place of `was`.
-pub(super) fn keep(
+/// Marks the first `len` bytes of the log (whole lines ending on a newline),
+/// whose BLAKE3 digest is `hash` and which its caller holds the lock on and
+/// has verified under `key`, in place of `was`.
+pub(super) fn keep_hash(
     dir: &Path,
-    log: &[u8],
+    len: usize,
+    hash: &blake3::Hash,
     key: &SigningKey,
     was: Option<Mark>,
 ) -> Result<(), LogError> {
-    let Some(last) = log.iter().rposition(|&b| b == b'\n') else {
+    if len == 0 {
         return Ok(()); // No whole line to mark.
-    };
-    let prefix = &log[..=last];
+    }
     let mark = Mark {
-        len: prefix.len(),
-        sig: key.sign(message(prefix).as_bytes()),
+        len,
+        sig: key.sign(message_for(len, hash).as_bytes()),
     };
     if was.as_ref() == Some(&mark) {
         return Ok(());

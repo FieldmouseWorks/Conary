@@ -12,6 +12,9 @@ use crate::ledger::{Invalid, Ledger};
 use crate::log::{self, Anchor, Lock, LogError, OpLog};
 use crate::op::{Body, Repo};
 
+mod open;
+pub use open::{Opening, Prepared};
+
 #[derive(Debug)]
 pub enum StoreError {
     Log(LogError),
@@ -93,14 +96,11 @@ impl Store {
     /// under that lock, so no other writer moved it since). The lock is let
     /// go once it's open.
     pub fn open(lock: Lock, key: SigningKey, anchor: Option<Anchor>) -> Result<Self, StoreError> {
-        let (log, ops) = OpLog::open(lock, key, anchor)?;
-        let ledger = Ledger::replay(&ops).map_err(|(id, e)| StoreError::Replay(id, e))?;
-        Ok(Self {
-            log,
-            ledger,
-            broken: None,
-            overtaken: HashSet::new(),
-        })
+        let opening = Self::open_prepared(None, lock, key)?;
+        if let Some(a) = anchor {
+            opening.check(a)?;
+        }
+        opening.finish()
     }
 
     /// The ledger as of this store's last write, or its opening: another
