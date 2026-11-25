@@ -283,13 +283,8 @@ pub fn next(f: &Facts, memory: &Memory, now: u64) -> (Next, Memory) {
                         .copied()
                         .chain(f.timeline_cut_at)
                         .any(|t| now < t.saturating_add(f.settings.renovate_run)));
-            let drain = 4 * (3600 + f.settings.renovate_run).max(600) + f.settings.renovate_run;
             let grace = if refreshing {
-                if f.release_at.is_some() {
-                    3 * (21600 + 3600 + f.settings.renovate_run) + drain
-                } else {
-                    drain
-                }
+                lock_refresh_grace(f.settings.renovate_run, f.release_at.is_some())
             } else {
                 0
             };
@@ -498,4 +493,31 @@ pub(super) fn issuance<T: Clone + Eq>(
     // An absent or older observation leaves the authenticated decision in
     // place. A conflict/unsupported word is a tombstone until a new issuance.
     receipts.get(revision).and_then(|(_, word)| word.clone())
+}
+
+/// Default spacing between passes in the event queue, added to the sweep's
+/// refresh wake-up bound (matching burrow's `lock_wait.interval`).
+const EVENT_QUEUE_GAP: u64 = 20;
+const SWEEP_PASS: u64 = 3600;
+const SWEEP_ASKS: u64 = 3;
+const SWEEP_STANDING: u64 = 6 * 3600;
+const SWEEP_RELEASES: u64 = 3;
+const SWEEP_RELEASE_GAP: u64 = 600;
+
+/// Grace while `renovate-sweep` is refreshing a lock-file PR, matching
+/// burrow's `lock_wait.drain` and `lock_wait.recovery`.
+fn lock_refresh_grace(run: u64, release_wait: bool) -> u64 {
+    let interval = SWEEP_PASS
+        .saturating_add(EVENT_QUEUE_GAP)
+        .saturating_add(run);
+    let drain = (SWEEP_RELEASES + 1)
+        .saturating_mul(interval.max(SWEEP_RELEASE_GAP))
+        .saturating_add(run);
+    if release_wait {
+        SWEEP_ASKS
+            .saturating_mul(SWEEP_STANDING.saturating_add(interval))
+            .saturating_add(drain)
+    } else {
+        drain
+    }
 }
