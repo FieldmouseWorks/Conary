@@ -8,6 +8,8 @@ use std::path::Path;
 
 use super::*;
 
+mod open_lock;
+
 /// Refs as GitHub keeps them: each move a commit on the one before, kept in
 /// `commits`. With `ledger` set, every read checks the ledger's lock is held;
 /// with `fail` set, the next move fails before it's made; and with

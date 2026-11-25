@@ -326,22 +326,25 @@ pub fn open(
     anchors: &dyn Anchors,
     repo: &str,
 ) -> Result<Anchored, AnchorError> {
+    // Verify and replay the log's current prefix before taking the writer
+    // lock, so opening under the lock reads only what other writers appended
+    // since. A prepare failure is left to the locked open after the anchor is
+    // checked, keeping error order and handling a concurrent write cleanly.
+    let prepared = Store::prepare(dir, key.clone()).ok();
     let lock = Lock::take(dir)?;
     let (kept, remote) = fetch(anchors, repo)?.ok_or_else(|| not_set_up(repo))?;
     same_ledger(repo, &remote, &key.verifying_key())?;
     let checked = log::load_checked(dir)?;
     let held = checkpoints(anchors, repo, &kept, &remote, checked.at.as_deref())?;
-    // The store lets the lock go as it opens, so a tip the copy doesn't name
-    // is checked and kept first. One it names, the store checks.
-    if checked.at.as_deref() != Some(kept.commit.as_str()) {
-        let ops = log::read_marked(dir, &remote.key, None)?;
-        check_held(&ops, &held)?;
-        if let Some(a) = remote.anchor {
-            a.check(&ops).map_err(StoreError::Log)?;
-        }
-        keep(&lock, &checked, &kept, &remote)?;
+    let opening = Store::open_prepared(prepared, lock, key)?;
+    for a in &held {
+        opening.check(*a)?;
     }
-    let store = Store::open(lock, key, remote.anchor)?;
+    if let Some(a) = remote.anchor {
+        opening.check(a).map_err(StoreError::Log)?;
+    }
+    keep(opening.lock(), &checked, &kept, &remote)?;
+    let store = opening.finish()?;
     Ok(Anchored {
         store,
         repo: repo.to_owned(),

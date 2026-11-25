@@ -20,7 +20,9 @@ use serde_json::value::RawValue;
 use crate::id::OpId;
 use crate::op::{Body, Op, Unsigned};
 
+mod open;
 mod verified;
+pub use open::{Opening, Prepared};
 use verified::Mark;
 
 const LOG_FILE: &str = "ops.jsonl";
@@ -354,6 +356,52 @@ fn verify_line(
     Ok(Op { id: line.id, op })
 }
 
+/// Verifies every complete `\n`-terminated line in `whole`, skipping signature
+/// verification for lines ending within the first `marked` bytes.
+fn verify_whole(
+    whole: &[u8],
+    key: &VerifyingKey,
+    before: usize,
+    parent: Option<OpId>,
+    marked: usize,
+) -> Result<Vec<Op>, LogError> {
+    let mut ops: Vec<Op> = Vec::new();
+    let lines = whole.strip_suffix(b"\n").map(|w| w.split(|&b| b == b'\n'));
+    let mut line_end = 0;
+    for (i, raw) in lines.into_iter().flatten().enumerate() {
+        line_end += raw.len() + 1;
+        let after = ops.last().map(|o| o.id).or(parent);
+        let op = verify_line(before + i + 1, raw, after, key, line_end <= marked)?;
+        ops.push(op);
+    }
+    Ok(ops)
+}
+
+/// Verifies `whole` (complete lines) and `rest` (bytes after the last newline,
+/// if any), skipping signature verification for complete lines ending within
+/// the first `marked` bytes.
+fn verify_split(
+    whole: &[u8],
+    rest: &[u8],
+    key: &VerifyingKey,
+    before: usize,
+    parent: Option<OpId>,
+    marked: usize,
+) -> Result<(Vec<Op>, Tail), LogError> {
+    let mut ops = verify_whole(whole, key, before, parent, marked)?;
+    if rest.is_empty() {
+        return Ok((ops, Tail::Whole));
+    }
+    if is_cut_short(rest) {
+        return Ok((ops, Tail::Torn { at: whole.len() }));
+    }
+    // Complete, so it verifies like any other line or the log is refused.
+    let after = ops.last().map(|o| o.id).or(parent);
+    let op = verify_line(before + ops.len() + 1, rest, after, key, false)?;
+    ops.push(op);
+    Ok((ops, Tail::Unterminated))
+}
+
 /// Every op in the log's bytes, verified against `key` and its chain: each
 /// signature, but for those of the bytes `mark` vouches for. The bytes may
 /// be the log's from some line on: `before` ops come before them, the last
@@ -369,26 +417,7 @@ fn verify(
     let marked = mark.map_or(0, |m| m.covers(bytes, key));
     let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let (whole, rest) = bytes.split_at(end);
-    let mut ops: Vec<Op> = Vec::new();
-    let lines = whole.strip_suffix(b"\n").map(|w| w.split(|&b| b == b'\n'));
-    let mut line_end = 0;
-    for (i, raw) in lines.into_iter().flatten().enumerate() {
-        line_end += raw.len() + 1;
-        let after = ops.last().map(|o| o.id).or(parent);
-        let op = verify_line(before + i + 1, raw, after, key, line_end <= marked)?;
-        ops.push(op);
-    }
-    if rest.is_empty() {
-        return Ok((ops, Tail::Whole));
-    }
-    if is_cut_short(rest) {
-        return Ok((ops, Tail::Torn { at: end }));
-    }
-    // Complete, so it verifies like any other line or the log is refused.
-    let after = ops.last().map(|o| o.id).or(parent);
-    let op = verify_line(before + ops.len() + 1, rest, after, key, false)?;
-    ops.push(op);
-    Ok((ops, Tail::Unterminated))
+    verify_split(whole, rest, key, before, parent, marked)
 }
 
 /// Whether `rest` is the start of a line that ends before its JSON does,
@@ -654,37 +683,11 @@ impl OpLog {
         key: SigningKey,
         anchor: Option<Anchor>,
     ) -> Result<(Self, Vec<Op>), LogError> {
-        let dir = lock.dir.clone();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(dir.join(LOG_FILE))?;
-        // The log and its entry, before any op in it is acknowledged: a
-        // writer before this one may have failed to sync either.
-        file.sync_all()?;
-        sync_dir(&dir)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let mark = Mark::load(&dir);
-        let (ops, tail) = verify(&bytes, &key.verifying_key(), 0, None, mark.as_ref())?;
-        anchor.map_or(Ok(()), |a| a.check(&ops))?;
-        verified::keep(&dir, &bytes, &key, mark)?;
-        let len = mend(&mut file, 0, &bytes, tail)?;
-        Ok((
-            Self {
-                file,
-                dir,
-                key,
-                ids: ops.iter().map(|o| o.id).collect(),
-                len,
-                held: None,
-                poisoned: false,
-                #[cfg(test)]
-                fail_next_write: false,
-            },
-            ops,
-        ))
+        let opening = Self::open_prepared(None, lock, key)?;
+        if let Some(a) = anchor {
+            opening.check(a)?;
+        }
+        opening.finish()
     }
 
     pub fn verifying_key(&self) -> VerifyingKey {
