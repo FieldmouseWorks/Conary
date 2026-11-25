@@ -423,6 +423,10 @@ pub struct Settings {
     /// decides waits unlisted.
     #[schemars(extend("x-spender" = false))]
     pub owner_label: Option<String>,
+    /// The label names put on a PR for each waiting stage, and taken off
+    /// when the stage changes. The defaults name no person.
+    #[schemars(extend("x-spender" = false))]
+    pub stage_labels: super::StageLabels,
     /// The people whose approving review is the owner's permission. None
     /// set, what the owner decides waits.
     #[schemars(extend("x-spender" = false))]
@@ -546,6 +550,7 @@ impl Default for Settings {
             ]),
             default_priority: Level::Medium,
             owner_label: None,
+            stage_labels: super::StageLabels::default(),
             people: BTreeSet::new(),
             require_ci: true,
             proofs: BTreeMap::new(),

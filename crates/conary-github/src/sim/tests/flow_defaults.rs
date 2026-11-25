@@ -32,6 +32,7 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
         priority_labels: _,
         default_priority: _,
         owner_label,
+        stage_labels,
         people,
         require_ci,
         proofs,
@@ -70,6 +71,9 @@ fn defaults_name_no_machine_and_start_no_paid_work() {
     assert!(bot_emails.is_empty());
     assert_eq!((renovate_email, renovate_login), (None, None));
     assert_eq!(owner_label, None);
+    assert_eq!(stage_labels, StageLabels::default());
+    assert_eq!(stage_labels.owner, "waiting: owner");
+    assert!(!stage_labels.owner.contains("Peter"));
     assert!(people.is_empty());
 }
 

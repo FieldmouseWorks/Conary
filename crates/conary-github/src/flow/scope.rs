@@ -91,7 +91,7 @@ fn validate<G: Write>(
     let labels = |f: &Facts| {
         f.labels
             .iter()
-            .filter(|l| !Stage::owns_label(l))
+            .filter(|l| !f.settings.stage_labels.owns(l))
             .cloned()
             .collect::<std::collections::BTreeSet<_>>()
     };

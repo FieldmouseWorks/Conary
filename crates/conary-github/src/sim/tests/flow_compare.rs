@@ -13,7 +13,8 @@ fn authors() -> BTreeSet<String> {
 }
 
 fn steward_says(c: &Case, stage: Stage, state: &str, by: &str) {
-    c.hub.label(REPO, 3, &[stage.label().unwrap(), "unrelated"]);
+    let label = c.config.settings.stage_labels.label(stage).unwrap();
+    c.hub.label(REPO, 3, &[label, "unrelated"]);
     c.hub.post_status(
         &head(3),
         json!({"context": SETTLED, "state": state, "description": "the steward's word",
@@ -30,7 +31,7 @@ fn compare_agrees_when_the_steward_labels_the_flows_stage() {
     let c = Case::new();
     let stage = dry(&c)[0].next.as_ref().unwrap().stage;
     steward_says(&c, stage, "pending", STEWARD);
-    let (lines, tally) = beside(&c.hub, dry(&c), &authors());
+    let (lines, tally) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
     assert!(lines[0].agree, "{lines:?}");
     let said = lines[0].steward.as_ref().unwrap();
     assert_eq!(said.stages, [stage]);
@@ -55,7 +56,7 @@ fn compare_disagrees_on_another_stage_and_reads_nothing_it_would_write() {
     let stage = dry(&c)[0].next.as_ref().unwrap().stage;
     let other = Stage::LABELLED.into_iter().find(|s| *s != stage).unwrap();
     steward_says(&c, other, "pending", STEWARD);
-    let (lines, tally) = beside(&c.hub, dry(&c), &authors());
+    let (lines, tally) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
     assert!(!lines[0].agree);
     assert_eq!(lines[0].flow.as_ref().unwrap().stage, stage);
     assert_eq!(lines[0].steward.as_ref().unwrap().stages, [other]);
@@ -77,10 +78,15 @@ fn compare_counts_only_the_stewards_own_status() {
     let c = Case::new();
     let stage = dry(&c)[0].next.as_ref().unwrap().stage;
     steward_says(&c, stage, "success", "someone-else");
-    let (lines, _) = beside(&c.hub, dry(&c), &authors());
+    let (lines, _) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
     assert_eq!(lines[0].steward.as_ref().unwrap().state, None);
     // With no author named, anyone's newest counts.
-    let (lines, _) = beside(&c.hub, dry(&c), &BTreeSet::new());
+    let (lines, _) = beside(
+        &c.hub,
+        dry(&c),
+        &BTreeSet::new(),
+        &c.config.settings.stage_labels,
+    );
     assert_eq!(
         lines[0].steward.as_ref().unwrap().state.as_deref(),
         Some("success")
@@ -115,7 +121,7 @@ fn compare_lists_disagreements_then_errors_then_agreements() {
             revision,
         },
     ];
-    let (lines, tally) = beside(&c.hub, reports, &authors());
+    let (lines, tally) = beside(&c.hub, reports, &authors(), &c.config.settings.stage_labels);
     let order: Vec<_> = lines.iter().map(|l| (l.pr, l.agree)).collect();
     assert_eq!(order, [(3, false), (99, false), (3, true)]);
     assert_eq!(lines[1].error.as_deref(), Some("unreadable"));
@@ -127,10 +133,34 @@ fn compare_lists_disagreements_then_errors_then_agreements() {
 
 #[test]
 fn compare_maps_every_label_back_to_its_stage() {
+    let labels = StageLabels::default();
     for stage in Stage::LABELLED {
-        assert_eq!(Stage::from_label(stage.label().unwrap()), Some(stage));
+        assert_eq!(labels.stage(labels.label(stage).unwrap()), Some(stage));
     }
-    assert_eq!(Stage::from_label("waiting: nothing"), None);
+    assert_eq!(labels.stage("waiting: nothing"), None);
+}
+
+#[test]
+fn compare_reads_configured_stage_labels() {
+    let mut c = Case::new();
+    c.config.settings.stage_labels.owner = "waiting: Alice".into();
+    c.hub
+        .edit_pull(REPO, 3, |p| p["user"]["login"] = json!("outsider"));
+    let reports = dry(&c);
+    assert_eq!(reports[0].next.as_ref().unwrap().stage, Stage::Owner);
+
+    // The configured owner stage label agrees; the default or another machine's does not.
+    c.hub.label(REPO, 3, &["waiting: Alice"]);
+    let (lines, _) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
+    assert!(lines[0].agree, "{lines:?}");
+    assert_eq!(lines[0].steward.as_ref().unwrap().stages, [Stage::Owner]);
+
+    for other in ["waiting: owner", "waiting: Peter"] {
+        c.hub.label(REPO, 3, &[other]);
+        let (lines, _) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
+        assert!(!lines[0].agree, "{other}: {lines:?}");
+        assert!(lines[0].steward.as_ref().unwrap().stages.is_empty());
+    }
 }
 
 #[test]
@@ -150,7 +180,7 @@ fn compare_refuses_a_pr_that_moved_after_the_flow_decided() {
             STEWARD,
         );
         moved(&c);
-        let (lines, tally) = beside(&c.hub, reports, &authors());
+        let (lines, tally) = beside(&c.hub, reports, &authors(), &c.config.settings.stage_labels);
         assert!(!lines[0].agree);
         assert!(
             lines[0].error.as_deref().unwrap().contains("changed"),
@@ -171,7 +201,7 @@ fn compare_refuses_a_decision_without_its_revision() {
         STEWARD,
     );
     reports[0].revision = None;
-    let (lines, tally) = beside(&c.hub, reports, &authors());
+    let (lines, tally) = beside(&c.hub, reports, &authors(), &c.config.settings.stage_labels);
     assert_eq!(
         lines[0].error.as_deref(),
         Some("the flow's decision names no revision")
@@ -193,7 +223,7 @@ fn compare_names_the_switch_behind_a_disagreement() {
         at: 7,
     };
     flow::pause::pause(c.dir.path(), &REPO.parse().unwrap(), &paused).unwrap();
-    let (lines, tally) = beside(&c.hub, dry(&c), &authors());
+    let (lines, tally) = beside(&c.hub, dry(&c), &authors(), &c.config.settings.stage_labels);
     assert!(!lines[0].agree);
     assert_eq!((tally.agree, tally.disagree), (0, 1));
     let line = serde_json::to_value(&lines[0]).unwrap();

@@ -276,7 +276,11 @@ pub trait Consistent {
         Ok(())
     }
 }
-impl Consistent for super::Config {}
+impl Consistent for super::Config {
+    fn consistent(&self) -> Result<()> {
+        self.settings.validate_stage_labels()
+    }
+}
 impl Consistent for crate::reuse::Settings {}
 /// Why a configuration file doesn't read, without any of its values: serde
 /// quotes a value of the wrong type or form, and a secret's value (a token

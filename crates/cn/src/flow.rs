@@ -177,8 +177,12 @@ pub fn run(cli: &super::Cli, command: &FlowCommand) -> super::Result<()> {
     }
     let reports = reports?;
     if compare {
-        let (lines, tally) =
-            conary_github::flow::beside(&api, reports, &config.settings.flow_authors);
+        let (lines, tally) = conary_github::flow::beside(
+            &api,
+            reports,
+            &config.settings.flow_authors,
+            &config.settings.stage_labels,
+        );
         for line in lines {
             println!("{}", serde_json::to_string(&line)?);
         }

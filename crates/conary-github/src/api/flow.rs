@@ -326,16 +326,7 @@ impl Read for Api {
             activity_type: String,
             actor: Option<User>,
         }
-        let encoded: String = branch
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
-                    (b as char).to_string()
-                } else {
-                    format!("%{b:02X}")
-                }
-            })
-            .collect();
+        let encoded = super::percent_encode(branch);
         // Every kind of record that puts a head on the branch: a force push
         // or the branch's creation is no `push` record. Only the newest page:
         // what's read of it is the current head's, never older history.

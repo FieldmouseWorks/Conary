@@ -1,6 +1,6 @@
 //! Effects for an explicitly requested flow pass.
 use super::*;
-use crate::flow::{Stage, Write};
+use crate::flow::{Stage, StageLabels, Write};
 use serde_json::{Value, json};
 
 impl Api {
@@ -89,11 +89,18 @@ impl Write for Api {
         )?;
         Ok(())
     }
-    fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError> {
+    fn stage(
+        &self,
+        repo: &str,
+        pr: u64,
+        stage: Stage,
+        labels: &StageLabels,
+    ) -> Result<(), ApiError> {
         let pull = self.pull(repo, pr)?;
+        let want = labels.label(stage);
         for label in pull.labels {
-            if Stage::owns_label(&label.name) && stage.label() != Some(label.name.as_str()) {
-                let encoded = label.name.replace(' ', "%20").replace(':', "%3A");
+            if labels.owns(&label.name) && want != Some(label.name.as_str()) {
+                let encoded = super::percent_encode(&label.name);
                 let path = format!("/repos/{repo}/issues/{pr}/labels/{encoded}");
                 let url = format!("{}{path}", self.base);
                 let mut response = self
@@ -109,7 +116,7 @@ impl Write for Api {
                 }
             }
         }
-        if let Some(label) = stage.label() {
+        if let Some(label) = want {
             self.owner(repo, pr, label)?;
         }
         Ok(())

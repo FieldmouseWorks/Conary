@@ -855,6 +855,19 @@ pub(crate) fn compared(files: Vec<ComparedFile>) -> Paths {
     }
 }
 
+/// RFC 3986 percent-encoding for a path segment or query value.
+pub(super) fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
 mod actions;
 mod flow;
 #[cfg(test)]

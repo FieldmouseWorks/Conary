@@ -2,7 +2,7 @@
 use super::faults::{Asked, Call};
 use super::{Hub, STEWARD};
 use crate::api::ApiError;
-use crate::flow::{Stage, Write};
+use crate::flow::{Stage, StageLabels, Write};
 use serde_json::json;
 impl Write for Hub {
     fn dispatch(
@@ -68,16 +68,22 @@ impl Write for Hub {
             },
         )
     }
-    fn stage(&self, repo: &str, pr: u64, stage: Stage) -> Result<(), ApiError> {
+    fn stage(
+        &self,
+        repo: &str,
+        pr: u64,
+        stage: Stage,
+        labels: &StageLabels,
+    ) -> Result<(), ApiError> {
         self.write(
             Asked::new(Call::FlowStage, repo).pr(pr),
             &[repo, &pr.to_string()],
             || {
                 self.edit_pull(repo, pr, |p| {
-                    let labels = p["labels"].as_array_mut().unwrap();
-                    labels.retain(|l| !Stage::owns_label(l["name"].as_str().unwrap_or("")));
-                    if let Some(label) = stage.label() {
-                        labels.push(json!({"name":label}));
+                    let current = p["labels"].as_array_mut().unwrap();
+                    current.retain(|l| !labels.owns(l["name"].as_str().unwrap_or("")));
+                    if let Some(label) = labels.label(stage) {
+                        current.push(json!({"name":label}));
                     }
                 });
                 Ok(())
