@@ -191,10 +191,11 @@ fn one_leg_never_stands_for_another() {
     s.assert(&[old, same], Ci::Green, &[]);
 }
 #[test]
-fn a_failed_leg_stays_red_beside_any_later_run() {
-    // The flow supersedes cancelled work only: a failed leg is red whatever
-    // a later suite on the same head did, whole gate included. (upkeep also
-    // lets later work replace a failure; the flow doesn't.)
+fn a_failed_run_stays_red_whatever_a_later_suite_did() {
+    // The flow's rule: only cancelled work is superseded. A failed run is
+    // red whatever a later suite on the same head did, another leg and the
+    // whole gate alike. Whether a failure should ever be superseded is a
+    // decision of its own (FieldmouseWorks/burrow#1602).
     let s = Scenario::new();
     let failed = |job: &str| {
         Run::new(
@@ -222,4 +223,33 @@ fn a_failed_leg_stays_red_beside_any_later_run() {
         Ci::Red,
         &["check / leg 11 of 12"],
     );
+}
+#[test]
+fn the_docs_job_stands_for_a_leg_only_where_the_docs_lane_applies() {
+    let old = || {
+        Run::new(
+            1,
+            &[
+                ("check / lane into main", "success"),
+                ("check / leg 1 of 4", "cancelled"),
+            ],
+        )
+    };
+    // A complete diff that leaves `.github` alone: the docs job stands for it.
+    let s = Scenario::new();
+    s.assert(&[old(), Run::docs(2, TRUNK, "success")], Ci::Green, &[]);
+    // A diff touching `.github`, or one GitHub cut short: it doesn't.
+    let cut: Vec<_> = (0..301).map(|n| format!("docs/{n}.md")).collect();
+    for paths in [
+        vec![".github/workflows/flake.yml"],
+        cut.iter().map(String::as_str).collect(),
+    ] {
+        let s = Scenario::new();
+        s.hub.touch(&super::head(3), &paths);
+        s.assert(
+            &[old(), Run::docs(2, TRUNK, "success")],
+            Ci::Pending,
+            &["check / leg 1 of 4 (cancelled, to be run again)"],
+        );
+    }
 }
