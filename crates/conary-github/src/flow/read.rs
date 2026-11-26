@@ -162,6 +162,7 @@ fn gather(
         suites: BTreeMap::new(),
         effective_runs: Vec::new(),
         rerun_policy: RerunPolicy::default(),
+        lost: Vec::new(),
         uncertain: Vec::new(),
         stopped: BTreeMap::new(),
         timed_out: BTreeMap::new(),
@@ -431,6 +432,7 @@ fn gather(
     facts.effective_runs = ci.runs;
     facts.stopped = ci.stopped;
     facts.timed_out = ci.timed_out;
+    facts.lost = ci.lost;
     facts.checks = ci
         .checks
         .into_iter()

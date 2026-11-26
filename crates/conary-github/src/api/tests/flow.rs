@@ -300,17 +300,20 @@ fn permanent_short_comparisons_are_distinct_from_unreadable_ranges() {
 }
 #[test]
 fn timeout_annotation_reader_reads_past_the_first_page() {
-    let mut first = vec![json!({"message":"warning"}); 100];
-    first[99] = json!({"message":"another warning"});
+    let mut first = vec![json!({"annotation_level":"warning","message":"warning"}); 100];
+    first[99] = json!({"annotation_level":"warning","message":"another warning"});
     let (base, requests) = github(vec![
         answer(json!(first)),
-        answer(json!([{"message":"has exceeded the maximum execution time"}])),
+        answer(
+            json!([{"annotation_level":"failure","message":"has exceeded the maximum execution time"}]),
+        ),
     ]);
     let notes = Api::new(&base, Tokens::given("t"))
         .annotations("o/r", 1)
         .unwrap();
     assert_eq!(notes.len(), 101);
-    assert!(notes[100].contains("maximum execution time"));
+    assert!(notes[100].message.contains("maximum execution time"));
+    assert_eq!(notes[100].level, "failure");
     assert!(requests.recv().unwrap().contains("page=1"));
     assert!(requests.recv().unwrap().contains("page=2"));
 }

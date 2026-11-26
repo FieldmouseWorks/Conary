@@ -201,6 +201,7 @@ fn skipped_and_unrun_jobs_do_not_replace_cancelled_work() {
 fn docs_and_whole_gate_replace_each_other_for_the_same_diff() {
     // cancelled.py: docs lane stands in for the gate, and whole gate for docs.
     let s = Scenario::new();
+    s.hub.touch(&head(3), &["docs/guide.md"]);
     for conclusion in ["success", "failure"] {
         let state = if conclusion == "failure" {
             Ci::Red
@@ -271,6 +272,7 @@ fn ordinary_workflow_checks_require_their_own_work() {
 fn docs_lane_replaces_only_its_own_gate() {
     // cancelled.py: "not a job it skipped beside itself ... sibling ... matrix".
     let s = Scenario::new();
+    s.hub.touch(&head(3), &["docs/guide.md"]);
     for name in [
         "check / scan",
         "check / commits",
@@ -397,11 +399,22 @@ fn workflow_running_prevents_green_before_gate_starts() {
         legs(2, true, Some("success"), "success", 4, "main"),
         legs(2, true, Some("success"), "success", 3, "main"),
         Run::whole(2, "main", "success"),
-        Run::docs(2, TRUNK, "success"),
     ] {
         s.assert(&[old.clone(), new.clone()], Ci::Green, &[]);
         s.assert(&[new, old.clone()], Ci::Green, &[]);
     }
+    let docs = Scenario::new();
+    docs.hub.touch(&head(3), &["docs/guide.md"]);
+    docs.assert(
+        &[old.clone(), Run::docs(2, TRUNK, "success")],
+        Ci::Green,
+        &[],
+    );
+    docs.assert(
+        &[Run::docs(2, TRUNK, "success"), old.clone()],
+        Ci::Green,
+        &[],
+    );
     s.assert(
         &[old.clone(), Run::whole(2, "main", "failure")],
         Ci::Red,

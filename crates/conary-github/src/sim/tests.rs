@@ -425,6 +425,7 @@ mod flow_pass_threads;
 
 mod flow_doors;
 mod flow_pass_context;
+mod flow_runner_lost;
 mod flow_stage_labels;
 mod flow_uncertain;
 

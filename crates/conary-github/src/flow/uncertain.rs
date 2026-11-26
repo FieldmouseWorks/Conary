@@ -10,6 +10,10 @@
 //! single-attempt-attested repositories); on `run_attempt >= 2` (or if
 //! recovery cannot be made), it stops retrying and escalates as a base/machine
 //! failure rather than dispatching a PR fix job.
+//!
+//! A failed check run whose annotations say only that its runner went away
+//! ([`crate::api::runner_lost`]) judged nothing either, in any repository,
+//! attested or not: it takes the same single rerun and the same escalation.
 
 use std::collections::BTreeSet;
 
@@ -51,6 +55,7 @@ enum Verdict {
 /// [`RerunPolicy`].
 pub(crate) fn hydrate<G: Write>(github: &G, facts: &mut Facts, evidence: Option<&Evidence>) {
     facts.rerun_policy = RerunPolicy::for_evidence(evidence);
+    facts.uncertain = lost(github, facts);
     let Some(evidence) = evidence else {
         return;
     };
@@ -66,6 +71,10 @@ pub(crate) fn hydrate<G: Write>(github: &G, facts: &mut Facts, evidence: Option<
     let mut cached_base: Option<std::result::Result<String, String>> = None;
 
     for run in &facts.effective_runs {
+        // A lost runner's run judged nothing, whatever its attestation says.
+        if facts.lost.iter().any(|l| l.id == run.id) {
+            continue;
+        }
         if run.status != "completed"
             || matches!(
                 run.conclusion.as_deref(),
@@ -131,7 +140,35 @@ pub(crate) fn hydrate<G: Write>(github: &G, facts: &mut Facts, evidence: Option<
             }
         }
     }
-    facts.uncertain = uncertain;
+    facts.uncertain.extend(uncertain);
+}
+
+/// The failed runs whose runner was lost, each uncertain with its attempt
+/// and its one rerun. One whose attempt can't be read is pending, its read
+/// degraded, as for any uncertain check.
+fn lost<G: Write>(github: &G, facts: &mut Facts) -> Vec<UncertainCheck> {
+    let repo = facts.repo.to_string();
+    let mut found = Vec::new();
+    for run in facts.lost.clone() {
+        match inspect_attempt(github, &repo, &run, &facts.suites, facts.rerun_policy) {
+            Ok((attempt, recovery, running)) => found.push(UncertainCheck {
+                name: run.name.clone(),
+                why: "its runner was lost".into(),
+                attempt,
+                recovery,
+                running,
+            }),
+            Err(why) => {
+                facts.reads.lookup(run.name.clone(), why);
+                for check in &mut facts.checks {
+                    if check.name == run.name && check.state == Ci::Uncertain {
+                        check.state = Ci::Pending;
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 fn classify_negative<G: Write>(

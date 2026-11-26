@@ -143,6 +143,14 @@ impl Scenario {
         )
     }
     pub(super) fn read_settings(&self, runs: &[Run], settings: Settings) -> Facts {
+        self.read_with(runs, &docs_policy(), settings)
+    }
+    pub(super) fn read_with(
+        &self,
+        runs: &[Run],
+        policy: &conary_core::Policy,
+        settings: Settings,
+    ) -> Facts {
         self.hub.put_checks(
             &head(3),
             Value::Array(runs.iter().flat_map(|r| r.checks.clone()).collect()),
@@ -156,7 +164,7 @@ impl Scenario {
             &self.hub,
             &REMI.parse().unwrap(),
             3,
-            &docs_policy(),
+            policy,
             settings,
             &["owner".into()],
         )

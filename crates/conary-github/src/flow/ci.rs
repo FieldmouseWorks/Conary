@@ -2,7 +2,10 @@
 //! neither green nor red for this PR. Cancelled work is pending until an
 //! equivalent, completed workflow run replaces it, or annotations prove a
 //! timeout. What nothing replaced is listed by the way GitHub runs it again,
-//! for the stall's recovery ([`super::recover`]).
+//! for the stall's recovery ([`super::recover`]). A failed run whose
+//! annotations say only that its runner went away judged nothing: it's
+//! uncertain, and [`super::uncertain`] runs it again once and calls it the
+//! machine's if it dies again.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,6 +44,8 @@ pub(super) struct Result {
     pub stopped: BTreeMap<Recovery, Vec<String>>,
     /// Runs that timed out, by the way GitHub runs each again.
     pub timed_out: BTreeMap<Recovery, Vec<String>>,
+    /// Failed runs whose runner was lost.
+    pub lost: Vec<CheckRun>,
 }
 
 const LANE: &str = "lane into ";
@@ -113,21 +118,44 @@ fn cancelled(run: &CheckRun) -> bool {
 fn ran(run: &CheckRun) -> bool {
     run.status == "completed" && !matches!(run.conclusion.as_deref(), Some("skipped" | "cancelled"))
 }
+/// Whether a job is the shared gate's: the whole gate, its docs job, or one
+/// of its matrix legs, `leg K of N` for any 1 <= K <= N with N >= 2. The
+/// leg count has no cap here, so the workflow's own limit can't drift past it.
 fn gate(job: &str) -> bool {
-    job == "check"
-        || job.starts_with(DOCS)
-        || {
-            let fields: Vec<_> = job.split(' ').collect();
-            matches!(fields.as_slice(), ["leg", k, "of", n] if k.len() == 1 && n.len() == 1 && matches!(*k, "1"|"2"|"3"|"4"|"5"|"6"|"7"|"8") && matches!(*n, "2"|"3"|"4"|"5"|"6"|"7"|"8"))
-        }
+    job == "check" || job.starts_with(DOCS) || leg(job).is_some()
 }
-fn same_work(a: &CheckRun, b: &CheckRun) -> bool {
-    if a.name == b.name {
+/// A matrix leg's `K of N`: plain decimal numbers, no sign or leading zero,
+/// single spaces.
+fn leg(job: &str) -> Option<(u64, u64)> {
+    let number = |s: &str| {
+        (!s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| s.parse::<u64>().ok())
+            .flatten()
+    };
+    let (k, n) = job.strip_prefix("leg ")?.split_once(" of ")?;
+    let (k, n) = (number(k)?, number(n)?);
+    (n >= 2 && k <= n).then_some((k, n))
+}
+/// Whether `new` does the work `old` did, so it can replace it: the same
+/// job, either lane check, or the whole gate standing for any gate job (and
+/// a fork-bound docs job, where the docs lane applies). One leg never stands
+/// for a different leg.
+fn same_work(
+    old: &CheckRun,
+    new: &CheckRun,
+    docs_lane: bool,
+    suites: &BTreeMap<u64, Suite>,
+) -> bool {
+    if old.name == new.name {
         return true;
     }
-    let (ac, aj) = split(&a.name);
-    let (bc, bj) = split(&b.name);
-    ac == bc && (aj.starts_with(LANE) && bj.starts_with(LANE) || gate(aj) && gate(bj))
+    let (oc, oj) = split(&old.name);
+    let (nc, nj) = split(&new.name);
+    oc == nc
+        && (oj.starts_with(LANE) && nj.starts_with(LANE)
+            || gate(oj)
+                && (nj == "check"
+                    || docs_lane && judged(new, suites).is_some_and(|(_, f)| f.is_some())))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,6 +169,7 @@ fn replacement(
     runs: &[CheckRun],
     suites: &BTreeMap<u64, Suite>,
     stale: &BTreeSet<u64>,
+    docs_lane: bool,
 ) -> Replacement {
     let (Some(mine), Some(workflow)) = (suite_id(c), flow(c, suites)) else {
         return Replacement::None;
@@ -175,7 +204,7 @@ fn replacement(
         caller == split(&c.name).0 && job.starts_with(LANE)
     });
     if done.iter().any(|r| {
-        same_work(c, r)
+        same_work(c, r, docs_lane, suites)
             && (!shared
                 || done.iter().any(|lane| {
                     suite_id(lane) == suite_id(r)
@@ -278,7 +307,7 @@ pub(super) fn clock(checks: &[Check]) -> Clock {
 /// outcome is kept in `reads`, even when a later one ends it.
 /// `documentation` is whether the machine's policy names every path of
 /// `paths` documentation: the docs lane's word alone, a job anyone's PR
-/// can name, never waives a proof.
+/// can name, never waives a proof or replaces a gate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn checks(
     source: &dyn Read,
@@ -342,18 +371,21 @@ pub(super) fn checks(
         .filter(|(_, (b, f))| *b != base || f.is_some_and(|f| fork.as_deref() != Some(f)))
         .filter_map(|(r, _)| suite_id(r))
         .collect();
-    let docs = documentation
-        && said.iter().any(|(r, (_, f))| {
-            f.is_some()
-                && !suite_id(r).is_some_and(|id| stale.contains(&id))
-                && r.status == "completed"
-                && r.conclusion.as_deref() == Some("success")
-        })
+    // The docs lane applies to a complete diff that the policy names
+    // documentation and that leaves `.github` alone.
+    let docs_lane = documentation
         && !paths.cut
         && !paths.files.iter().any(|p| {
             std::iter::once(p.path.as_str())
                 .chain(p.from.as_deref())
                 .any(|p| p == ".github" || p.starts_with(".github/"))
+        });
+    let docs = docs_lane
+        && said.iter().any(|(r, (_, f))| {
+            f.is_some()
+                && !suite_id(r).is_some_and(|id| stale.contains(&id))
+                && r.status == "completed"
+                && r.conclusion.as_deref() == Some("success")
         });
     let ran: BTreeSet<_> = said
         .iter()
@@ -401,6 +433,7 @@ pub(super) fn checks(
     let mut effective = BTreeMap::<(Option<String>, String), CheckRun>::new();
     let mut stopped = BTreeMap::<Recovery, Vec<String>>::new();
     let mut timed_out = BTreeMap::<Recovery, Vec<String>>::new();
+    let mut lost = Vec::new();
     for run in &runs {
         if suite_id(run).is_some_and(|id| stale.contains(&id)) {
             continue;
@@ -420,7 +453,7 @@ pub(super) fn checks(
             );
         }
         let after = if cancelled(run) {
-            replacement(run, &runs, suites, &stale)
+            replacement(run, &runs, suites, &stale, docs_lane)
         } else {
             Replacement::None
         };
@@ -463,7 +496,19 @@ pub(super) fn checks(
             {
                 timed_out.entry(way).or_default().push(run.name.clone());
             }
-            Ci::Red
+            // Only an Actions job's failure can be its runner going away:
+            // one read of its annotations, for this run only, each pass.
+            if run.conclusion.as_deref() == Some("failure")
+                && suite(run, suites).is_some_and(|s| s.app == "github-actions")
+                && crate::api::runner_lost(
+                    &reads.ask(Reading::Checks, source.annotations(repo, run.id))?,
+                )
+            {
+                lost.push(run.clone());
+                Ci::Uncertain
+            } else {
+                Ci::Red
+            }
         } else if unsuited {
             name.push_str(" (its suite unread)");
             Ci::Pending
@@ -553,5 +598,6 @@ pub(super) fn checks(
         runs: effective.into_values().collect(),
         stopped,
         timed_out,
+        lost,
     })
 }

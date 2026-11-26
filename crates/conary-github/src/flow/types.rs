@@ -629,6 +629,9 @@ pub struct Facts {
     /// Completed failed checks whose attestation contract says they could not
     /// judge the PR (uncertain `negative` or attested gate `error`).
     pub uncertain: Vec<super::UncertainCheck>,
+    /// Failed check runs on the head whose annotations say only that their
+    /// runner went away: uncertain, never the change's red.
+    pub lost: Vec<crate::api::CheckRun>,
     /// Each cancelled check run nothing replaced that GitHub has a way to
     /// run again, by that way, with the checks it brings back.
     pub stopped: BTreeMap<super::Recovery, Vec<String>>,
