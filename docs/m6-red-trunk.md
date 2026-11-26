@@ -5,7 +5,8 @@ and test plan (child of [#256](https://github.com/FieldmouseWorks/Conary/issues/
 It specifies a bounded, deterministic recovery state machine that detects
 persistent failures on a repository's default branch, bisects them over the
 ledger's real landing order using deterministic proof plugins, and reverts the
-culprit through `cn undo` without a model job or ordinary person intervention.
+culprit through `cn undo` without a model job or ordinary person intervention
+([DESIGN 4.3](DESIGN.md#43-evidence), [DESIGN 12](DESIGN.md#12-roadmap)).
 
 This plan implements nothing, deploys nothing, introduces no live failures, and
 grants no authority beyond [#256](https://github.com/FieldmouseWorks/Conary/issues/256)'s
@@ -42,7 +43,16 @@ These apply to every task below and are not repeated in each task.
   A bisection verdict counts only when backed by a verified CI attestation
   ([ci-attestation.md](ci-attestation.md)) or service attestation
   ([service-attestation.md](service-attestation.md)) bound to the exact commit,
-  exact git tree, check name, and configured recipe `definition`.
+  exact git tree, check name, and configured recipe `definition`. Because a
+  GitHub check run's `output.text` is mutable after recording, a stored
+  `Attest::Service` verdict is never counted from the ledger or local cache
+  alone: before reusing it, recovery must re-read and re-verify the reporting
+  check run's current GitHub publication against current producer keys, check
+  scope, and recipe `definition`, and halt fail closed if it was edited,
+  removed, or no longer matches
+  ([service-attestation.md](service-attestation.md#signed-statement-v1)). Only
+  a kept CI attestation (`Attest::Ci`) may stand in for a recheck of the exact
+  check run its token names while that run carries no service statement.
 - **Degraded or inconclusive fails closed (`degraded-counts-as-failed`,
   `limits-are-design-bugs`).** Any unattested, malformed, crashed, timed-out,
   cancelled, `error`, or unreadable probe or GitHub read is recorded, never
@@ -110,10 +120,17 @@ state machine, `repair-ahead-of-red`, and the controlled drill.
     only for a `commit` that is the `after` of a recorded `Land` or `Outside`
     op in `repo`, with a verified producer attestation (`attest: Some(...)`
     checked before recording) and non-empty `check`/`source`. Like `Evidence`
-    and `CandidateEvidence`, it is never edited or deleted. It records trunk
-    CI and bisection proof verdicts against the landed trunk commit and tree so
-    restarts and later incidents reuse attested tree results
-    (`same-inputs-same-verdict`, [DESIGN 4.3 rule 3](DESIGN.md#43-evidence)).
+    and `CandidateEvidence`, it is never edited or deleted. It preserves
+    permanent audit provenance for trunk CI and bisection proof verdicts, and
+    lets restarts and later incidents avoid re-running a proof plugin on the
+    exact same tree (`same-inputs-same-verdict`,
+    [DESIGN 4.3 rule 3](DESIGN.md#43-evidence)) — subject to live
+    revalidation for `Attest::Service`: before counting any stored service
+    verdict, recovery re-reads the check run named by `source` on GitHub and
+    re-verifies its current published statement against current producer keys,
+    check scope, and recipe `definition`, halting fail closed
+    (`InconclusiveProof`) if the publication was edited, removed, or no longer
+    matches ([service-attestation.md](service-attestation.md#signed-statement-v1)).
 - **Mutable per-repository controller state (`conary-github`):**
   - Stored at `<data>/flow/<owner>/<repo>/red-trunk.json` alongside PR records
     ([flow.md](flow.md#state-and-workers)), protected by the repository file
@@ -133,11 +150,10 @@ stateDiagram-v2
     Idle --> Confirming : required check fails on trunk_tip
     Confirming --> Resolved : trunk_tip turns green
     Confirming --> Halted : infra error, cancelled/stale, or read degraded
-    Confirming --> Bisecting : persistent failure confirmed (window > 1)
-    Confirming --> Attributed : persistent failure confirmed (window == 1, boundary verified)
+    Confirming --> Bisecting : persistent failure confirmed
     Bisecting --> Resolved : trunk_tip turns green (cancel active worker)
     Bisecting --> Halted : inconclusive proof, known_good fails now, non-reproducible, broken ancestry, or no known_good
-    Bisecting --> Attributed : hi == lo + 1 (culprit commit identified)
+    Bisecting --> Attributed : last pass->fail transition verified (commits[g]=pass, commits[g+1..=k]=fail)
     Attributed --> Halted : culprit is Outside commit or already reverted
     Attributed --> Executing : culprit is active Land(C), intent persisted
     Executing --> Tracking : cn undo(C) returns Opened or Found
@@ -192,7 +208,7 @@ Records `incident_id`, `trunk_branch`, `red_commit`, `red_tree`,
 
 Builds a bounded, verified trunk commit chain `[commits[0], ..., commits[k]]`
 where `commits[k] == red_commit`, walking first-parent ancestry backwards at
-most `settings.red_trunk_max_window` commits (default `64`, bounded) and
+most `settings.red_trunk_max_window` commits (default `16`, bounded) and
 matching each step `(before -> after)` against the ledger's `Land` and
 `Outside` ops (after running an `ingest` sync of `repo` first so freshly merged
 landings are present).
@@ -208,10 +224,12 @@ landings are present).
   4. Select `known_good` (`commits[0]`): the newest commit in the window that
      already holds verified attested passing evidence for `target_checks` on
      its exact tree (a finished candidate's `same_tree()` evidence, a verified
-     `TrunkEvidence` pass, or verified trunk CI/service attestation). If none
-     exists within `max_window` -> `Halted { reason: NoKnownGoodWithinWindow }`.
+     `TrunkEvidence` pass, or verified trunk CI/service attestation — with any
+     service attestation revalidated against its reporting check run's current
+     GitHub publication). If none exists within `max_window` ->
+     `Halted { reason: NoKnownGoodWithinWindow }`.
 - **Mandatory boundary verification (eliminates flakes and external outages):**
-  Before narrowing the interior, the deterministic proof plugin must verify:
+  Before probing the interior, the deterministic proof plugin must verify:
   - `commits[k]` (`red_commit`) deterministically **fails** now under
     `target_checks` (verified service attestation `result == "fail"` on
     `(red_commit, red_tree, check, definition)`). If it **passes**, the failure
@@ -222,28 +240,55 @@ landings are present).
     from yesterday is not enough to rule out an external outage today (expired
     certificate, broken upstream registry, runner environment regression). If
     `known_good` **fails** now -> `Halted { reason: KnownGoodFailsNow }`.
-- **Binary search and strict probe bound:**
-  - Maintain `[lo, hi]` with `lo < hi`, `verdict(commits[lo]) == Pass`,
-    `verdict(commits[hi]) == Fail`.
-  - While `hi - lo > 1`, pick `mid = lo + (hi - lo) / 2`.
-  - **Exact-tree reuse (`same-inputs-same-verdict`):** If `tree(commits[mid])`
-    already has a verified attested verdict from this incident (same check and
-    `definition`), reuse it with zero plugin runs.
+  - If `k == 1`, boundary verification already proves `commits[0] == Pass` and
+    `commits[1] == Fail` with zero interior commits -> transition directly to
+    `Attributed { good: commits[0], bad: commits[1] }`.
+- **Non-monotone-safe reverse-suffix search and strict probe bound:**
+  - Midpoint binary search is sound only if verdicts are monotone (`verdict(i)
+    == Fail` implies `verdict(j) == Fail` for all `j > i`). That assumption
+    **does not hold** across unprobed intermediate commits: inside a grouped
+    train candidate or after superseded trunk CI, `T0=pass, T1=fail, T2=pass,
+    T3=fail` can occur, where midpoint search would probe `T1=fail` and
+    falsely undo `T1` even though `T2` passed and `T3` introduced the current
+    failure.
+  - Because unprobed interior commits cannot be assumed monotone, recovery
+    walks **backwards** from `i = k - 1` down to `1`, stopping at the first
+    index `g` where `verdict(commits[g]) == Pass` (or `g = 0`, already verified
+    `Pass`, if every `i` in `1..=k - 1` fails).
+  - **Exact-tree reuse with live service revalidation
+    (`same-inputs-same-verdict`):** If `tree(commits[i])` already has a
+    recorded attested verdict for the same check and current `definition`,
+    recovery avoids re-running the proof plugin **only after** verifying it is
+    still valid: for `Attest::Service`, re-read the reporting check run named
+    by `source` on GitHub and re-verify its currently published `output.text`
+    against current producer keys, check scope, commit/tree, check name, and
+    recipe `definition`. If that publication was edited, removed, or no longer
+    matches the stored verdict, fail closed immediately to
+    `Halted { reason: InconclusiveProof }` (never trust the cached verdict and
+    never silently re-run over a tampered publication). Only a kept
+    `Attest::Ci` verdict may stand in without re-reading check-run output, for
+    the exact check run its token names while that run carries no service
+    statement.
   - Otherwise, run **one** `prepare` (outside proof slots, per C3) + `proof`
-    invocation on `(commits[mid], tree(commits[mid]), target_checks)` through
+    invocation on `(commits[i], tree(commits[i]), target_checks)` through
     the existing `flow/jobs.rs` worker launcher (`.running` lock + durable
     invocation record + absolute history-sized deadline capped by
     `proof_timeout`).
   - Only **one** bisection proof runs per repository at a time. Its maximum
-    total probe count for a window of `N` commits is strictly bounded by
-    `ceil(log2(N)) + 2` (for `N = 64`, at most 8 probes).
-  - Attested `pass` -> `lo = mid`; attested `fail` -> `hi = mid`.
-  - When `hi == lo + 1`, transition to `Attributed { good: commits[lo], bad:
-    commits[hi] }`.
+    total probe count for a window of `k` steps (`k + 1` commits) is strictly
+    bounded by `k + 1 <= red_trunk_max_window + 1` (at most `17` probes at the
+    default `red_trunk_max_window = 16`; `2` probes for a single landing, `3`
+    probes when `red_commit` itself broke trunk, and `<= 4` probes for a
+    3-commit grouped candidate).
+  - When the walk stops at `g`, **every** commit in `[g + 1, k]` is proven
+    `Fail` and `commits[g]` is proven `Pass`, guaranteeing `commits[g + 1]` is
+    the exact most-recent `pass -> fail` transition even on non-monotone
+    histories -> transition to `Attributed { good: commits[g], bad:
+    commits[g + 1] }`.
 
 #### 4. `Attributed`
 
-Examines the ledger op that produced `bad = commits[hi]`:
+Examines the ledger op that produced `bad = commits[g + 1]`:
 
 - **`Body::Outside`:** There is no `ChangeId` to undo, and an `outside` move is
   already a violation for the owner ([DESIGN 4.5](DESIGN.md#45-landing)). Halt
@@ -368,11 +413,11 @@ Monitors the open undo PR `U` (`#undo_pr`) through the landing flow:
 
 | Edge case | Rule in the state machine |
 | --- | --- |
-| **Grouped train candidates** | A finished candidate `[A, B, C]` only has candidate-tree evidence for `T3 = after(C)` (and only if `tree(T3) == candidate.tree`). `T1 = after(A)` and `T2 = after(B)` have no candidate evidence of their own, so bisection walks the individual `Land` ops `T0 -> T1(A) -> T2(B) -> T3(C)` and probes intermediate commits directly, isolating `A`, `B`, or `C` (or a `State::Broken` partial landing) to the exact commit where the failure first appears. |
+| **Grouped train candidates** | A finished candidate `[A, B, C]` only has candidate-tree evidence for `T3 = after(C)` (and only if `tree(T3) == candidate.tree`). `T1 = after(A)` and `T2 = after(B)` have no candidate evidence of their own, so recovery walks the individual `Land` ops backwards from `T3` toward `T0` and probes intermediate commits directly, isolating `A`, `B`, or `C` (or a `State::Broken` partial landing) to the exact most-recent `pass -> fail` transition even if intermediate verdicts are non-monotone (`T0=pass, T1=fail, T2=pass, T3=fail`). |
 | **Concurrent trunk movement** | Every pass re-reads `trunk_tip`. If trunk turns green, active workers are cancelled (`pause-vacates`) and the incident resolves. If trunk advances while still red on the same failing check(s) and `red_commit` is an ancestor of `trunk_tip`, bisection over `[known_good, red_commit]` finishes without restarting and `cn undo C` merges current `trunk_tip` onto `revert(C)`. If `trunk_tip` already removed `C`'s diff (`UndoError::Nothing`), recovery re-evaluates `trunk_tip` instead of opening an empty PR. While a confirmed red incident is active, ordinary PRs do not land ahead of the repair. |
 | **Lost responses** | (1) Rerun ask in `Confirming`: reconciled via GitHub's `run_attempt`. (2) Proof worker result: `.running` lock + durable answer file + independently signed service attestation on the check run. (3) `cn undo` PR creation: `Executing` persists intent before calling GitHub; retry runs `strays()` + `pulls_from()` on `conary/undo/<C>/<attempt>` and records the stray PR with its original marker reason (`How::Found`), never opening a duplicate. |
-| **Daemon restart / crash** | Every transition atomically writes `red-trunk.json` under the repo lock before launching a worker or calling GitHub writes. On startup, `events::Runtime::restart` kicks every repo, replays the anchored op log, reloads `red-trunk.json`, and re-watches every outstanding proof worker's `.running` lock (bisection workers included). Completed attested probes are never re-run (`Body::TrunkEvidence` + incident cache). |
-| **Inconclusive proofs** | Missing/invalid/expired/out-of-scope attestation, wrong commit or tree, stale `definition` digest, unsigned plugin stdout, plugin crash/malformed JSON/declared model, `error`/`cancelled`/`stale`/`neutral`/`skipped` result, worker hitting its history-sized deadline, or degraded GitHub read: recorded (`degraded` where applicable), never retried on that tree (`limits-are-design-bugs`), never narrows `[lo, hi]`, and fails closed to `Halted { reason: InconclusiveProof }`. |
+| **Daemon restart / crash** | Every transition atomically writes `red-trunk.json` under the repo lock before launching a worker or calling GitHub writes. On startup, `events::Runtime::restart` kicks every repo, replays the anchored op log, reloads `red-trunk.json`, and re-watches every outstanding proof worker's `.running` lock (bisection workers included). Completed attested probes are reused without re-running the proof plugin once any stored `Attest::Service` verdict passes live revalidation against its reporting check run's current publication. |
+| **Inconclusive proofs** | Missing/invalid/expired/out-of-scope attestation, edited or removed service check-run publication on reuse, wrong commit or tree, stale `definition` digest, unsigned plugin stdout, plugin crash/malformed JSON/declared model, `error`/`cancelled`/`stale`/`neutral`/`skipped` result, worker hitting its history-sized deadline, or degraded GitHub read: recorded (`degraded` where applicable), never retried on that tree (`limits-are-design-bugs`), never advances the reverse-suffix search, and fails closed to `Halted { reason: InconclusiveProof }`. |
 | **Undo chains (#199)** | Attribution walks trunk commit ancestry (`before -> after`), never `Landing.at`. If `A -> U1(A) -> U2(U1)` fails at `U2`, attribution names `U2` and calls `cn undo U2` (avoiding `UndoError::UndoneUndo`). If `A` is already reverted by `U1`, recovery never re-undoes `A` or undoes `U1`. An already-open undo PR is adopted (`How::Found`); a recovery undo PR closed without landing halts (`UndoClosed`) instead of looping. |
 | **R2 person requirements** | Revert PR inherits `R2` from the reverted change's highest recorded class (paths or `raised` labels), opens one `Door::R2` owner request (`one-question-per-decision`), runs no model judge, requires a scoped `conary-owner:v1` review from `settings.people` on the exact head and intent, and lands only alone in the train with exact candidate-tree evidence bound to trunk. Empty `settings.people` fails closed. |
 | **`repair-ahead-of-red`** | Both `autoland/red-...` fixes (by trusted authors on repo branches) and recovery `conary/undo/...` PRs rank in a dedicated repair tier strictly above `Level::High`, preempt ordinary PR proof slots (cancelling the lowest-priority ordinary proof when slots are full), preempt unlanded gating ordinary train candidates (never interrupting an already-started merge), and are never held in `Stage::Base` waiting on the red trunk's own pending or hung CI runs. Only a stale `autoland/red-...` PR targeting a trunk already confirmed green is held. |
@@ -386,7 +431,7 @@ scenarios in its column as failing-before-fix tests.
 | ID | Scenario | Expected culprit | Expected recovery operations | Fail-closed / invariant checked | Owner |
 | --- | --- | --- | --- | --- | --- |
 | **S1** | Single R0 direct landing `T0(green) -> T1(A, red)` fails attempt 1, fails attempt 2 | `A` | Rerun requested once in `Confirming`; boundary probes verify `T1` fail + `T0` pass; `cn undo A` opens PR `#U`; lands on attested evidence without review/model/person -> `Resolved` | Zero model plugin calls; zero `ListOwner`; `A.status == Reverted` | RT2, RT3 |
-| **S2** | Grouped train candidate `[A, B, C]` lands `T0 -> T1(A) -> T2(B) -> T3(C)`; only `T3` had candidate evidence, trunk check fails on `T3`; `T1` passes, `T2` fails | `B` | Bisect `[T0, T1, T2, T3]` probes `T1`(pass), `T2`(fail) after boundaries (`<= 4` probes); `cn undo B` reverts `B` alone onto `T3`, keeping `A` and `C`; lands -> `Resolved` | Intermediate candidate commits probed directly; `A` and `C` remain `Landed`, `B` is `Reverted` | RT2, RT3 |
+| **S2** | Grouped train candidate `[A, B, C]` lands `T0 -> T1(A) -> T2(B) -> T3(C)`; only `T3` had candidate evidence, trunk check fails on `T3`; `T1` passes, `T2` fails | `B` | Reverse-suffix walk on `[T0, T1, T2, T3]` probes boundaries `T3`(fail), `T0`(pass), then `T2`(fail), `T1`(pass) (`<= 4` probes); `cn undo B` reverts `B` alone onto `T3`, keeping `A` and `C`; lands -> `Resolved` | Intermediate candidate commits probed directly; `A` and `C` remain `Landed`, `B` is `Reverted` | RT2, RT3 |
 | **S3** | Two green PRs make a red trunk (`T0 -> T1(A) -> T2(B)`), `T2` also has a second hung/pending CI run, and an older `priority: high` PR holds the sole proof slot | `B` | `repair-ahead-of-red`: bisection and `cn undo B` do not wait on `T2`'s hung run (`base_held == false`); ordinary `high` PR's proof slot is vacated; `U` jumps ahead of `high` PR in proof slots and train, lands, restores `tree(T1)` | Exact reproduction of burrow#1102 / burrow#1108 class; `U` never enters `Stage::Base` while trunk is red | RT1, RT3 |
 | **S4** | Delayed sync & tied timestamps (#199): `T0 -> T1(A) -> T2(B)` where `Landing(A).at >= Landing(B).at`, `B` broke trunk | `B` | Window built from `before -> after` commit ancestry, not `Landing.at`; probes `T1`(pass) -> blames `B` | Never inverts order under delayed sync, backfill, or equal timestamps | #199, RT2 |
 | **S5** | Undo chain (#199): `T0 -> T1(A) -> T2(U1 reverts A, green) -> T3(U2 reverts U1, red)` | `U2` (not `A`) | Bisect finds `T2(pass) -> T3(fail)` -> attributes `U2`; calls `cn undo U2` (not `A`); `U3` lands, reverting `U2` and returning `A` to `Reverted` | Never fails with `UndoError::UndoneUndo`; net effect of `A` is reverted | #199, RT2, RT3 |
@@ -394,13 +439,14 @@ scenarios in its column as failing-before-fix tests.
 | **S7** | Concurrent trunk movement: while bisecting `T0..T4`, commit `T5` lands and turns trunk green | None (resolved) | Active bisection proof worker cancelled immediately (`pause-vacates`); no undo PR opened -> `Resolved { by: TrunkGreen }` | Cancelled worker signs no counted evidence; zero stale PRs | RT2, RT3 |
 | **S8** | Concurrent trunk movement: while bisecting `[T0..T3]` for `gate`, `D` lands at `T4` (still red on `gate`); subcase (a) `D` is disjoint from `B`, subcase (b) `D` already removed `B`'s diff | (a) `B`; (b) none | (a) Bisection finishes on `[T0..T3]`, `cn undo B` merges `T4` into `revert(B)` and lands; (b) `cn undo B` returns `UndoError::Nothing(B)` -> re-evaluates `T4` without opening an empty PR | Never restarts bisection unnecessarily on disjoint landing; never opens empty undo PR | RT2, RT3 |
 | **S9** | Lost HTTP response & restart during `Executing`: `open_pull` succeeds on GitHub (`#42` on `conary/undo/<B>/1`), then transport errors and `conaryd` restarts before `Body::Undo` is appended | `B` | On restart, `Executing` re-invokes `undo(B)` -> `strays()` finds `#42`, appends `Body::Undo` with original marker reason, returns `How::Found` -> `Tracking { undo_pr: 42 }` | Exactly one PR (`#42`) opened; original reason preserved | RT3 |
-| **S10** | Daemon restart mid-bisection: (a) worker still running with `.running` lock; (b) worker finished and signed attestation while daemon was down | `B` | `Runtime::restart` re-watches `.running` lock / kicks repo; (a) waits for exit without launching a duplicate worker; (b) verifies signed attestation and advances `[lo, hi]` without re-running `T2` | Zero duplicate proof runs; `Body::TrunkEvidence` persists attested probe across restarts | RT2, RT3 |
+| **S10** | Daemon restart mid-bisection: (a) worker still running with `.running` lock; (b) worker finished and signed attestation while daemon was down | `B` | `Runtime::restart` re-watches `.running` lock / kicks repo; (a) waits for exit without launching a duplicate worker; (b) revalidates the reporting check run's current signed publication and advances the reverse-suffix search without re-running `T2` | Zero duplicate proof runs; `Body::TrunkEvidence` persists audit provenance and revalidates current check-run output before reuse | RT2, RT3 |
 | **S11** | R2 culprit `C` (subcase (a) `oneWay` path; subcase (b) `r2` label raise on non-`oneWay` path) | `C` (`R2`) | `cn undo C` opens PR `#U` with inherited `R2` class; raises single `Door::R2` request (`one-question-per-decision`); runs no judge model; refuses direct merge and unapproved landing; after scoped `conary-owner:v1` review from `settings.people`, rides alone in train; if trunk moves mid-train, candidate drops and rebuilds | Never lands R2 undo without person approval and exact candidate-tree + trunk binding; empty `settings.people` waits closed | RT3 |
-| **S12** | Fail-closed: inconclusive proof (unsigned stdout, invalid signature, wrong tree, stale recipe `definition`, plugin crash, declared model, worker hits history-sized deadline, or `error` attestation) | None (fail closed) | Records degradation where applicable; does not narrow `[lo, hi]`; does not retry on that tree (`limits-are-design-bugs`); opens no PR; lists no owner -> `Halted { reason: InconclusiveProof }` | Strict fail-closed; surfaced in `cn flow status` and watchdog | RT2, RT3 |
+| **S12** | Fail-closed: inconclusive proof (unsigned stdout, invalid signature, edited or removed service check-run publication after recording `TrunkEvidence`, wrong tree, stale recipe `definition`, plugin crash, declared model, worker hits history-sized deadline, or `error` attestation) | None (fail closed) | Records degradation where applicable; does not advance the search; does not trust stale cached service verdicts or retry on that tree (`limits-are-design-bugs`); opens no PR; lists no owner -> `Halted { reason: InconclusiveProof }` | Strict fail-closed; tampered/removed service publications halt instead of attributing an undo; surfaced in `cn flow status` and watchdog | RT2, RT3 |
 | **S13** | Fail-closed: external outage (`known_good` fails now) or non-reproducible flake (`red_commit` passes now) | None (fail closed) | Boundary probe catches both before bisecting interior; opens no PR -> `Halted { reason: KnownGoodFailsNow }` or `Halted { reason: NonReproducible }` | Never falsely blames an innocent landing during infra/upstream outage or flake | RT2 |
 | **S14** | Fail-closed: culprit is `Body::Outside`, broken commit ancestry, or no `known_good` in `max_window` | `Outside` / none (fail closed) | `Outside` -> `Halted { reason: OutsideCommit }` + owner violation; broken ancestry -> `Halted { reason: BrokenAncestry }`; window exhausted -> `Halted { reason: NoKnownGoodWithinWindow }` | Never invents a `ChangeId`, never blames a neighbor of an `outside` commit, never scans unbounded history | RT2, RT3 |
 | **S15** | Fail-closed: operator closes recovery undo PR `#U`, revert conflicts with later work (`conflicts: true`), or consecutive undo budget (`3`) exhausted | `B` (for closed/conflict) / none (budget) | Closed `#U` -> `Halted { reason: UndoClosed }` (never reopens); conflict -> opens bare revert PR with `conflicts: true`, does not bypass review or start a model diagnostic job; 3rd undo still red -> `Halted { reason: RecoveryBudgetExhausted }` | Strict loop bounds; no runaway unwind of trunk | RT3 |
-| **S16** | `spenders-off-by-default` and `pause-vacates` | `B` (on resume) | With `red_trunk_recovery = false`, red trunk is observed in status only (zero proofs, zero PRs). With `true`, `cn flow pause` mid-bisection cancels active worker immediately, vacates slot, and resume continues from saved attested probes | Default config spends nothing; pause takes effect at next decision with no deploy | RT2, RT3 |
+| **S16** | `spenders-off-by-default` and `pause-vacates` | `B` (on resume) | With `red_trunk_recovery = false`, red trunk is observed in status only (zero proofs, zero PRs). With `true`, `cn flow pause` mid-bisection cancels active worker immediately, vacates slot, and resume continues from revalidated attested probes | Default config spends nothing; pause takes effect at next decision with no deploy | RT2, RT3 |
+| **S17** | Non-monotone interior history: `T0(pass) -> T1(A, fail) -> T2(B, pass, no prior trunk pass recorded) -> T3(C, fail)` | `C` (never `A`) | Boundary probes verify `T3`(fail) and `T0`(pass); reverse-suffix search probes `T2`(pass) and stops immediately (`3` probes total) -> attributes `C` and opens `cn undo C`, never probing or blaming `A` | Sound on non-monotone sequences; `A` and `B` remain `Landed`, `C` is `Reverted` | RT2, RT3 |
 
 ## Single-PR delivery boundaries
 
@@ -467,7 +513,7 @@ undo PRs yet and mutates no trunk/PR state on GitHub).
 
 - **Waits on:** [#199](https://github.com/FieldmouseWorks/Conary/issues/199).
 - **Files:** New pure kernel module `crates/conary-core/src/recovery.rs`
-  (landing-order window builder from #199, binary-search interval state,
+  (landing-order window builder from #199, reverse-suffix search state,
   bounds, fail-closed halt reasons); new driver
   `crates/conary-github/src/flow/red_trunk.rs` (`Confirming` + `Bisecting` +
   `Attributed` + `Halted`, `red-trunk.json` atomic persistence, `prepare` +
@@ -478,10 +524,12 @@ undo PRs yet and mutates no trunk/PR state on GitHub).
   1. Pure `conary-core` recovery kernel: constructs `[known_good, ...,
      red_commit]` strictly from trunk `before -> after` commit order, enforces
      `max_window`, enforces mandatory `red_commit` fail + `known_good` pass
-     boundary checks, computes exact-tree verdict reuse, narrows `[lo, hi]` in
-     `<= ceil(log2(N)) + 2` probes, resolves culprit (`Land` vs `Outside`,
-     undo-chain net effect from #199, highest recorded `Class`), and enumerates
-     every fail-closed `HaltReason`.
+     boundary checks, computes exact-tree verdict reuse (requiring live
+     check-run revalidation for `Attest::Service`), walks backwards from
+     `red_commit - 1` to `known_good` in `<= window.len()` probes so non-monotone
+     histories always attribute the exact most-recent `pass -> fail` transition,
+     resolves culprit (`Land` vs `Outside`, undo-chain net effect from #199,
+     highest recorded `Class`), and enumerates every fail-closed `HaltReason`.
   2. `Confirming` stage reusing `train/retry.rs`'s single full workflow rerun
      on `run_attempt == 1`, rejecting `cancelled`/`stale`/attested-`error`
      infra failures as `InconclusiveConfirm`.
@@ -493,9 +541,10 @@ undo PRs yet and mutates no trunk/PR state on GitHub).
      `undo()` yet).
 - **Lessons held:** `no-model-in-mechanical-step`, `same-inputs-same-verdict`,
   `degraded-counts-as-failed`, `limits-are-design-bugs`, `pause-vacates`.
-- **Verification:** Pure unit tests for all window, bisection, undo-chain, and
-  halt-reason transitions, plus sim tests for **S1, S2, S4, S5, S6, S7, S10,
-  S12, S13, S14, S16** (through attribution/halt).
+- **Verification:** Pure unit tests for all window, reverse-suffix search
+  (including non-monotone sequences), undo-chain, and halt-reason transitions,
+  plus sim tests for **S1, S2, S4, S5, S6, S7, S10, S12, S13, S14, S16, S17**
+  (through attribution/halt).
 
 ### RT3: `recovery: execute authenticated red-trunk undo and wire conaryd`
 
@@ -523,7 +572,12 @@ Delivers authenticated verdict verification, `Body::TrunkEvidence`, `Executing`
      matching the check run conclusion, `repository`, `commit`, `tree`,
      `check`, and `definition == recipe_digest` — while keeping `pass_result`
      untouched so a `fail` attestation can never grant landing permission.
-     Reject unsigned plugin stdout as `InconclusiveProof`.
+     Reject unsigned plugin stdout as `InconclusiveProof`. Require live
+     revalidation of the reporting check run's current GitHub publication
+     before reusing any stored `Attest::Service` `TrunkEvidence` verdict,
+     halting fail closed (`InconclusiveProof`) if the publication was edited,
+     removed, or no longer verifies under current producer keys or recipe
+     `definition`.
   3. Implement `Executing` (persisting intent before `undo::undo`, handling
      lost responses via `strays()` + `How::Found`, handling
      `UndoError::Nothing`, inheriting `R2` class from the reverted change) and
@@ -534,7 +588,7 @@ Delivers authenticated verdict verification, `Body::TrunkEvidence`, `Executing`
      enforced).
   4. Add live settings to `flow::Settings` / `flow/schema.rs`:
      - `red_trunk_recovery: bool` (default `false`, `x-spender = true`);
-     - `red_trunk_max_window: NonZeroUsize` (default `64`, `x-spender = false`);
+     - `red_trunk_max_window: NonZeroUsize` (default `16`, `x-spender = false`);
      - `red_trunk_max_consecutive_undos: NonZeroUsize` (default `3`,
        `x-spender = false`).
   5. Wire `red_trunk::step` into `flow::Pass::run` and `events::Runtime::restart`
@@ -544,11 +598,12 @@ Delivers authenticated verdict verification, `Body::TrunkEvidence`, `Executing`
   `same-inputs-same-verdict`, `degraded-counts-as-failed`,
   `limits-are-design-bugs`, `owner-only-for-doors`, `spenders-off-by-default`,
   `one-settings-source`, `live-settings`, `switches-show-their-effect`.
-- **Verification:** Failing-before-fix sim tests completing **S1–S16** end to
-  end, including signed vs tampered/unsigned service attestations, lost
-  `open_pull` response + restart, R2 path and `r2`-label inheritance with
-  person approval and trunk-move drop, and schema default tests confirming
-  `red_trunk_recovery` defaults to `false`.
+- **Verification:** Failing-before-fix sim tests completing **S1–S17** end to
+  end, including signed vs tampered/unsigned/edited-after-record service
+  attestations, non-monotone interior history (`T0=pass, T1=fail, T2=pass,
+  T3=fail`), lost `open_pull` response + restart, R2 path and `r2`-label
+  inheritance with person approval and trunk-move drop, and schema default
+  tests confirming `red_trunk_recovery` defaults to `false`.
 
 ### RT4: `tests: add controlled broken-landing drill and exit acceptance check`
 
@@ -582,8 +637,10 @@ the M6 exit check ([#321](https://github.com/FieldmouseWorks/Conary/issues/321))
      - `culprit == B`, `U.reverts == [B]`, `B.status() == Status::Reverted`;
      - `A` and `C` remain `Status::Landed`;
      - `model_plugin_invocations == 0` and `owner_requests == 0`;
-     - `proof_probes <= ceil(log2(window)) + 2`, every counting probe backed by
-       immutable `Body::TrunkEvidence` with verified `Attest::Service`;
+     - `proof_probes <= window.len()` (strictly bounded by
+       `red_trunk_max_window + 1`), every counting probe backed by immutable
+       `Body::TrunkEvidence` with verified `Attest::Service` (and live check-run
+       revalidation on reuse);
      - `U` never waited in `Stage::Base` and preempted the older `high` PR.
   5. Runs companion negative drills in the same file: unattested proof halts
      fail closed, `known_good` failing now halts fail closed, `outside` culprit
@@ -620,7 +677,8 @@ the M6 exit check ([#321](https://github.com/FieldmouseWorks/Conary/issues/321))
   and undo execution (verified by RT4's poisoned model-plugin sentinel).
 - **`same-inputs-same-verdict`:** Already `designed`. **RT2** reuses attested
   tree verdicts inside an incident and **RT3** persists immutable
-  `Body::TrunkEvidence` keyed by exact commit and tree.
+  `Body::TrunkEvidence` keyed by exact commit and tree, revalidating any
+  stored `Attest::Service` check run's current publication before counting it.
 - **`degraded-counts-as-failed`:** Already `built` in the flow. **RT2** and
   **RT3** extend fail-closed degraded handling to every red-trunk read, lookup,
   and inconclusive proof verdict.

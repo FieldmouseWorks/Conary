@@ -315,8 +315,10 @@ Three rules make it trustworthy:
    tree gets its own: its train's candidate's, when trunk's tree after the
    landing is the candidate's (section 4.7), and otherwise trunk's CI's,
    recorded against the landing. A red result there starts an undo or a fix
-   (section 6). That is the owner's call for R0 and R1, where a revert
-   undoes the damage. R2 is different: undo can't help, so an R2 change
+   (section 6): for R0 and R1, where a revert undoes the damage, recovery
+   locates and undoes the culprit automatically with no person stepping in
+   (section 12, [M6 slice 7](m6-red-trunk.md)), gated by the repo's recovery
+   setting. R2 is different: undo can't help, so an R2 change
    lands only on evidence for the candidate tree itself (its head merged
    onto the trunk commit it lands on), and if trunk moves before the merge,
    that evidence no longer counts and the checks run again. Equal trees
