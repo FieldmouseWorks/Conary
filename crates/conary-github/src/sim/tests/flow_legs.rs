@@ -100,3 +100,93 @@ fn only_equivalent_completed_gate_work_replaces_cancelled_legs() {
         );
     }
 }
+#[test]
+fn the_whole_gate_replaces_a_cancelled_leg_of_any_count() {
+    // The gate runs up to 12 legs: a later whole gate on the same head
+    // stands for every one of them, the eleventh as much as the first.
+    let s = Scenario::new();
+    let old = legs(1, 12, "cancelled", Some("skipped"), "main");
+    s.assert(
+        &[old.clone(), Run::whole(2, "main", "success")],
+        Ci::Green,
+        &[],
+    );
+    let one = Run::new(
+        1,
+        &[
+            ("check / lane into main", "success"),
+            ("check / leg 11 of 12", "cancelled"),
+        ],
+    );
+    s.assert(&[one, Run::whole(2, "main", "success")], Ci::Green, &[]);
+}
+#[test]
+fn a_leg_is_k_of_n_for_any_count_and_nothing_else() {
+    let s = Scenario::new();
+    let cancelled = |job: &str| {
+        Run::new(
+            1,
+            &[
+                ("check / lane into main", "success"),
+                (&format!("check / {job}"), "cancelled"),
+            ],
+        )
+    };
+    for job in ["leg 9 of 9", "leg 12 of 12", "leg 1 of 2", "leg 11 of 120"] {
+        s.assert(
+            &[cancelled(job), Run::whole(2, "main", "success")],
+            Ci::Green,
+            &[],
+        );
+    }
+    for job in [
+        "leg 0 of 2",
+        "leg 3 of 2",
+        "leg 01 of 12",
+        "leg 1 of 1",
+        "leg 1 of 02",
+        "leg +1 of 2",
+        "leg 1  of 2",
+        "leg -1 of 2",
+        "leg 1 of 2 ",
+    ] {
+        s.assert(
+            &[cancelled(job), Run::whole(2, "main", "success")],
+            Ci::Pending,
+            &[&format!("check / {job} (cancelled, to be run again)")],
+        );
+    }
+}
+#[test]
+fn one_leg_never_stands_for_another() {
+    // upkeep's rule: the same job replaces itself, and only the whole gate
+    // (or the docs job, where the docs lane applies) stands for a leg.
+    let s = Scenario::new();
+    let old = Run::new(
+        1,
+        &[
+            ("check / lane into main", "success"),
+            ("check / leg 1 of 4", "cancelled"),
+        ],
+    );
+    let other = Run::new(
+        2,
+        &[
+            ("check / lane into main", "success"),
+            ("check / leg 2 of 4", "success"),
+        ],
+    );
+    s.assert(
+        &[old.clone(), other],
+        Ci::Pending,
+        &["check / leg 1 of 4 (cancelled, to be run again)"],
+    );
+    let same = Run::new(
+        2,
+        &[
+            ("check / lane into main", "success"),
+            ("check / leg 1 of 4", "success"),
+        ],
+    );
+    s.assert(&[old, same], Ci::Green, &[]);
+}

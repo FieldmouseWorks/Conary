@@ -253,12 +253,42 @@ pub(crate) struct ComparedFile {
 /// rest, so a list this long may be cut short.
 pub const COMPARED_FILES: usize = 300;
 
+/// One note GitHub made on a check run: its level (`notice`, `warning` or
+/// `failure`) and its words.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Annotation {
+    #[serde(rename = "annotation_level", default)]
+    pub level: String,
+    pub message: String,
+}
+
 /// Whether a check run's annotations say GitHub stopped it at its timeout,
 /// which it concludes as cancelled.
-pub(crate) fn overran(annotations: &[String]) -> bool {
-    annotations
+pub(crate) fn overran(annotations: &[Annotation]) -> bool {
+    annotations.iter().any(|a| {
+        a.message
+            .contains("has exceeded the maximum execution time")
+    })
+}
+
+/// Whether one failure annotation is GitHub's, saying the job's runner went
+/// away rather than a step failing (burrow-upkeep's `runner_gone`, burrow#1486):
+/// shut down under it, its process got SIGTERM and the step wrote no verdict
+/// of its own (exit 143); or GitHub lost the runner altogether.
+fn runner_gone(message: &str) -> bool {
+    message == "Process completed with exit code 143."
+        || message.starts_with("The hosted runner lost communication with the server.")
+}
+
+/// Whether a failed check run's annotations say only that its runner went
+/// away: at least one failure annotation, every one of them GitHub's
+/// runner-gone words, and none of the step's own.
+pub(crate) fn runner_lost(annotations: &[Annotation]) -> bool {
+    let mut failures = annotations
         .iter()
-        .any(|m| m.contains("has exceeded the maximum execution time"))
+        .filter(|a| a.level == "failure")
+        .peekable();
+    failures.peek().is_some() && failures.all(|a| runner_gone(&a.message))
 }
 
 #[derive(Debug)]
@@ -336,7 +366,7 @@ pub trait Source {
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError>;
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError>;
     /// What GitHub noted on check run `run`.
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError>;
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<Annotation>, ApiError>;
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError>;
     fn reviews(&self, repo: &str, number: u64) -> Result<Vec<Review>, ApiError>;
     fn commit(&self, repo: &str, sha: &str) -> Result<Commit, ApiError>;
@@ -800,10 +830,8 @@ impl Source for Api {
         })
     }
 
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
-        let all: Vec<flow::Annotation> =
-            self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))?;
-        Ok(all.into_iter().map(|a| a.message).collect())
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<Annotation>, ApiError> {
+        self.pages(&format!("/repos/{repo}/check-runs/{run}/annotations"))
     }
 
     fn statuses(&self, repo: &str, sha: &str) -> Result<Vec<Status>, ApiError> {

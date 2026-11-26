@@ -56,7 +56,7 @@ impl Source for Watch<'_> {
     fn pulls(&self, repo: &str, which: Pulls) -> Result<Vec<PullRequest>, ApiError> {
         self.hub.pulls(repo, which)
     }
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<crate::api::Annotation>, ApiError> {
         Source::annotations(self.hub, repo, run)
     }
     fn check_runs(&self, repo: &str, sha: &str) -> Result<Vec<CheckRun>, ApiError> {

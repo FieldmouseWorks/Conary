@@ -263,10 +263,6 @@ struct Flow {
     id: String,
     name: String,
 }
-#[derive(Deserialize)]
-pub(super) struct Annotation {
-    pub(super) message: String,
-}
 
 impl Api {
     /// The answer to a GraphQL `query` about `repo`, its call cut off at

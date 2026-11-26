@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use conary_core::policy::Paths;
 
 use crate::api::{
-    ApiError, CheckRun, Commit, Comparison, Event, PER_PAGE, Page, PullRequest, Pulls, READ_FOR,
-    Review, Source, Status, compared, paged,
+    Annotation, ApiError, CheckRun, Commit, Comparison, Event, PER_PAGE, Page, PullRequest, Pulls,
+    READ_FOR, Review, Source, Status, compared, paged,
 };
 use crate::attest::{Actions, Artifact, Job, Key, testing};
 use crate::branches::{Branches, Merged};
@@ -122,7 +122,7 @@ impl Source for Hub {
         })
     }
 
-    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<String>, ApiError> {
+    fn annotations(&self, repo: &str, run: u64) -> Result<Vec<Annotation>, ApiError> {
         let id = run.to_string();
         self.read(Asked::new(Call::Annotations, repo), &[repo, &id], |w| {
             Ok(w.annotations.get(&run).cloned().unwrap_or_default())
@@ -693,10 +693,24 @@ impl Hub {
             .unwrap()
             .suites = suites;
     }
+    /// GitHub's notes on check run `run`, each at the failure level.
     pub(crate) fn annotations(&self, run: u64, messages: &[&str]) {
-        self.world
-            .borrow_mut()
-            .annotations
-            .insert(run, messages.iter().map(|s| (*s).into()).collect());
+        self.annotate(
+            run,
+            &messages.iter().map(|m| ("failure", *m)).collect::<Vec<_>>(),
+        );
+    }
+    /// GitHub's notes on check run `run`, each with its level.
+    pub(crate) fn annotate(&self, run: u64, notes: &[(&str, &str)]) {
+        self.world.borrow_mut().annotations.insert(
+            run,
+            notes
+                .iter()
+                .map(|(level, message)| Annotation {
+                    level: (*level).into(),
+                    message: (*message).into(),
+                })
+                .collect(),
+        );
     }
 }
