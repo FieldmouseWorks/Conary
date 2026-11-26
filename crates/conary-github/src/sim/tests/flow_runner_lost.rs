@@ -233,3 +233,39 @@ fn a_real_red_beside_a_lost_runner_is_handed_to_a_fix() {
     s.hub.annotations(101, &[SHUTDOWN]);
     s.assert(&[run], Ci::Red, &[GATE]);
 }
+
+#[test]
+fn a_lost_runner_on_a_dry_pass_asks_for_nothing() {
+    let c = failed(true, false, &[SHUTDOWN]);
+    c.pass(START, true);
+    assert_eq!(c.hub.count(Call::FlowRerun), 0);
+    assert_eq!(c.hub.count(Call::FlowRerunFailedJobs), 0);
+    no_fix_job(&c);
+}
+
+#[test]
+fn a_rerun_not_yet_seen_waits_for_its_own_job() {
+    // The rerun was taken, but GitHub still shows only the first attempt's
+    // job: that says nothing of the rerun's, so it waits for its own, and
+    // never asks again or hands a fix.
+    let c = failed(true, false, &[SHUTDOWN]);
+    let first = next(&c, START);
+    assert_eq!(first.step, Step::Recover(Recovery::Rerun(RUN)), "{first:?}");
+    c.hub.put_checks(
+        &head(3),
+        json!([
+            {"id": 701, "name": "check", "status": "completed", "conclusion": "success",
+             "check_suite": {"id": SUITE}},
+            {"id": 702, "name": "build", "status": "completed", "conclusion": "failure",
+             "check_suite": {"id": SUITE}},
+        ]),
+    );
+    for now in [START + 60, START + 7200] {
+        let n = next(&c, now);
+        assert_eq!(n.stage, Stage::Ci, "{n:?}");
+        assert_eq!(n.step, Step::Wait { until: None }, "{n:?}");
+        assert!(!n.description.contains("base/machine failure"), "{n:?}");
+    }
+    assert_eq!(c.hub.count(Call::FlowRerun), 1);
+    no_fix_job(&c);
+}

@@ -190,3 +190,36 @@ fn one_leg_never_stands_for_another() {
     );
     s.assert(&[old, same], Ci::Green, &[]);
 }
+#[test]
+fn a_failed_leg_stays_red_beside_any_later_run() {
+    // The flow supersedes cancelled work only: a failed leg is red whatever
+    // a later suite on the same head did, whole gate included. (upkeep also
+    // lets later work replace a failure; the flow doesn't.)
+    let s = Scenario::new();
+    let failed = |job: &str| {
+        Run::new(
+            1,
+            &[
+                ("check / lane into main", "success"),
+                (&format!("check / {job}"), "failure"),
+            ],
+        )
+    };
+    let later = Run::new(
+        2,
+        &[
+            ("check / lane into main", "success"),
+            ("check / leg 2 of 4", "success"),
+        ],
+    );
+    s.assert(
+        &[failed("leg 1 of 4"), later],
+        Ci::Red,
+        &["check / leg 1 of 4"],
+    );
+    s.assert(
+        &[failed("leg 11 of 12"), Run::whole(2, "main", "success")],
+        Ci::Red,
+        &["check / leg 11 of 12"],
+    );
+}
