@@ -87,7 +87,7 @@ another issue are not scheduled again here.
 | `waiting-costs-nothing` | [FP7](#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall), then [#317](https://github.com/FieldmouseWorks/Conary/issues/317) | Built for the flow's wait on CI: no wake booked, and a check's clock starts with its run ([flow.md](flow.md#deadlines)); #317's post-landing review open |
 | `read-sized-to-data` | [FP9](#fp9-conaryd-one-repositorys-slow-or-failing-read-delays-only-its-own-pass) | Built: each read pages to the end of its data under a deadline of its own, and conaryd runs each repository's pass beside the others', one at a time per repository, a failed or timed-out one booking its own recovery ([conaryd.md](conaryd.md#verified-flow-events)); held by [`a_repository_whose_api_hangs_delays_only_its_own_pass`](../crates/conary-github/src/sim/tests/events_concurrent.rs) |
 | `recover-by-kind` | [FP8](#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) | Built: at a wait's deadline the flow updates a head behind its base, or asks GitHub once to run a cancelled or timed-out check again by its kind, and quotes a refusal ([flow.md](flow.md#deadlines)) |
-| `repair-ahead-of-red` | [#318](https://github.com/FieldmouseWorks/Conary/issues/318) | Open |
+| `repair-ahead-of-red` | [#318](https://github.com/FieldmouseWorks/Conary/issues/318)'s RT1 ([m6-red-trunk.md](m6-red-trunk.md#rt1-flow-prioritize-red-trunk-repairs-ahead-of-red-runs-and-ordinary-work)) | Designed |
 | `publish-only-news` | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s U5 ([m6-upkeep.md](m6-upkeep.md)) | Designed |
 | `scope-below-a-repo` | [#313](https://github.com/FieldmouseWorks/Conary/issues/313); FP2's pause leaves room for it | Open |
 
