@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "2mzytcgacx3kwr5tw74xapkr2h",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 641,
+  "url": "https://github.com/fieldmouseworks/conary/pull/641",
+  "summary": "plugins: extract publishable conary-plugin contract crate",
+  "task": "fieldmouseworks/conary#616",
+  "author": {
+    "kind": "person",
+    "login": "TusanHomichi",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "7d900c279ff033bb642fd1e195d811190b9404573d308a92fdebda74e26a3d0a",
+    "before": "1dddf099ff619d65d9612b2f59de484d7923cccf",
+    "after": "4f34b1b3231dea1137aba10246b25f961e79034c",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795715067545
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699996/job/140071257032"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699735/job/140071256952"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699735/job/140071256495"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157/job/140071253022"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#641)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699157"
+    },
+    {
+      "kind": "review",
+      "check": "codex",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/pull/641#issuecomment-7198821593 at 2026-11-26T17:21:54Z"
+    },
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699735/job/140071257412"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699996/job/140071457657"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699735/job/140071300033"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "fail",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45866699735/job/140071257412"
+    }
+  ]
+}
