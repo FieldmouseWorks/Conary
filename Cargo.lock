@@ -204,6 +204,7 @@ dependencies = [
  "clap",
  "conary-core",
  "conary-github",
+ "conary-plugin",
  "ed25519-dalek",
  "serde",
  "serde_json",
@@ -215,11 +216,11 @@ name = "conary-core"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "conary-plugin",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "regex",
  "rustix",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -232,6 +233,7 @@ version = "0.0.0"
 dependencies = [
  "base64",
  "conary-core",
+ "conary-plugin",
  "ed25519-dalek",
  "jiff",
  "regex",
@@ -245,6 +247,15 @@ dependencies = [
  "tempfile",
  "ureq",
  "zip",
+]
+
+[[package]]
+name = "conary-plugin"
+version = "5.0.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

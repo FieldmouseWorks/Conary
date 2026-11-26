@@ -2,9 +2,12 @@
 
 This is the published **conary-plugin v5** contract (older work contracts are
 accepted where they can enforce the request; see Versions). It is independent of
-language, harness and engine. The Rust types and runner are in
-`conary_core::plugin`. Flow integration and engine-specific implementations
-are separate work. Plugin output alone is not attested ledger evidence.
+language, harness and engine. The Rust wire contract types, validation helpers
+and conformance fixtures live in the publishable `conary-plugin` crate (with
+no dependency on `conary-core` or `conary-github`); `conary_core::plugin`
+re-exports them alongside the process runner. Flow integration and
+engine-specific implementations are separate work. Plugin output alone is not
+attested ledger evidence.
 
 ## Transport and negotiation
 
@@ -368,7 +371,7 @@ Use the built `target/debug/cn` if cn is not installed. Caller limits are
 Success exits zero and prints `by` and the `checked` kinds as JSON. Failure
 exits nonzero with its diagnostic on stderr. CI's workspace tests run this
 command on the example and exercise broken executables for each failure.
-The example source is `crates/conary-core/examples/plugin.rs`; its answers
+The example source is `crates/conary-plugin/examples/plugin.rs`; its answers
 are illustrative, never evidence about real code.
 
 A conforming plugin recognizes the reserved repository
@@ -413,3 +416,35 @@ flow tests: a head ending in `3` gets one finding, and a fix reports the
 forty-digit head `4`, answering each finding fixed. The simulation host applies that push to its Hub;
 the executable still performs no real writes. Its fixer and reviewer use
 distinct known sessions, so the example exercises independence after a fix.
+
+## Crate versioning and publishing
+
+`crates/conary-plugin` is published independently (`publish = true`) so plugins
+and external callers can depend on a versioned contract crate instead of a
+`conary-core` git revision. It depends only on `serde` and `serde_json`
+(with an optional `schemars` feature for JSON Schema generation) and never
+depends on `conary-core` or `conary-github`.
+
+Its SemVer version tracks this wire contract:
+
+- **Major (`N.0.0`)** matches the highest wire contract `conary-plugin vN`
+  (e.g. `5.x.y` for `conary-plugin v5`). Adding a new wire contract `vN` or
+  making any SemVer-breaking Rust API change bumps the major version; a test
+  in `crates/conary-plugin/tests/contract.rs` holds `CARGO_PKG_VERSION_MAJOR`
+  to `version(CONTRACT)`.
+- **Minor (`N.x.0`)** is for backwards-compatible Rust API additions within the
+  same wire contract `vN`.
+- **Patch (`N.x.y`)** is for bug fixes that preserve both the wire format and
+  the public Rust API.
+
+Release checklist (from a clean checkout of `main` with a crates.io token):
+
+```console
+cargo test -p conary-plugin --no-default-features
+cargo test -p conary-plugin --all-features
+cargo package -p conary-plugin --list
+cargo publish -p conary-plugin --dry-run
+git tag -s conary-plugin-v5.0.0 -m "conary-plugin v5.0.0"
+git push origin conary-plugin-v5.0.0
+cargo publish -p conary-plugin
+```

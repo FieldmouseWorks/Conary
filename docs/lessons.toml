@@ -65,7 +65,7 @@ lesson = "A grader is independent by session on any engine: start judges fresh, 
 from = ["https://github.com/FieldmouseWorks/burrow/issues/822", "https://github.com/FieldmouseWorks/burrow/issues/914"]
 applies = ["plugin runner", "judgment producers", "M6 slice 5c"]
 status = "built"
-where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/plugins.md#independence-and-execution-failures", "crates/conary-core/src/plugin/execution.rs", "crates/conary-github/src/flow/markers.rs", "crates/conary-github/tests/flow_execution.rs", "crates/conary-github/src/sim/tests/flow_markers.rs", "https://github.com/FieldmouseWorks/Conary/issues/293"]
+where = ["docs/DESIGN.md#61-execution-choices-and-independent-judging", "docs/plugins.md#independence-and-execution-failures", "crates/conary-plugin/src/execution.rs", "crates/conary-github/src/flow/markers.rs", "crates/conary-github/tests/flow_execution.rs", "crates/conary-github/src/sim/tests/flow_markers.rs", "https://github.com/FieldmouseWorks/Conary/issues/293"]
 
 # Seeded from #294: the 2026-11-11 audit's lessons (remi#981, burrow#656)
 # and the owner's additions.
@@ -76,7 +76,7 @@ lesson = "A proof, build, replay or poll runs as a program; a model only reads a
 from = ["https://github.com/FieldmouseWorks/burrow/issues/646", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["plugin contract", "flow proofs", "M6 slice 5c", "M6 slice 5d", "M6 slice 6", "M6 slice 7", "M6 slice 8"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/plugins.md#versions", "crates/conary-core/src/plugin/mod.rs", "docs/m6-plugins.md#c3-flow-prepare-proofs-outside-the-proof-slots-and-send-no-model-run-check-to-a-proof-plugin", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/375", "https://github.com/FieldmouseWorks/Conary/issues/315", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+where = ["docs/DESIGN.md#properties", "docs/plugins.md#versions", "crates/conary-plugin/src/lib.rs", "docs/m6-plugins.md#c3-flow-prepare-proofs-outside-the-proof-slots-and-send-no-model-run-check-to-a-proof-plugin", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/375", "https://github.com/FieldmouseWorks/Conary/issues/315", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "degraded-counts-as-failed"

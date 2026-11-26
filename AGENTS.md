@@ -99,8 +99,9 @@ tests of the Cargo workspace in `crates/`, on the toolchain
 ([README](README.md#building)). Beside it, `.github/workflows/house.yml` holds
 each PR to the house rules a machine can read, its title and body included.
 
-All logic lives in the libraries, `conary-core` and `conary-github` (its GitHub
-side); conaryd, the MCP server and the `cn` CLI stay thin layers over them.
+All logic lives in the libraries, `conary-plugin`, `conary-core` and
+`conary-github` (its GitHub side); conaryd, the MCP server and the `cn` CLI
+stay thin layers over them.
 
 Nix is how remi builds and checks Conary, never something the code needs.
 Paths, the socket, keys and the service manager are configuration the binary

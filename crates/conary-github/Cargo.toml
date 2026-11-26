@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 base64 = "0.23.1"
 conary-core = { version = "0.0.0", path = "../conary-core" }
+conary-plugin = { version = "5.0.0", path = "../conary-plugin" }
 ed25519-dalek = "3.0.0"
 jiff = { version = "1.0.1", default-features = false, features = ["std"] }
 regex = "1.13.1"
@@ -31,7 +32,7 @@ workspace = true
 # Cargo builds it before this package's integration tests, with its real deps.
 [[bin]]
 name = "conary-flow-test-plugin"
-path = "../conary-core/examples/plugin.rs"
+path = "../conary-plugin/examples/plugin.rs"
 test = false
 bench = false
 doc = false
