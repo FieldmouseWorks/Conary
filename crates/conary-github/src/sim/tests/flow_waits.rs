@@ -20,7 +20,12 @@ fn quiet_wakeups_do_not_extend_the_stall_deadline() {
 #[test]
 fn release_age_and_refresh_recovery_have_the_sweeps_full_allowance() {
     // watched.py:97-140: max(since, ripe) + sweep recovery + stall, or drain for other red.
+    // burrow tests/renovate-sweep.py pins limits "3 21600 3 600 3600",
+    // interval(7200) = 3600 + 20 + 7200 = 10_820 (20s event queue gap),
+    // drain(7200) = 4 * 10_820 + 7200 = 50_480, and
+    // recovery(7200) = 3 * (21600 + 10_820) + 50_480 = 147_740.
     let mut c = Case::new();
+    assert_eq!(c.settings.renovate_run, 7200);
     c.settings.renovate_sweep = true;
     c.settings.renovate_login = Some("renovate[bot]".into());
     c.settings.renovate_email = Some("bot@example.org".into());
@@ -42,8 +47,11 @@ fn release_age_and_refresh_recovery_have_the_sweeps_full_allowance() {
     c.hub.flow_comment(REMI,3,"renovate[bot]","Artifact update problem\n```\nlock-age: nothing in the refresh is old enough until 2030-01-02T00:00:00Z\n```");
     let n = c.pass(700);
     let ripe = c.facts().release_at.unwrap();
-    let drain = 4 * (3600 + 7200) + 7200;
-    let recovery = 3 * (21600 + 3600 + 7200) + drain;
+    let interval = 3600 + 20 + 7200;
+    let drain = 4 * interval + 7200;
+    let recovery = 3 * (21600 + interval) + drain;
+    assert_eq!(drain, 50_480);
+    assert_eq!(recovery, 147_740);
     assert_eq!(n.overdue_at, Some(ripe + recovery + 7200));
     assert_eq!(n.wait_on, Some(WaitOn::Sweep));
     c.label(&["rebase"]);
