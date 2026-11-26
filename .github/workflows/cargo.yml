@@ -4,17 +4,22 @@
 name: cargo
 on:
   pull_request:
+    # `edited` for a retarget: the PR's merge ref changes with its base. A title
+    # or body edit runs nothing (the job's `if`).
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
-# A PR's new run cancels its previous in-progress run; push runs on main are
-# independent and never cancel one another.
+# A PR's new run (a push, a reopen or a retarget) cancels its previous
+# in-progress run; push runs on main, and title or body edits, are independent
+# and never cancel another run.
 concurrency:
-  group: ${{ format('{0} {1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id)) }}
+  group: ${{ format('{0} {1}', github.workflow, (github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base)) && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id)) }}
   cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   cargo:
+    if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     permissions:
       contents: read
