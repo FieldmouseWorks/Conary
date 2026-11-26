@@ -131,7 +131,9 @@ reachable receiver URL, content type **application/json**, and the secret from
 that file. Select pull requests (including labeled/unlabeled actions), pull
 request reviews, pull request review comments, pull request review threads,
 issue comments, check suites, check runs, workflow runs, workflow jobs, commit
-statuses and pushes. GitHub's
+statuses and pushes. `conary_github::events::hook_events()` exports those
+GitHub event names directly from the receiver's table so a host can hold its
+hook configuration to them. GitHub's
 `label` event changes label definitions; PR label attachments arrive through
 `pull_request`. Only pushes to the default branch kick the repo's open PRs.
 Issue comments without a PR and events outside this table are acknowledged

@@ -48,6 +48,12 @@ const EVENTS: &[(&str, Target)] = &[
     ("push", Target::DefaultPush),
 ];
 
+/// The GitHub webhook event names this receiver handles, generated from
+/// `EVENTS` so hosts can hold their hook configuration to the table itself.
+pub fn hook_events() -> impl Iterator<Item = &'static str> {
+    EVENTS.iter().map(|(name, _)| *name)
+}
+
 pub fn kicks(event: &str, body: &Value, repos: &BTreeSet<String>) -> Vec<Kick> {
     let Some(repo) = body["repository"]["full_name"].as_str() else {
         return vec![];
