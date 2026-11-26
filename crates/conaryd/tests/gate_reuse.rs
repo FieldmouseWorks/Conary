@@ -22,8 +22,7 @@ fn send(addr: SocketAddr, head: &str, body: &[u8]) -> (String, String, Vec<u8>) 
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     stream.write_all(head.as_bytes()).unwrap();
-    // A peer that answers before it has read the body may close first.
-    let _ = stream.write_all(body);
+    stream.write_all(body).unwrap();
     let mut out = Vec::new();
     stream.read_to_end(&mut out).unwrap();
     let at = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
@@ -80,27 +79,25 @@ fn the_listener_hands_each_request_to_the_lookup_and_refuses_what_isnt_one() {
     assert_eq!(seen.lock().unwrap()[1].0, None);
 
     // Never handed on: another method, a body too long, a length not given,
-    // a chunked body, a header twice, a head past its cap.
+    // a chunked body, a header twice, a head past its cap. Each is refused
+    // from its head alone, so send no body: bytes left unread when the
+    // listener closes can turn the client's read of the close into a reset.
     let before = seen.lock().unwrap().len();
-    let refused = |head: &str, body: &[u8]| send(addr, head, body).0;
-    assert!(refused("GET / HTTP/1.1\r\nHost: x\r\n\r\n", b"").starts_with("HTTP/1.1 401"));
+    let refused = |head: &str| send(addr, head, b"").0;
+    assert!(refused("GET / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 401"));
     let long = format!(
         "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
         MAX_BODY + 1
     );
-    assert!(refused(&long, b"").starts_with("HTTP/1.1 413"));
-    assert!(refused("POST / HTTP/1.1\r\n\r\n", b"").starts_with("HTTP/1.1 400"));
+    assert!(refused(&long).starts_with("HTTP/1.1 413"));
+    assert!(refused("POST / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 400"));
     assert!(
-        refused(
-            "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n",
-            b"{}"
-        )
-        .starts_with("HTTP/1.1 400")
+        refused("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n")
+            .starts_with("HTTP/1.1 400")
     );
     assert!(
         refused(
             "POST / HTTP/1.1\r\nAuthorization: a\r\nauthorization: b\r\nContent-Length: 2\r\n\r\n",
-            b"{}"
         )
         .starts_with("HTTP/1.1 400")
     );
@@ -111,7 +108,7 @@ fn the_listener_hands_each_request_to_the_lookup_and_refuses_what_isnt_one() {
         "{start}{}",
         "x".repeat(conaryd::http::MAX_HEAD - start.len())
     );
-    assert!(refused(&huge, b"").starts_with("HTTP/1.1 431"));
+    assert!(refused(&huge).starts_with("HTTP/1.1 431"));
     assert_eq!(seen.lock().unwrap().len(), before);
 }
 
