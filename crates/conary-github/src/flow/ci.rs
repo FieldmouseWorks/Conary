@@ -138,9 +138,14 @@ fn leg(job: &str) -> Option<(u64, u64)> {
 }
 /// Whether `new` does the work `old` did, so it can replace it: the same
 /// job, either lane check, or the whole gate standing for any gate job (and
-/// the docs job, where the docs lane applies). One leg never stands for a
-/// different leg.
-fn same_work(old: &CheckRun, new: &CheckRun, lane: bool) -> bool {
+/// a fork-bound docs job, where the docs lane applies). One leg never stands
+/// for a different leg.
+fn same_work(
+    old: &CheckRun,
+    new: &CheckRun,
+    docs_lane: bool,
+    suites: &BTreeMap<u64, Suite>,
+) -> bool {
     if old.name == new.name {
         return true;
     }
@@ -148,7 +153,9 @@ fn same_work(old: &CheckRun, new: &CheckRun, lane: bool) -> bool {
     let (nc, nj) = split(&new.name);
     oc == nc
         && (oj.starts_with(LANE) && nj.starts_with(LANE)
-            || gate(oj) && (nj == "check" || lane && nj.starts_with(DOCS)))
+            || gate(oj)
+                && (nj == "check"
+                    || docs_lane && judged(new, suites).is_some_and(|(_, f)| f.is_some())))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -162,7 +169,7 @@ fn replacement(
     runs: &[CheckRun],
     suites: &BTreeMap<u64, Suite>,
     stale: &BTreeSet<u64>,
-    lane: bool,
+    docs_lane: bool,
 ) -> Replacement {
     let (Some(mine), Some(workflow)) = (suite_id(c), flow(c, suites)) else {
         return Replacement::None;
@@ -197,7 +204,7 @@ fn replacement(
         caller == split(&c.name).0 && job.starts_with(LANE)
     });
     if done.iter().any(|r| {
-        same_work(c, r, lane)
+        same_work(c, r, docs_lane, suites)
             && (!shared
                 || done.iter().any(|lane| {
                     suite_id(lane) == suite_id(r)
@@ -300,7 +307,7 @@ pub(super) fn clock(checks: &[Check]) -> Clock {
 /// outcome is kept in `reads`, even when a later one ends it.
 /// `documentation` is whether the machine's policy names every path of
 /// `paths` documentation: the docs lane's word alone, a job anyone's PR
-/// can name, never waives a proof.
+/// can name, never waives a proof or replaces a gate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn checks(
     source: &dyn Read,
@@ -364,21 +371,22 @@ pub(super) fn checks(
         .filter(|(_, (b, f))| *b != base || f.is_some_and(|f| fork.as_deref() != Some(f)))
         .filter_map(|(r, _)| suite_id(r))
         .collect();
-    // The docs lane applies to a complete diff that leaves `.github` alone.
-    let lane = !paths.cut
+    // The docs lane applies to a complete diff that the policy names
+    // documentation and that leaves `.github` alone.
+    let docs_lane = documentation
+        && !paths.cut
         && !paths.files.iter().any(|p| {
             std::iter::once(p.path.as_str())
                 .chain(p.from.as_deref())
                 .any(|p| p == ".github" || p.starts_with(".github/"))
         });
-    let docs = documentation
+    let docs = docs_lane
         && said.iter().any(|(r, (_, f))| {
             f.is_some()
                 && !suite_id(r).is_some_and(|id| stale.contains(&id))
                 && r.status == "completed"
                 && r.conclusion.as_deref() == Some("success")
-        })
-        && lane;
+        });
     let ran: BTreeSet<_> = said
         .iter()
         .filter(|(r, (_, f))| {
@@ -445,7 +453,7 @@ pub(super) fn checks(
             );
         }
         let after = if cancelled(run) {
-            replacement(run, &runs, suites, &stale, lane)
+            replacement(run, &runs, suites, &stale, docs_lane)
         } else {
             Replacement::None
         };

@@ -60,11 +60,22 @@ fn only_equivalent_completed_gate_work_replaces_cancelled_legs() {
         legs(2, 4, "success", Some("success"), "main"),
         legs(2, 3, "success", Some("success"), "main"),
         Run::whole(2, "main", "success"),
-        Run::docs(2, TRUNK, "success"),
     ] {
         s.assert(&[old.clone(), new.clone()], Ci::Green, &[]);
         s.assert(&[new, old.clone()], Ci::Green, &[]);
     }
+    let docs = Scenario::new();
+    docs.hub.touch(&super::head(3), &["docs/guide.md"]);
+    docs.assert(
+        &[old.clone(), Run::docs(2, TRUNK, "success")],
+        Ci::Green,
+        &[],
+    );
+    docs.assert(
+        &[Run::docs(2, TRUNK, "success"), old.clone()],
+        Ci::Green,
+        &[],
+    );
     for new in [
         Run::whole(2, "main", "failure"),
         legs(2, 3, "success", Some("failure"), "main"),
@@ -235,21 +246,84 @@ fn the_docs_job_stands_for_a_leg_only_where_the_docs_lane_applies() {
             ],
         )
     };
-    // A complete diff that leaves `.github` alone: the docs job stands for it.
+    // A complete diff that the policy names documentation and that leaves
+    // `.github` alone: the docs job stands for a cancelled leg or whole gate.
     let s = Scenario::new();
+    s.hub.touch(&super::head(3), &["docs/guide.md"]);
     s.assert(&[old(), Run::docs(2, TRUNK, "success")], Ci::Green, &[]);
-    // A diff touching `.github`, or one GitHub cut short: it doesn't.
+    s.assert(
+        &[
+            Run::whole(1, "main", "cancelled"),
+            Run::docs(2, TRUNK, "success"),
+        ],
+        Ci::Green,
+        &[],
+    );
+    // A malformed docs job name never stands for a cancelled leg, even on a
+    // docs diff.
+    let bogus = Run::new(
+        2,
+        &[
+            ("check / lane into main", "success"),
+            (
+                "check / docs only into main, honest from invalid",
+                "success",
+            ),
+        ],
+    );
+    s.assert(
+        &[old(), bogus],
+        Ci::Pending,
+        &["check / leg 1 of 4 (cancelled, to be run again)"],
+    );
+    // A diff the policy doesn't name documentation (code, mixed, empty,
+    // AGENTS.md), touching `.github`, or cut short by GitHub: it doesn't.
     let cut: Vec<_> = (0..301).map(|n| format!("docs/{n}.md")).collect();
     for paths in [
+        vec![],
+        vec!["src/lib.rs"],
+        vec!["docs/guide.md", "src/lib.rs"],
+        vec!["AGENTS.md"],
         vec![".github/workflows/flake.yml"],
         cut.iter().map(String::as_str).collect(),
     ] {
         let s = Scenario::new();
-        s.hub.touch(&super::head(3), &paths);
+        if !paths.is_empty() {
+            s.hub.touch(&super::head(3), &paths);
+        }
         s.assert(
             &[old(), Run::docs(2, TRUNK, "success")],
             Ci::Pending,
             &["check / leg 1 of 4 (cancelled, to be run again)"],
         );
+        s.assert(
+            &[
+                Run::whole(1, "main", "cancelled"),
+                Run::docs(2, TRUNK, "success"),
+            ],
+            Ci::Pending,
+            &["check / check (cancelled, to be run again)"],
+        );
     }
+    // A path excluded by `notDocs` in the machine policy is not eligible for
+    // the docs lane either, even though it matches `docs` and avoids `.github`.
+    let policy =
+        conary_core::Policy::parse(br#"{"docs":["^docs/"],"notDocs":["^docs/DESIGN\\.md$"]}"#)
+            .unwrap();
+    let s = Scenario::new();
+    s.hub.touch(&super::head(3), &["docs/DESIGN.md"]);
+    let f = s.read_with(
+        &[old(), Run::docs(2, TRUNK, "success")],
+        &policy,
+        crate::sim::settings(),
+    );
+    assert!(
+        f.checks.iter().any(
+            |c| c.name == "check / leg 1 of 4 (cancelled, to be run again)"
+                && c.state == Ci::Pending
+        ),
+        "checks: {:?}",
+        f.checks
+    );
+    assert_eq!(next(&f, &s.memory, 4000).0.stage, Stage::Ci);
 }
