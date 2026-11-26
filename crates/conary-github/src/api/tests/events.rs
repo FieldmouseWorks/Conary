@@ -1,6 +1,6 @@
 use super::*;
 use crate::events::{Kick, Queue, Receiver};
-use crate::flow::{Stage, Write};
+use crate::flow::{Stage, StageLabels, Write};
 use crate::train::{Forge, Mark};
 use ring::hmac;
 use std::io::Write as _;
@@ -116,7 +116,50 @@ fn unchanged_stage_labels_are_read_without_reposting_them() {
     .leak();
     let (base, asked) = github(vec![answer, answer]);
     let api = Api::through(&base, Tokens::given("t"), None, CALL_FOR);
-    api.stage("o/r", 7, Stage::Ci).unwrap();
+    api.stage("o/r", 7, Stage::Ci, &StageLabels::default())
+        .unwrap();
     assert!(asked.recv().unwrap().starts_with("get "));
     assert!(asked.recv().unwrap().starts_with("get "));
+}
+
+#[test]
+fn stage_replaces_configured_label_with_percent_encoded_delete() {
+    let labels = StageLabels {
+        owner: "stage/owner: Alice".into(),
+        review: "stage/review".into(),
+        ..Default::default()
+    };
+
+    let mut labeled = serde_json::from_str::<serde_json::Value>(PULL).unwrap();
+    labeled["labels"] = serde_json::json!([
+        {"name": "stage/owner: Alice"},
+        {"name": "unrelated"}
+    ]);
+    let body = serde_json::to_string(&labeled).unwrap();
+    let pull_answer: &'static str = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .leak();
+    let empty_ok: &'static str =
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+    let (base, asked) = github(vec![pull_answer, empty_ok, pull_answer, empty_ok]);
+    let api = Api::through(&base, Tokens::given("t"), None, CALL_FOR);
+    api.stage("o/r", 7, Stage::Review, &labels).unwrap();
+
+    assert!(asked.recv().unwrap().starts_with("get /repos/o/r/pulls/7"));
+    let delete = asked.recv().unwrap();
+    assert!(
+        delete.starts_with("delete /repos/o/r/issues/7/labels/stage%2fowner%3a%20alice "),
+        "{delete}"
+    );
+    assert!(asked.recv().unwrap().starts_with("get /repos/o/r/pulls/7"));
+    let post = asked.recv().unwrap();
+    assert!(
+        post.starts_with("post /repos/o/r/issues/7/labels "),
+        "{post}"
+    );
+    let (_, post_body) = post.split_once("\r\n\r\n").unwrap();
+    let posted: serde_json::Value = serde_json::from_str(post_body).unwrap();
+    assert_eq!(posted, serde_json::json!({"labels": ["stage/review"]}));
 }

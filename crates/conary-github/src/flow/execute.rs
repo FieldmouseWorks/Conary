@@ -75,7 +75,7 @@ pub(crate) fn act<G: Write>(
             }
         };
         scope()?;
-        github.stage(&repo, f.number, next.stage)?;
+        github.stage(&repo, f.number, next.stage, &f.settings.stage_labels)?;
         scope()?;
         if settled {
             if next.step == Step::Merge && f.classified.class == conary_core::Class::R2 {

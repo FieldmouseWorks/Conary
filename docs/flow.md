@@ -41,12 +41,13 @@ pending. Passes always read the ledger, even when evidence is unconfigured,
 so historical raises still apply. Dry runs use no writer and publish no anchor.
 
 Omitted settings use `flow::Settings` defaults; unknown keys are rejected.
-The defaults name no machine, account, label or engine, and start no paid
+The defaults name no machine, account, person or engine, and start no paid
 work, so a machine supplies its own: with no `review_authors` no review
 counts, with no `flow_authors` neither its own `review-settled` nor the
-train's status does, with no `owner_label` what the owner decides waits unlisted, and
-`proof_slots` defaults to `0`, which starts no proof and no preparation
-(`null` sets no limit).
+train's status does, with no `owner_label` what the owner decides waits unlisted,
+`stage_labels` defaults to generic `waiting: …` names (`waiting: owner` for the
+owner stage), and `proof_slots` defaults to `0`, which starts no proof and no
+preparation (`null` sets no limit).
 Execution choices are optional entries in the same machine-owned configuration:
 
 ```json
@@ -1092,8 +1093,8 @@ before any repository is switched over.
 
 `cn flow compare OWNER/REPO [PR]` makes that comparison itself. It does the
 same dry run, then reads what the steward running the repository says of
-each PR now: the stage its `waiting: …` label names, and its newest
-`review-settled` status on the head, counted only from
+each PR now: the stage its configured `settings.stage_labels` label names, and
+its newest `review-settled` status on the head, counted only from
 `settings.flow_authors` (from anyone when that's empty). It prints one
 JSON line per PR with `repo`, `pr`, `head`, `agree`, `flow` (`stage`,
 `step`, `description`, `switches`, `degraded`), `steward` (`stages`, `state`,

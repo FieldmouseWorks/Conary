@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use super::{Report, Revision, SETTLED, Stage, Step};
+use super::{Report, Revision, SETTLED, Stage, StageLabels, Step};
 use crate::api::Source;
 use conary_core::op::Repo;
 
@@ -72,6 +72,7 @@ pub fn beside<G: Source>(
     github: &G,
     reports: Vec<Report>,
     authors: &BTreeSet<String>,
+    labels: &StageLabels,
 ) -> (Vec<Beside>, Tally) {
     let mut tally = Tally::default();
     let mut out: Vec<Beside> = reports
@@ -86,7 +87,7 @@ pub fn beside<G: Source>(
                 switches: next.switches,
                 degraded: next.degraded,
             });
-            let read = said(github, &report.repo.to_string(), report.pr, authors).and_then(
+            let read = said(github, &report.repo.to_string(), report.pr, authors, labels).and_then(
                 |(revision, said)| match &report.revision {
                     _ if report.error.is_some() => Ok((revision.head, said)),
                     Some(decided) if *decided == revision => Ok((revision.head, said)),
@@ -104,7 +105,7 @@ pub fn beside<G: Source>(
             let error = report.error.or(read_error);
             let agree = error.is_none()
                 && match (&flow, &steward) {
-                    (Some(flow), Some(steward)) => stages(flow.stage) == steward.stages,
+                    (Some(flow), Some(steward)) => stages(flow.stage, labels) == steward.stages,
                     _ => false,
                 };
             match (agree, &error) {
@@ -135,8 +136,8 @@ pub fn beside<G: Source>(
 }
 
 /// The stages a decision's label would name: none for the null stage.
-fn stages(stage: Stage) -> Vec<Stage> {
-    stage.label().map(|_| stage).into_iter().collect()
+fn stages(stage: Stage, labels: &StageLabels) -> Vec<Stage> {
+    labels.label(stage).map(|_| stage).into_iter().collect()
 }
 
 fn said<G: Source>(
@@ -144,6 +145,7 @@ fn said<G: Source>(
     repo: &str,
     pr: u64,
     authors: &BTreeSet<String>,
+    labels: &StageLabels,
 ) -> Result<(Revision, Said), String> {
     let pull = github
         .pull(repo, pr)
@@ -151,7 +153,7 @@ fn said<G: Source>(
     let stages = pull
         .labels
         .iter()
-        .filter_map(|l| Stage::from_label(&l.name))
+        .filter_map(|l| labels.stage(&l.name))
         .collect();
     let statuses = github
         .statuses(repo, &pull.head.sha)

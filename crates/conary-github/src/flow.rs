@@ -51,7 +51,7 @@ pub use persist::{Data, Landing, Record};
 pub mod jobs;
 
 mod write;
-pub use write::{SETTLED, Write, review_body};
+pub use write::{SETTLED, StageLabels, Write, review_body};
 
 mod ask;
 mod execute;
