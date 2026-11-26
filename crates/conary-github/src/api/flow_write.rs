@@ -99,7 +99,9 @@ impl Write for Api {
         let pull = self.pull(repo, pr)?;
         let want = labels.label(stage);
         for label in pull.labels {
-            if labels.owns(&label.name) && want != Some(label.name.as_str()) {
+            if labels.owns(&label.name)
+                && !want.is_some_and(|w| w.eq_ignore_ascii_case(&label.name))
+            {
                 let encoded = super::percent_encode(&label.name);
                 let path = format!("/repos/{repo}/issues/{pr}/labels/{encoded}");
                 let url = format!("{}{path}", self.base);

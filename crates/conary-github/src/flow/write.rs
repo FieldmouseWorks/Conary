@@ -117,11 +117,13 @@ impl StageLabels {
         self.stage(label).is_some()
     }
 
-    /// The stage `label` names under this configuration.
+    /// The stage `label` names under this configuration (ASCII case-insensitive,
+    /// matching GitHub label names and `validate_stage_labels`).
     pub fn stage(&self, label: &str) -> Option<Stage> {
-        Stage::LABELLED
-            .into_iter()
-            .find(|s| self.label(*s) == Some(label))
+        Stage::LABELLED.into_iter().find(|s| {
+            self.label(*s)
+                .is_some_and(|l| l.eq_ignore_ascii_case(label))
+        })
     }
 
     pub(crate) fn entries(&self) -> [(&'static str, &str); 10] {

@@ -2,7 +2,7 @@
 //! with defaults that name no person (#492).
 use super::flow_pass_case::{Case, REPO};
 use crate::api::Source;
-use crate::flow::{self, Stage};
+use crate::flow::{self, Stage, StageLabels};
 use serde_json::json;
 
 fn labels_on(c: &Case) -> Vec<String> {
@@ -99,5 +99,35 @@ fn default_owner_stage_label_names_no_person() {
     assert!(
         !on.iter().any(|l| l.contains("Peter")),
         "default stage labels must name no person: {on:?}"
+    );
+}
+
+#[test]
+fn stage_labels_match_case_insensitively() {
+    let labels = StageLabels {
+        owner: "waiting: Alice".into(),
+        review: "stage: Review".into(),
+        ..StageLabels::default()
+    };
+    assert_eq!(labels.stage("WAITING: alice"), Some(Stage::Owner));
+    assert_eq!(labels.stage("stage: review"), Some(Stage::Review));
+    assert!(labels.owns("WAITING: ALICE"));
+
+    let mut c = Case::new();
+    c.config.settings.stage_labels = labels.clone();
+    c.hub.label(REPO, 3, &["WAITING: ALICE", "hold"]);
+    let report = c.pass(flow::jobs::now(), false);
+    assert_eq!(report[0].error, None);
+    assert_eq!(report[0].next.as_ref().unwrap().stage, Stage::None);
+    let after = labels_on(&c);
+    assert!(
+        !after
+            .iter()
+            .any(|l| l.eq_ignore_ascii_case("waiting: Alice")),
+        "case-variant stage label must be recognized and removed: {after:?}"
+    );
+    assert!(
+        after.iter().any(|l| l == "hold"),
+        "unrelated hold label must remain: {after:?}"
     );
 }
