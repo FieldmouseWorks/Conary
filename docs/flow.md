@@ -172,7 +172,7 @@ The flow asks the owner only for a one-way door it names
 (`one-question-per-decision`). A `ListOwner` step carries its door, from a
 closed set ([`flow::Door`](../crates/conary-github/src/flow/approval.rs)):
 `r2`, an R2 change; `outside`, an outside contribution; `judge`, a judge's
-`owner` verdict; `label`, the owner label set by a person. A decision with
+`owner` verdict; `label`, the owner label set by anyone but the flow. A decision with
 no door doesn't list the owner: the flow makes the call itself and its
 status shows it, overdue like any other wait.
 
@@ -203,12 +203,15 @@ the marked review on the exact head ([Person approval](#person-approval)).
 
 The flow's own listing is no door. Memory's `labelled` says the flow put
 the owner label on, until a pass reads it off. A label without that mark
-is a person's door only when a person put it on. While it's on, each read
+is a door unless the flow's account put it on. While it's on, each read
 of the PR (a scope check's too) reads its timeline for its newest
-`labeled` event: a `User` there is a person, a `Bot` an App (the steward,
-or the flow before it kept its mark), which lists nothing of its own.
-When that can't be told (the read, `owner_label`, fails, or names
-neither) the PR waits at no stage, neither listed nor gone past. A
+`labeled` event: an account in `flow_authors` (the App the flow posts as,
+the steward's too, or the flow before it kept its mark; matched
+case-insensitively) lists nothing of its own, and anyone else's, a
+person's or another App's such as a job's, is the `label` door, held and
+listed as the owner's. When that can't be told (the read, `owner_label`,
+fails, or names no account) the PR waits at no stage, neither listed nor
+gone past. A
 decision, or a switch's step, saved before a listing named its door
 loads as a wait, and the next pass decides it again.
 
@@ -427,7 +430,7 @@ names all three. A configuration switch names a PR only at the step it
 keeps off: an omitted plugin when the step is that plugin's work; the train
 off when an R2 change would merge (an R2 change lands only through the
 train); no person list when a landing step needs a person's approval, or
-the PR waits on the owner for one (a person's owner label, an R2 change or a
+the PR waits on the owner for one (an owner label not the flow's own, an R2 change or a
 judge's owner verdict); no evidence verifier at any
 landing step. The PR's `description` stays the one its decision gives.
 
@@ -946,7 +949,7 @@ accepted one may still bring it back) goes to the
 [stuck role](#a-loop-that-wont-settle), `why` `stall` and `detail` the
 wait's status and its recovery's, once for its head and stage. Only on a
 PR the flow works (open, ready, trusted, read in full, on no base it waits
-for, and at no person's owner label), and only a wait
+for, and at no owner label but the flow's own), and only a wait
 on CI, the merge or a fix, or one failing (three strikes, two lost jobs, a
 proof stalled on its deadlines): never a hold, the owner, the base or a
 slot, never a dependency PR, whose bot or sweep has its branch, never while
