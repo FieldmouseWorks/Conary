@@ -10,19 +10,6 @@ pub struct Limits {
     pub response_bytes: usize,
 }
 
-#[derive(Debug)]
-pub struct Failure(pub String);
-impl std::fmt::Display for Failure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for Failure {}
-impl From<std::io::Error> for Failure {
-    fn from(e: std::io::Error) -> Self {
-        Self(e.to_string())
-    }
-}
 fn bad<T>(why: &str) -> Result<T, Failure> {
     Err(Failure(why.into()))
 }
@@ -36,7 +23,7 @@ pub struct Plugin {
     /// The negotiated contract's number, from 1.
     version: u8,
     offers: Option<Offers>,
-    sessions: execution::Sessions,
+    sessions: Sessions,
     // Session observations must precede any later call's eligibility check,
     // including while a nonjudge call is running and has not reported its ID.
     calls: std::sync::Mutex<()>,
@@ -136,7 +123,7 @@ impl Plugin {
             contract,
             version,
             offers,
-            sessions: execution::Sessions::default(),
+            sessions: Sessions::default(),
             calls: std::sync::Mutex::new(()),
         })
     }
@@ -179,25 +166,7 @@ impl Plugin {
         let Some(kind) = task.kind() else {
             return bad("use describe to negotiate");
         };
-        let full_objects = match &task {
-            Task::Review { base, head, .. } => sha(base) && sha(head),
-            Task::Fix { head, problems, .. } => {
-                sha(head)
-                    && problems
-                        .iter()
-                        .all(|p| !matches!(p,Problem::Conflict{base,..} if !sha(base)))
-            }
-            Task::Judge { head, .. } => sha(head),
-            Task::Proof { head, tree, .. } | Task::Prepare { head, tree, .. } => {
-                sha(head) && sha(tree)
-            }
-            Task::Job { .. } => true,
-            Task::Describe => false,
-        };
-        if !full_objects {
-            return bad("plugin requests require full Git object IDs");
-        }
-        valid_request(&task)?;
+        valid_task(&task)?;
         if !self.kinds.contains(&kind) {
             return bad("request kind was not described");
         }
@@ -324,7 +293,7 @@ impl Plugin {
             }
             (Task::Fix { problems, .. }, Answer::Fix { result, answers }) => {
                 match result {
-                    FixResult::Pushed { head } if !sha(head) => {
+                    FixResult::Pushed { head } if !valid_git_oid(head) => {
                         return bad("invalid pushed head");
                     }
                     FixResult::Unable { why } if why.trim().is_empty() => {
@@ -445,49 +414,6 @@ impl Plugin {
         }
         Ok(checked)
     }
-}
-
-/// What every request must say, whichever contract carries it. The v4
-/// fields are checked even when an older wire leaves them off, so the flow
-/// can't build a request a v4 plugin would get wrong.
-fn valid_request(task: &Task) -> Result<(), Failure> {
-    match task {
-        Task::Fix { pr, .. } if *pr == 0 => bad("a fix request needs its PR"),
-        Task::Judge {
-            pr, why, context, ..
-        } => {
-            if *pr == 0 {
-                return bad("a judge request needs its PR");
-            }
-            if why.is_empty() || why.iter().enumerate().any(|(i, w)| why[..i].contains(w)) {
-                return bad("a judge request needs a nonempty, unique why");
-            }
-            if !digest(context) {
-                return bad("a judge request needs its context digest");
-            }
-            Ok(())
-        }
-        Task::Prepare { checks, .. }
-            if !super::unique_nonblank(checks.iter().map(String::as_str)) =>
-        {
-            bad("prepare checks must be unique and nonblank")
-        }
-        _ => Ok(()),
-    }
-}
-pub(super) fn valid_identity(by: &Identity) -> Result<(), Failure> {
-    if by.engine.trim().is_empty() || by.session.as_ref().is_some_and(|s| s.trim().is_empty()) {
-        bad("empty plugin identity")
-    } else {
-        Ok(())
-    }
-}
-fn sha(s: &str) -> bool {
-    matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
-}
-/// A sha256 digest in lowercase hex.
-fn digest(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn execute(

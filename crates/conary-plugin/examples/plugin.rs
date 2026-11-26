@@ -1,5 +1,5 @@
 //! Copy this executable to start a plugin. See docs/plugins.md.
-use conary_core::plugin::*;
+use conary_plugin::*;
 use std::io;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

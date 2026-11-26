@@ -1,0 +1,23 @@
+[package]
+name = "conary-plugin"
+version = "5.0.0"
+description = "Wire contract types and validation for Conary executable plugins (conary-plugin v5)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["conary", "plugin", "protocol", "ci"]
+categories = ["development-tools"]
+publish = true
+
+[features]
+default = []
+schemars = ["dep:schemars"]
+
+[dependencies]
+schemars = { version = "1.2.3", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[lints]
+workspace = true

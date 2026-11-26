@@ -1,21 +1,22 @@
 //! Machine choices and the judge's session boundary are separate facts.
-use super::{Failure, Identity, Offers, Response, Task};
+use super::{Failure, Identity, Offers, Response, Task, valid_identity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 /// Supplied by the caller's configuration, never selected by Conary.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Choice {
     /// The engine the plugin runs on.
-    #[schemars(extend("x-spender" = false))]
+    #[cfg_attr(feature = "schemars", schemars(extend("x-spender" = false)))]
     pub engine: String,
     /// One of the models the plugin offers; `null` leaves it the plugin's.
-    #[schemars(extend("x-spender" = false))]
+    #[cfg_attr(feature = "schemars", schemars(extend("x-spender" = false)))]
     pub model: Option<String>,
     /// One of the efforts the plugin offers; `null` leaves it the plugin's.
-    #[schemars(extend("x-spender" = false))]
+    #[cfg_attr(feature = "schemars", schemars(extend("x-spender" = false)))]
     pub effort: Option<String>,
 }
 
@@ -136,7 +137,7 @@ fn fail(why: &str) -> Failure {
 impl Sessions {
     /// A new independent handle keeps known exclusions, never continuation
     /// eligibility or the unknown context of the preceding handle.
-    pub(super) fn independent(&self) -> Result<Self, Failure> {
+    pub fn independent(&self) -> Result<Self, Failure> {
         let history = self
             .0
             .lock()
@@ -151,7 +152,7 @@ impl Sessions {
 
     /// Only this handle's validated judge result can establish a continuation.
     /// A matching session string supplied by a writer/reviewer is insufficient.
-    pub(super) fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
+    pub fn prepare(&self, task: &Task, context: &Context) -> Result<(), Failure> {
         let mut history = self
             .0
             .lock()
@@ -171,7 +172,7 @@ impl Sessions {
 
     /// Observe before validating the answer. A rejected result does not undo
     /// the work or make its reported context safe for later judging.
-    pub(super) fn observe(&self, task: &Task, response: &Response) -> Result<(), Failure> {
+    pub fn observe(&self, task: &Task, response: &Response) -> Result<(), Failure> {
         if !matches!(task, Task::Judge { .. }) {
             let mut history = self
                 .0
@@ -194,7 +195,7 @@ impl Sessions {
 
     /// No usable response means the handle cannot identify the nonjudge
     /// context. Fail closed for judging; a new handle must start fresh.
-    pub(super) fn failed(&self, task: &Task) -> Result<(), Failure> {
+    pub fn failed(&self, task: &Task) -> Result<(), Failure> {
         if !matches!(task, Task::Judge { .. }) {
             self.0
                 .lock()
@@ -265,8 +266,10 @@ pub struct Negotiated {
 }
 
 impl Negotiated {
-    pub(super) fn validate(&self, requested: &Execution) -> Result<(), Failure> {
-        super::runner::valid_identity(&self.by)?;
+    /// Check that the negotiated identity, offers and requested execution are
+    /// valid and consistent.
+    pub fn validate(&self, requested: &Execution) -> Result<(), Failure> {
+        valid_identity(&self.by)?;
         if !self.offers.valid(&[]) {
             return Err(fail("invalid negotiated offers"));
         }
@@ -278,7 +281,7 @@ impl Negotiated {
     /// independence and kind-specific answer checks are separate checks.
     pub fn verify(&self, requested: &Execution, actual: &Provenance) -> Result<(), Failure> {
         self.validate(requested)?;
-        super::runner::valid_identity(&actual.by)?;
+        valid_identity(&actual.by)?;
         if actual.by.engine != self.by.engine {
             return Err(fail("plugin changed its engine identity"));
         }
@@ -287,7 +290,8 @@ impl Negotiated {
 }
 
 impl Execution {
-    pub(super) fn validate(&self, engine: &str, offers: &Offers) -> Result<(), Failure> {
+    /// Check that any requested choice matches `engine` and is allowed by `offers`.
+    pub fn validate(&self, engine: &str, offers: &Offers) -> Result<(), Failure> {
         if let Some(choice) = &self.choice
             && (choice.engine != engine
                 || !offers.allows(choice.model.as_deref(), choice.effort.as_deref()))
@@ -297,7 +301,8 @@ impl Execution {
         Ok(())
     }
 
-    pub(super) fn verify(&self, actual: &Executed, offers: &Offers) -> Result<(), Failure> {
+    /// Check that the actual execution matches the requested execution and `offers`.
+    pub fn verify(&self, actual: &Executed, offers: &Offers) -> Result<(), Failure> {
         if actual.context != self.context
             || !offers.allows(actual.model.as_deref(), actual.effort.as_deref())
             || (!offers.models.is_empty() && actual.model.is_none())

@@ -48,7 +48,7 @@ pub(super) fn example() -> PathBuf {
                     "build",
                     "--locked",
                     "-p",
-                    "conary-core",
+                    "conary-plugin",
                     "--example",
                     FIXTURE,
                     "--message-format=json",
