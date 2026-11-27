@@ -1,32 +1,16 @@
 //! v1 can carry located findings, red checks and conflicts. Other blockers
 //! must wait for a protocol which can express their source and repair.
 //!
-//! A finding is an open review thread, whoever opened it: the reviewer's
-//! (Codex's GitHub connector) or anyone's, as burrow's steward hands them.
-//! It's handed with the thread's id, since its answer is a reply on that
-//! thread, which is then resolved ([`super::publish::answers`]).
+//! A finding is an open review thread, whoever opened it: the configured
+//! reviewer or anyone else. It's handed with the thread's id, since its
+//! answer is a reply on that thread, which is then resolved
+//! ([`super::publish::answers`]).
 use super::*;
-use conary_core::plugin::{Finding, Problem, Severity};
-use std::sync::LazyLock;
+use conary_core::plugin::{Finding, Problem};
 
-/// The severity badge the connector opens each finding with.
-static BADGE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"!\[P([0-3]) Badge\]").expect("pattern"));
-
-/// The severity a finding opens with. A thread without the connector's
-/// badge, a person's, blocks landing as a P1 does.
-pub(super) fn severity(body: &str) -> Severity {
-    match BADGE.captures(body).map(|c| c[1].to_owned()) {
-        Some(p) if p == "0" => Severity::P0,
-        Some(p) if p == "2" => Severity::P2,
-        Some(p) if p == "3" => Severity::P3,
-        _ => Severity::P1,
-    }
-}
-
-/// Open thread `id` as a finding: where it is, its severity, and all it
-/// says, each comment under its author.
-fn thread(id: &str, t: &ReviewThread) -> Result<Problem, String> {
+/// Open thread `id` as a finding: where it is, its severity under `adapter`,
+/// and all it says, each comment under its author.
+fn thread(id: &str, t: &ReviewThread, adapter: &ReviewAdapter) -> Result<Problem, String> {
     let first = t
         .comments
         .first()
@@ -34,7 +18,7 @@ fn thread(id: &str, t: &ReviewThread) -> Result<Problem, String> {
     let line = t
         .line
         .ok_or("v1 fixer cannot represent a review thread on no line")?;
-    let severity = severity(&first.body);
+    let severity = adapter.severity(&first.body);
     let said: Vec<_> = t
         .comments
         .iter()
@@ -68,7 +52,7 @@ pub(crate) fn problems(f: &Facts, kind: Kind) -> Result<Vec<(Problem, Option<Str
                 .threads
                 .iter()
                 .filter(|(_, t)| !t.resolved)
-                .map(|(id, t)| Ok((thread(id, t)?, Some(id.clone()))))
+                .map(|(id, t)| Ok((thread(id, t, &f.settings.review_adapter)?, Some(id.clone()))))
                 .collect::<Result<_, String>>()?;
             if problems.is_empty() {
                 return Err("v1 fixer lacks an open GitHub review thread".into());
@@ -120,6 +104,7 @@ pub(crate) fn problems(f: &Facts, kind: Kind) -> Result<Vec<(Problem, Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::plugin::Severity;
 
     fn at(line: Option<u64>, comments: &[(&str, &str)]) -> ReviewThread {
         ReviewThread {
@@ -136,47 +121,63 @@ mod tests {
         }
     }
 
-    fn finding(t: &ReviewThread) -> Finding {
-        match thread("T1", t).unwrap() {
+    fn finding(t: &ReviewThread, adapter: &ReviewAdapter) -> Finding {
+        match thread("T1", t, adapter).unwrap() {
             Problem::Finding { finding } => finding,
             other => panic!("{other:?}"),
         }
     }
 
     #[test]
-    fn a_thread_is_handed_as_its_place_badge_and_whole_conversation() {
-        // As the connector opens one (burrow#1217), and a reply on it.
-        let badge = "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Title**\n\nWhy.";
-        let f = finding(&at(
-            Some(186),
-            &[
-                ("chatgpt-codex-connector[bot]", badge),
-                ("person", "Agreed."),
-            ],
-        ));
+    fn a_thread_is_handed_with_its_configured_adapters_severity_and_conversation() {
+        let neutral = "[P2] Title\n\nWhy.";
+        let f = finding(
+            &at(
+                Some(186),
+                &[("reviewer[bot]", neutral), ("person", "Agreed.")],
+            ),
+            &ReviewAdapter::Conary,
+        );
         assert_eq!(
             (f.path.as_str(), f.line, f.severity),
             ("src/lib.rs", 186, Severity::P2)
         );
         assert!(f.text.starts_with("GitHub review thread T1:"));
-        assert!(
-            f.text
-                .contains(&format!("chatgpt-codex-connector[bot]: {badge}"))
-        );
+        assert!(f.text.contains(&format!("reviewer[bot]: {neutral}")));
         assert!(f.text.ends_with("person: Agreed."));
-        // A person's thread has no badge: it blocks as a P1 does.
+        // A person's thread has no tag: it blocks as a P1 does.
         assert_eq!(
-            finding(&at(Some(3), &[("person", "P0 this")])).severity,
+            finding(
+                &at(Some(3), &[("person", "P0 this")]),
+                &ReviewAdapter::Conary
+            )
+            .severity,
+            Severity::P1
+        );
+
+        // Codex badge is parsed only under the Codex adapter, never under Conary.
+        let badge = "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Title**\n\nWhy.";
+        let codex_thread = at(
+            Some(186),
+            &[("reviewer[bot]", badge), ("person", "Agreed.")],
+        );
+        assert_eq!(
+            finding(&codex_thread, &ReviewAdapter::Codex).severity,
+            Severity::P2
+        );
+        assert_eq!(
+            finding(&codex_thread, &ReviewAdapter::Conary).severity,
             Severity::P1
         );
     }
 
     #[test]
     fn a_thread_with_nothing_to_place_it_is_refused() {
-        assert!(thread("T1", &at(None, &[("person", "this file")])).is_err());
-        assert!(thread("T1", &at(Some(1), &[])).is_err());
+        let adapter = ReviewAdapter::Conary;
+        assert!(thread("T1", &at(None, &[("person", "this file")]), &adapter).is_err());
+        assert!(thread("T1", &at(Some(1), &[]), &adapter).is_err());
         let mut outside = at(Some(1), &[("person", "x")]);
         outside.path = "../etc/passwd".into();
-        assert!(thread("T1", &outside).is_err());
+        assert!(thread("T1", &outside, &adapter).is_err());
     }
 }

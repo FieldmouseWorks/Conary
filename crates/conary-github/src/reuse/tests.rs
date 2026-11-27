@@ -233,6 +233,7 @@ fn a_train_candidates_attested_pass_on_the_tree_is_a_hit() {
     let steward = crate::ingest::Config {
         reviewers: vec![crate::sim::STEWARD.into()],
         review_authors: vec![],
+        review_adapter: Default::default(),
         own_contexts: vec!["review-settled".into()],
     };
     let policy = Policy::parse(br#"{"r2": []}"#).unwrap();

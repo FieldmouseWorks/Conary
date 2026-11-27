@@ -278,7 +278,9 @@ pub trait Consistent {
 }
 impl Consistent for super::Config {
     fn consistent(&self) -> Result<()> {
-        self.settings.validate_stage_labels()
+        self.settings.validate_stage_labels()?;
+        self.settings.validate_red_fix_branch()?;
+        self.settings.review_adapter.validate()
     }
 }
 impl Consistent for crate::reuse::Settings {}

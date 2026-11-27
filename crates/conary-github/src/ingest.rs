@@ -32,10 +32,12 @@ pub struct Config {
     /// recorded as reviews, and only its own statuses are its word. Anyone
     /// else's marker is text in a comment.
     pub reviewers: Vec<String>,
-    /// The reviewer's logins: Codex's GitHub connector's bot. What they say
-    /// of a head is recorded as a review, never attested (DESIGN.md 4.3).
-    /// None records no reviewer's word.
+    /// The reviewer's logins: what they say of a head is recorded as a review,
+    /// never attested (DESIGN.md 4.3). None records no reviewer's word.
     pub review_authors: Vec<String>,
+    /// The reviewer protocol adapter used to parse `review_authors`'s posts
+    /// and name their review check in the ledger.
+    pub review_adapter: crate::flow::ReviewAdapter,
     /// The steward's own status contexts. Its "settled" status is its landing
     /// decision, not evidence about the change, and a merge into trunk is a
     /// landing only on a head it settled. The train's own status is neither,

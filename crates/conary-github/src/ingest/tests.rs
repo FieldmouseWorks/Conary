@@ -25,6 +25,7 @@ fn config() -> Config {
     Config {
         reviewers: vec![STEWARD.into()],
         review_authors: vec![CONNECTOR.into()],
+        review_adapter: crate::flow::ReviewAdapter::Codex,
         own_contexts: vec!["review-settled".into()],
     }
 }

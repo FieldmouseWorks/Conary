@@ -62,9 +62,11 @@ pub(crate) fn settings() -> crate::flow::Settings {
     crate::flow::Settings {
         proof_slots: None,
         judge_engines: ["codex".into()].into(),
+        review_adapter: crate::flow::ReviewAdapter::Codex,
         review_authors: [CONNECTOR.into()].into(),
         flow_authors: [STEWARD.into()].into(),
         bot_emails: ["49699333+dependabot[bot]@users.noreply.github.com".into()].into(),
+        red_fix_branch: "autoland/red-".into(),
         owner_label: Some("needs-peter".into()),
         ..Default::default()
     }

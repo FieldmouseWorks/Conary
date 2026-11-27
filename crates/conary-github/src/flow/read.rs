@@ -136,6 +136,7 @@ fn gather(
         cut: true,
     };
     let classified = policy.classify(repo, &unknown).raise(pull.raises());
+    let red_fix = super::red_fix(&settings, trusted_authors, &pull);
     let mut facts = Facts {
         repo: repo.clone(),
         title: pull.title.clone(),
@@ -208,7 +209,7 @@ fn gather(
         stacked_on: None,
         open_prs: BTreeSet::new(),
         queue: BTreeMap::new(),
-        red_fix: super::red_fix(&pull, trusted_authors),
+        red_fix,
         base_held: false,
         queued_merge: pull.auto_merge.is_some(),
         train: TrainState::default(),

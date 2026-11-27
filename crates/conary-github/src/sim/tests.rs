@@ -423,6 +423,7 @@ mod flow_pass_author;
 
 mod flow_pass_threads;
 
+mod flow_adapters;
 mod flow_doors;
 mod flow_pass_context;
 mod flow_runner_lost;

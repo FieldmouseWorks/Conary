@@ -14,7 +14,7 @@ mod history;
 mod markers;
 mod priority;
 pub use degraded::{Degradation, Degraded, Mark, ReadError, Reading, Reads};
-pub use priority::{Level, RED_FIX_BRANCH, Rank, StallAfter, red_fix};
+pub use priority::{DEFAULT_RED_FIX_BRANCH, Level, Rank, StallAfter, red_fix};
 mod proofs;
 mod read;
 mod recover;
@@ -42,7 +42,7 @@ pub use train::{Candidate, Seat, TrainState};
 pub use ci::{Suite, Workflow};
 pub use markers::SealKey;
 pub use read::{BaseObservation, Read, Snapshot, read};
-pub use reviews::{Since, fingerprint};
+pub use reviews::{CustomReviewAdapter, ReviewAdapter, Since, fingerprint};
 pub use state::next;
 pub use types::*;
 

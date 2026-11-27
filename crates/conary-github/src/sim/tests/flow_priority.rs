@@ -210,7 +210,7 @@ fn only_a_trusted_fix_from_the_red_branch_into_trunk_is_ranked_high() {
             edit(p);
         });
         let pull = c.hub.pull(REPO, 3).unwrap();
-        assert_eq!(flow::red_fix(&pull, trusted), {
+        assert_eq!(flow::red_fix(&c.config.settings, trusted, &pull), {
             Rank::of(&c.config.settings, trusted, &pull).level == Level::High
         });
         Rank::of(&c.config.settings, trusted, &pull).level
