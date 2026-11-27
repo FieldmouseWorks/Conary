@@ -181,7 +181,6 @@
               inherit cargoArtifacts;
               nativeBuildInputs = [ pkgs.git ];
               passthru.testFiles = [
-                "crates/*"
                 "docs/lessons.toml"
               ]
               ++ map (name: "crates/${name}/**") workspaceMembers;
