@@ -7,10 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use conary_core::Store;
-use conary_core::ledger::Candidate;
+use conary_core::ledger::{Candidate, Invalid};
 use conary_core::op::{Attest, Body, CheckKind};
+use conary_core::store::StoreError;
 
-use super::{Failed, Forge, Settings, TrainError, record};
+use super::{Failed, Forge, Settings, TrainError};
 use crate::api::{CheckRun, Source};
 use crate::attest::{Subject, attested, skipped, stands_for};
 use crate::ingest::{Config, run_result, status_result};
@@ -162,32 +163,36 @@ pub(super) fn gate(
         }
     }
 
+    let mut ops = Vec::new();
     for run in &runs {
         let Some(f) = run_result(run) else { continue };
-        record(
-            store,
-            Body::CandidateEvidence {
-                candidate: c.id,
-                kind: CheckKind::Ci,
-                check: f.check,
-                result: f.result,
-                source: f.source,
-                attest: attests.get(&run.id).cloned(),
-            },
-        )?;
+        ops.push(Body::CandidateEvidence {
+            candidate: c.id,
+            kind: CheckKind::Ci,
+            check: f.check,
+            result: f.result,
+            source: f.source,
+            attest: attests.get(&run.id).cloned(),
+        });
     }
     for f in statuses.iter().rev().filter_map(status_result) {
-        record(
-            store,
-            Body::CandidateEvidence {
-                candidate: c.id,
-                kind: CheckKind::Ci,
-                check: f.check,
-                result: f.result,
-                source: f.source,
-                attest: None,
-            },
-        )?;
+        ops.push(Body::CandidateEvidence {
+            candidate: c.id,
+            kind: CheckKind::Ci,
+            check: f.check,
+            result: f.result,
+            source: f.source,
+            attest: None,
+        });
+    }
+    if !ops.is_empty() {
+        let mut writer = store.writer()?;
+        for body in ops {
+            match writer.record(body) {
+                Ok(_) | Err(StoreError::Invalid(Invalid::Duplicate)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     if !failed.is_empty() {

@@ -442,6 +442,121 @@ fn a_passs_step_reads_the_train_as_it_stands() {
     });
 }
 
+// A flow pass's train step (`flow/train.rs`) holds its repository's train lock,
+// not the ledger-wide writer lock: another repository's writer records and
+// moves the anchor freely during the step's GitHub reads and merges.
+#[test]
+fn a_passs_train_step_holds_up_no_other_repositorys_writer() {
+    unblocked(120, || {
+        const GATE: &str = "fresh / check";
+        let mut c = Case::new();
+        c.clean_review();
+        c.config.settings.train = true;
+        c.config.evidence.as_mut().unwrap().require = vec![GATE.into()];
+        let (ledger, mut a) = anchored(&c);
+        assert_eq!(pass(&c, &mut a), None);
+        let commit = {
+            let repo: conary_core::op::Repo = REPO.parse().unwrap();
+            let ledger = a.store.ledger();
+            let id = ledger
+                .train(&repo)
+                .and_then(|t| t.in_flight())
+                .expect("first pass built a candidate");
+            ledger.candidate(id).unwrap().commit.to_string()
+        };
+        c.hub.ci(&commit, &[(GATE, "success")]);
+        for run in c.hub.checks_on(&commit) {
+            c.hub.forget_artifacts(Some(run.id));
+            c.attest_run(&commit, run.id, None);
+        }
+
+        let wrote: Vec<Rc<Cell<Option<conary_core::OpId>>>> = vec![Rc::default(), Rc::default()];
+        for (pr, (call, theirs)) in
+            (1u64..).zip([Call::DefaultBranch, Call::Land].into_iter().zip(&wrote))
+        {
+            let (theirs, at) = (Rc::clone(theirs), ledger.path().to_owned());
+            c.hub.race(call.repo(REPO), move |hub| {
+                theirs.set(Some(other_writer(&at, hub, pr)));
+            });
+        }
+
+        assert_eq!(pass(&c, &mut a), None);
+        assert!(c.hub.merged(REPO, 3).is_some(), "PR 3 landed");
+        for w in &wrote {
+            assert!(
+                w.get().is_some(),
+                "other repository's writer ran during step"
+            );
+        }
+        let other: conary_core::op::Repo = "conary-test/other".parse().unwrap();
+        a.store.refresh().unwrap();
+        for pr in [1, 2] {
+            assert!(a.store.ledger().by_pr(&other, pr).is_some());
+        }
+        let public =
+            log::load_public_key(&log::public_path(&log::key_path(ledger.path()))).unwrap();
+        assert_eq!(
+            anchor::verify(ledger.path(), &public, &c.hub, ANCHOR).unwrap(),
+            a.store.head()
+        );
+    });
+}
+
+// A newer-policy R2 classification recorded for a PR seated in a mixed
+// candidate before its merge in a flow pass's train step reseats it alone
+// instead of landing it in the mixed candidate.
+#[test]
+fn a_passs_train_step_does_not_land_a_pr_classed_r2_by_a_newer_policy_before_merge() {
+    unblocked(120, || {
+        const GATE: &str = "fresh / check";
+        let mut c = Case::new();
+        c.clean_review();
+        c.config.settings.train = true;
+        c.config.evidence.as_mut().unwrap().require = vec![GATE.into()];
+        let (ledger, mut a) = anchored(&c);
+        assert_eq!(pass(&c, &mut a), None);
+        let repo: conary_core::op::Repo = REPO.parse().unwrap();
+        let commit = {
+            let ledger = a.store.ledger();
+            let id = ledger
+                .train(&repo)
+                .and_then(|t| t.in_flight())
+                .expect("first pass built a candidate");
+            assert!(!ledger.candidate(id).unwrap().alone);
+            ledger.candidate(id).unwrap().commit.to_string()
+        };
+        c.hub.ci(&commit, &[(GATE, "success")]);
+        for run in c.hub.checks_on(&commit) {
+            c.hub.forget_artifacts(Some(run.id));
+            c.attest_run(&commit, run.id, None);
+        }
+
+        // Fire inside `train::step`'s `land_next` (after `Call::DefaultBranch`
+        // and `land_next`'s initial `below_class` check, right before
+        // `before_land` / `forge.land`).
+        let raised: Rc<Cell<bool>> = Rc::default();
+        let (at, flag) = (ledger.path().to_owned(), Rc::clone(&raised));
+        c.hub.race(Call::DefaultBranch.repo(REPO), move |hub| {
+            arm_raise(hub, at, Call::CompareCommits, false, flag);
+        });
+        assert_eq!(pass(&c, &mut a), None);
+        assert!(raised.get(), "newer-policy R2 classification ran");
+        assert_eq!(
+            c.hub.merged(REPO, 3),
+            None,
+            "PR 3 merged in a non-alone candidate after R2 class upgrade"
+        );
+        a.store.refresh().unwrap();
+        let next_id = a
+            .store
+            .ledger()
+            .train(&repo)
+            .and_then(|t| t.in_flight())
+            .expect("PR 3 was rebuilt alone");
+        assert!(a.store.ledger().candidate(next_id).unwrap().alone);
+    });
+}
+
 /// How the ledger at `dir` says trunk moved to `after`, each time it does.
 pub(super) fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
     let public = log::load_public_key(&log::public_path(&log::key_path(dir))).unwrap();

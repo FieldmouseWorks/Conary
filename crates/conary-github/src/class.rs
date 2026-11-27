@@ -22,6 +22,8 @@ pub enum ClassError {
     Ingest(IngestError),
     Store(StoreError),
     Read(ReadError),
+    /// Taking the repository's train lock failed.
+    Lock(std::io::Error),
     /// The PR's head isn't the one the caller asked about.
     Moved {
         pr: u64,
@@ -36,6 +38,7 @@ impl std::fmt::Display for ClassError {
             Self::Ingest(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
             Self::Read(e) => e.fmt(f),
+            Self::Lock(e) => write!(f, "taking the train's lock: {e}"),
             Self::Moved { pr, head } => write!(f, "#{pr}'s head is {head} now"),
         }
     }
@@ -48,6 +51,7 @@ impl std::error::Error for ClassError {
             Self::Ingest(e) => Some(e),
             Self::Store(e) => Some(e),
             Self::Read(e) => Some(e),
+            Self::Lock(e) => Some(e),
             Self::Moved { .. } => None,
         }
     }
@@ -240,38 +244,46 @@ pub fn class(
         paths,
         last,
     } = read;
-    let number = pr.number;
-    MergeBases::load(store.writer().map_err(IngestError::Store)?.lock())
-        .and_then(|mut bases| bases.keep(asked))
-        .map_err(IngestError::Cache)?;
-    let (got, pr) = if store.ledger().by_pr(&repo, number).and_then(Change::last) == last {
-        let got = ingest::record(store, source, &config, &repo, &pr, base, read)?;
-        (got, pr)
-    } else {
-        ingest::pulled(store, source, &config, &repo, number)?
-    };
-    // The files a revision changes never change.
-    let paths = paths.filter(|_| got.revision == revision);
-    let c = store
-        .ledger()
-        .change(got.change)
-        .expect("ingest recorded it");
-    let now = &c.revision(got.revision).expect("ingest recorded it").head;
-    if now.as_str() != head {
-        return Err(ClassError::Moved {
-            pr: number,
-            head: now.to_string(),
-        });
-    }
-    classify(
-        store,
-        policy,
-        &repo,
-        files(source, &repo, paths),
-        got.change,
-        got.revision,
-        pr.raises(),
-    )
+    // Serialize classification writes under the repository's train lock first,
+    // then the ledger's writer lock, so a newer-policy R2 upgrade cannot land
+    // between a train step's class check and its merge.
+    crate::train::holding_repo(store, &repo, |store| {
+        store.holding(|store| {
+            let number = pr.number;
+            MergeBases::load(store.writer().map_err(IngestError::Store)?.lock())
+                .and_then(|mut bases| bases.keep(asked))
+                .map_err(IngestError::Cache)?;
+            let (got, pr) = if store.ledger().by_pr(&repo, number).and_then(Change::last) == last {
+                let got = ingest::record(store, source, &config, &repo, &pr, base, read)?;
+                (got, pr)
+            } else {
+                ingest::pulled(store, source, &config, &repo, number)?
+            };
+            // The files a revision changes never change.
+            let paths = paths.filter(|_| got.revision == revision);
+            let c = store
+                .ledger()
+                .change(got.change)
+                .expect("ingest recorded it");
+            let now = &c.revision(got.revision).expect("ingest recorded it").head;
+            if now.as_str() != head {
+                return Err(ClassError::Moved {
+                    pr: number,
+                    head: now.to_string(),
+                });
+            }
+            classify(
+                store,
+                policy,
+                &repo,
+                files(source, &repo, paths),
+                got.change,
+                got.revision,
+                pr.raises(),
+            )
+        })
+    })
+    .map_err(ClassError::Lock)??
 }
 
 /// [`ask`] on the ledger `store` holds, then [`class`] when it didn't hold
@@ -394,15 +406,18 @@ fn classify(
     let r = c.revision(revision).expect("the caller's revision");
     let paths = files(r.base.as_str(), r.head.as_str())?;
     let said = policy.classify(repo, &paths).raise(raised);
-    store.record(Body::Classify {
-        change,
-        revision,
-        class: said.class,
-        because: said.because.clone(),
-        docs: said.docs,
-        policy: policy.digest().to_owned(),
-        raised: said.raised.clone(),
-    })?;
+    crate::train::holding_repo(store, repo, |store| {
+        store.record(Body::Classify {
+            change,
+            revision,
+            class: said.class,
+            because: said.because.clone(),
+            docs: said.docs,
+            policy: policy.digest().to_owned(),
+            raised: said.raised.clone(),
+        })
+    })
+    .map_err(ClassError::Lock)??;
     Ok(Classes {
         change,
         revision,

@@ -164,8 +164,9 @@ across restart; replays are acknowledged and dropped.
 Passes of different repositories run at once, one at a time per repository:
 each repository's pass starts on a thread of its own as soon as it's due,
 whatever another repository's pass is doing, so one whose GitHub reads are
-slow or hang holds up only itself, but for the reads a merge or a train step
-makes under the ledger's writer lock ([flow](flow.md#state-and-workers)). Kicks coalesce at repository scope because
+slow or hang holds up only itself, but for the reads a direct merge, join or
+departure makes under the ledger's writer lock ([flow](flow.md#state-and-workers));
+a train step holds only its repository's train lock across GitHub reads. Kicks coalesce at repository scope because
 each pass observes shared occupancy and train state. A burst queued before a
 pass runs makes one pass; kicks during a running pass make one additional
 pass, after it. A running repository's status events, due bookings and

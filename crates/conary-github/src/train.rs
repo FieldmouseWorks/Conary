@@ -32,7 +32,10 @@ mod negative;
 mod release;
 mod retry;
 use gate::{Gate, gate};
+#[cfg(test)]
+pub(crate) use held::lock_path;
 pub use held::{drop_candidate, join, leave, step};
+pub(crate) use held::{holding_repo, step_before_land};
 use land::{land_next, open_landing, stopped_landing};
 pub use message::{Message, messages};
 pub use negative::{Negatives, verify as verify_negative};
@@ -124,6 +127,8 @@ pub enum TrainError {
     Ingest(IngestError),
     /// The ledger couldn't be read without its lock.
     Read(ReadError),
+    /// Taking the repository's train lock failed.
+    Lock(std::io::Error),
     /// GitHub's answer isn't what it says.
     Malformed(String),
     /// No randomness for a new candidate id.
@@ -154,6 +159,7 @@ impl std::fmt::Display for TrainError {
             Self::Store(e) => e.fmt(f),
             Self::Ingest(e) => e.fmt(f),
             Self::Read(e) => e.fmt(f),
+            Self::Lock(e) => write!(f, "taking the train's lock: {e}"),
             Self::Malformed(what) => write!(f, "GitHub sent {what}"),
             Self::Random(e) => write!(f, "no randomness for a candidate id: {e}"),
             Self::Unknown(pr) => write!(f, "#{pr} isn't in the ledger"),
@@ -177,6 +183,7 @@ impl std::error::Error for TrainError {
             Self::Api(e) => Some(e),
             Self::Ingest(e) => Some(e),
             Self::Read(e) => Some(e),
+            Self::Lock(e) => Some(e),
             _ => None,
         }
     }
@@ -207,6 +214,7 @@ impl From<ClassError> for TrainError {
             ClassError::Ingest(e) => Self::Ingest(e),
             ClassError::Store(e) => Self::Store(e),
             ClassError::Read(e) => Self::Read(e),
+            ClassError::Lock(e) => Self::Lock(e),
             ClassError::Moved { pr, head } => Self::Moved { pr, head },
         }
     }
@@ -396,8 +404,12 @@ fn out(
         .clone();
     let head = head_of(store, &member);
     forge.mark(&repo.to_string(), head.as_str(), Mark::Waiting, said, None)?;
-    store.record(body)?;
-    Ok(Leaving::Left)
+    store.reading()?;
+    match store.record(body) {
+        Ok(_) => Ok(Leaving::Left),
+        Err(StoreError::Invalid(Invalid::NotInTrain)) => Ok(Leaving::NotIn),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Takes each change in the repo's train raised by a label since it joined
@@ -416,6 +428,7 @@ fn reseat(
     source: &dyn Source,
     repo: &Repo,
 ) -> Result<(Vec<u64>, Vec<u64>), TrainError> {
+    store.refresh()?;
     let mut unready = Vec::new();
     for m in store.ledger().raised_since_join(repo) {
         let pr = pr_of(store, m.change);
@@ -426,7 +439,7 @@ fn reseat(
     let mut reseated = Vec::new();
     for m in store.ledger().below_class(repo) {
         let pr = pr_of(store, m.change);
-        if leave(store, forge, source, repo, pr, Left::Below)? == Leaving::Left {
+        if held_leave(store, forge, source, repo, pr, Left::Below)? == Leaving::Left {
             reseated.push(pr);
         }
     }
@@ -623,7 +636,7 @@ pub struct Stepped {
     pub now: Now,
 }
 
-/// [`step`], under the ledger's lock.
+/// [`step`], under the repository's train lock.
 fn held_step(
     store: &mut Store,
     forge: &dyn Forge,
@@ -631,7 +644,9 @@ fn held_step(
     config: &Config,
     repo: &Repo,
     settings: &Settings,
+    before_land: &mut dyn FnMut(&mut Store, u64) -> Result<bool, TrainError>,
 ) -> Result<Stepped, TrainError> {
+    store.refresh()?;
     let (released, unread) = release::release(store, forge, source, config, settings, repo)?;
     let mut stepped = Stepped {
         conflicts: Vec::new(),
@@ -649,6 +664,7 @@ fn held_step(
     };
     let trunk = forge.default_branch(&repo.to_string())?;
     stepped.now = loop {
+        store.refresh()?;
         stepped.finished.extend(finish(store, forge, source, repo)?);
         if let Some(now) = stopped_landing(store, forge, source, config, repo, &trunk)? {
             break now;
@@ -712,9 +728,16 @@ fn held_step(
                 }
             }
             State::Green => {
-                if let Some(now) =
-                    land_next(store, forge, source, config, &trunk, &c, &mut stepped)?
-                {
+                if let Some(now) = land_next(
+                    store,
+                    forge,
+                    source,
+                    config,
+                    &trunk,
+                    &c,
+                    &mut stepped,
+                    before_land,
+                )? {
                     break now;
                 }
             }
@@ -755,6 +778,7 @@ fn in_flight_or_built(
         return Ok(Some(id));
     }
     loop {
+        store.refresh()?;
         let Some(plan) = store.ledger().next(repo, settings.size) else {
             return Ok(None);
         };
@@ -775,6 +799,7 @@ fn in_flight_or_built(
                 } else {
                     stepped.conflicts.push(Conflict { pr, onto, base });
                 }
+                store.reading()?;
                 store.record(Body::Leave { change, why, trunk })?;
             }
         }

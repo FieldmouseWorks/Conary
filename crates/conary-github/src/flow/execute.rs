@@ -397,29 +397,32 @@ pub(crate) fn act<G: Write>(
                     .as_deref_mut()
                     .ok_or("train needs an anchored ledger")?;
                 let config = super::ledger::config(&f.settings);
-                // Held from before the last look, as for a merge.
-                let joined = store.holding(|store| -> Result<_> {
-                    permission(pass, github, f, &next.step, record, &mut Some(&mut *store))?;
-                    Ok(crate::train::join(
-                        store,
-                        github,
-                        github,
-                        &config,
-                        &f.repo,
-                        f.number,
-                        &f.revision.head,
-                        &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
-                        pass.policy,
-                        Some(
-                            &pass
-                                .config
-                                .evidence
-                                .as_ref()
-                                .ok_or("producer verifier missing")?
-                                .negatives()?,
-                        ),
-                    )?)
-                })??;
+                // Take the repository's train lock before the ledger's lock,
+                // keeping the lock order strict with `train::step`.
+                let joined = crate::train::holding_repo(store, &f.repo, |store| {
+                    store.holding(|store| -> Result<_> {
+                        permission(pass, github, f, &next.step, record, &mut Some(&mut *store))?;
+                        Ok(crate::train::join(
+                            store,
+                            github,
+                            github,
+                            &config,
+                            &f.repo,
+                            f.number,
+                            &f.revision.head,
+                            &record.memory.raised.iter().cloned().collect::<Vec<_>>(),
+                            pass.policy,
+                            Some(
+                                &pass
+                                    .config
+                                    .evidence
+                                    .as_ref()
+                                    .ok_or("producer verifier missing")?
+                                    .negatives()?,
+                            ),
+                        )?)
+                    })
+                })???;
                 if !matches!(
                     joined,
                     crate::train::Joined::Joined | crate::train::Joined::Already
@@ -528,9 +531,15 @@ pub(super) fn permission<G: Write>(
     let mut look = || -> Result<()> {
         super::scope::current(pass, github, f, record, now(store, pass.ledger)?)?;
         let ledger = now(store, pass.ledger)?;
-        // Read again only to act on: what it can't tell was recorded
-        // when the decision was made, and fails the effect here.
-        super::evidence::authorize(pass, github, f, step, &mut Default::default())?;
+        // Read again only to act on: a read or lookup that degrades here
+        // withdraws permission as `Withdrawn` so callers record it.
+        super::evidence::authorize(pass, github, f, step, &mut Default::default()).map_err(
+            |e| match e.downcast_ref::<super::evidence::CantTell>() {
+                Some(cant) => Box::new(super::degraded::Withdrawn(vec![cant.0.clone()]))
+                    as super::persist::Error,
+                None => e,
+            },
+        )?;
         super::scope::current(pass, github, f, record, ledger)?;
         if super::approval::required(f) && !super::approval::approved(pass, github, f)? {
             return Err("An authorized person's scoped approval was withdrawn".into());

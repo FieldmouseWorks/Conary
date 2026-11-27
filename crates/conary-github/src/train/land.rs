@@ -34,6 +34,7 @@ pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joi
 /// made is recorded, it's dropped, and what's left of it is built again.
 /// The last landing's head is retired first ([`retired`]). `Some` when the
 /// train waits on GitHub showing the merge.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
@@ -42,6 +43,7 @@ pub(super) fn land_next(
     trunk: &str,
     c: &Candidate,
     stepped: &mut Stepped,
+    before_land: &mut dyn FnMut(&mut Store, u64) -> Result<bool, TrainError>,
 ) -> Result<Option<Now>, TrainError> {
     let repo = &c.repo;
     retired(store, forge, source, c)?;
@@ -54,6 +56,7 @@ pub(super) fn land_next(
             .candidate(c.id)
             .is_none_or(|now| now.state != State::Green || now.landed.len() > c.landed.len())
     };
+    store.reading()?;
     let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
     if moved(store) {
         return Ok(None);
@@ -89,6 +92,7 @@ pub(super) fn land_next(
     // steward's but an outside op (DESIGN 4.5).
     if !got.settled {
         forge.mark(&full, head.as_str(), Mark::Waiting, UNSETTLED, None)?;
+        store.reading()?;
         store.record(Body::Leave {
             change: next.change,
             why: Left::Unready,
@@ -100,19 +104,7 @@ pub(super) fn land_next(
     // Classed R2 since it joined: its landing here would be on a tree no
     // gate ran, with changes after it in the candidate. It goes back in
     // alone instead, and the rest wait again.
-    if store
-        .ledger()
-        .below_class(repo)
-        .iter()
-        .any(|m| m.change == next.change)
-    {
-        forge.mark(&full, head.as_str(), Mark::Waiting, BELOW, None)?;
-        store.record(Body::Leave {
-            change: next.change,
-            why: Left::Below,
-            trunk: None,
-        })?;
-        stepped.reseated.push(pr);
+    if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
         return Ok(None);
     }
     let elsewhere = if c.trunk != trunk {
@@ -136,6 +128,19 @@ pub(super) fn land_next(
     let (why, description) = match messages {
         Err(why) => (why.clone(), why),
         Ok(messages) => {
+            // Re-read the ledger before `before_land` (and re-check after it,
+            // with no further lock wait) so an R2 class upgrade recorded
+            // meanwhile reseats the PR instead of landing it in a mixed batch.
+            store.refresh()?;
+            if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
+                return Ok(None);
+            }
+            if !before_land(store, pr)? {
+                return Ok(Some(landing(store, c)));
+            }
+            if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
+                return Ok(None);
+            }
             forge.mark(
                 &full,
                 head.as_str(),
@@ -154,6 +159,7 @@ pub(super) fn land_next(
             let last = source.pull(&full, pr)?;
             if raised_since_join(store, repo, next.change, &last) {
                 forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
+                store.reading()?;
                 store.record(Body::Leave {
                     change: next.change,
                     why: Left::Unready,
@@ -171,6 +177,7 @@ pub(super) fn land_next(
                 match forge.land(&full, pr, head.as_str(), &message)? {
                     PrMerge::Merged => {
                         stepped.landed.push(pr);
+                        store.reading()?;
                         ingest::pull(store, source, config, repo, pr)?;
                         if moved(store) {
                             return Ok(None);
@@ -187,6 +194,7 @@ pub(super) fn land_next(
     };
     // Its head may say it's landing; it isn't, and nothing else may.
     forge.mark(&full, head.as_str(), Mark::Refused, &description, None)?;
+    store.reading()?;
     store.record(Body::Leave {
         change: next.change,
         why: Left::Refused,
@@ -194,6 +202,38 @@ pub(super) fn land_next(
     })?;
     stepped.refused.push(Refused { pr, why });
     Ok(None)
+}
+
+/// If `change` is now below its class in `store.ledger()` (classed R2 since it
+/// joined a mixed candidate), puts it back in alone and returns `true`.
+#[allow(clippy::too_many_arguments)]
+fn reseat_if_below(
+    store: &mut Store,
+    forge: &dyn Forge,
+    repo: &Repo,
+    full: &str,
+    change: ChangeId,
+    pr: u64,
+    head: &CommitId,
+    stepped: &mut Stepped,
+) -> Result<bool, TrainError> {
+    if !store
+        .ledger()
+        .below_class(repo)
+        .iter()
+        .any(|m| m.change == change)
+    {
+        return Ok(false);
+    }
+    forge.mark(full, head.as_str(), Mark::Waiting, BELOW, None)?;
+    store.reading()?;
+    store.record(Body::Leave {
+        change,
+        why: Left::Below,
+        trunk: None,
+    })?;
+    stepped.reseated.push(pr);
+    Ok(true)
 }
 
 /// Whether a label raises `change` that it didn't join with: one recorded
@@ -275,6 +315,7 @@ pub(super) fn stopped_landing(
     let head = head_of(store, &next);
     if landing_marked(source, &full, head.as_str(), c.id)? {
         let pr = pr_of(store, next.change);
+        store.reading()?;
         let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
         let now = store.ledger().change(next.change).expect("in its train");
         let description = match (now.status(), now.landing.as_ref()) {

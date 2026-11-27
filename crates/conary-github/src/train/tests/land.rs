@@ -37,42 +37,104 @@ fn green_lands_in_order_with_the_trains_status_then_finishes_on_trunks_tree() {
     assert_eq!(hub.held(REMI, &train_branch(next)), [3, 4, 6].map(head));
 }
 
-// A store takes the ledger's lock only for each write, but a step holds it
-// from its first read of GitHub to its last merge: two steps never build or
-// land at once, and nothing that follows the rules moves trunk between a
-// step's read of it and its merge.
+// A step excludes other steps of its own repository only: its GitHub reads
+// hold no ledger-wide lock, so another repository's writer records freely
+// while two steps of the same repository never overlap.
 #[test]
-fn a_step_holds_the_ledgers_lock_throughout() {
+fn a_step_excludes_its_own_repositorys_steps_while_other_writers_record_freely() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = store(&dir);
     let hub = github(&[3, 4]);
     join_all(&mut store, &hub, &[3, 4]);
     let (id, _) = gating(&step_once(&mut store, &hub));
     hub.ci(&commit_of(&store, id), &[("check / check", "success")]);
-    let lock = dir.path().join("lock");
-    let held = || std::fs::File::open(&lock).unwrap().try_lock().is_err();
-    assert!(!held());
-    let seen: Vec<std::rc::Rc<std::cell::Cell<Option<bool>>>> =
-        (0..3).map(|_| Default::default()).collect();
-    for (on, seen) in [
-        On::from(Call::DefaultBranch),
-        landing(),
-        On::from(Call::Land).pr(4),
-    ]
-    .into_iter()
-    .zip(&seen)
-    {
-        let (seen, lock) = (std::rc::Rc::clone(seen), lock.clone());
+    let ledger_lock = dir.path().join("lock");
+    let ledger_held = || {
+        let f = std::fs::File::open(&ledger_lock).unwrap();
+        let locked = f.try_lock().is_err();
+        if !locked {
+            let _ = f.unlock();
+        }
+        locked
+    };
+    assert!(!ledger_held());
+
+    // During the step's GitHub reads and merges, the ledger-wide lock is free
+    // (so another repository's writer records freely), while this repository's
+    // train lock is held (and another repository's train lock is free).
+    let other_repo: Repo = "FieldmouseWorks/other".parse().unwrap();
+    let repo_lock = lock_path(dir.path(), &repo());
+    let other_train_lock = lock_path(dir.path(), &other_repo);
+    type Seen = std::rc::Rc<std::cell::Cell<Option<(bool, bool, bool)>>>;
+    let seen: Vec<Seen> = (0..3).map(|_| Default::default()).collect();
+    for (pr, (on, seen)) in (100u64..).zip(
+        [
+            On::from(Call::DefaultBranch),
+            landing(),
+            On::from(Call::Land).pr(4),
+        ]
+        .into_iter()
+        .zip(&seen),
+    ) {
+        let (seen, ledger_dir, other_repo, repo_lock, other_train_lock) = (
+            std::rc::Rc::clone(seen),
+            dir.path().to_owned(),
+            other_repo.clone(),
+            repo_lock.clone(),
+            other_train_lock.clone(),
+        );
         hub.race(on, move |_| {
-            let held = std::fs::File::open(&lock).unwrap().try_lock().is_err();
-            seen.set(Some(held));
+            let f = std::fs::File::open(ledger_dir.join("lock")).unwrap();
+            let ledger_free = f.try_lock().is_ok();
+            if ledger_free {
+                let _ = f.unlock();
+                let mut other = Store::open(
+                    conary_core::log::Lock::take(&ledger_dir).unwrap(),
+                    SigningKey::from_bytes(&[5; 32]),
+                    None,
+                )
+                .unwrap();
+                other
+                    .record(Body::Observe {
+                        change: ChangeId::new().unwrap(),
+                        repo: other_repo.clone(),
+                        pr,
+                        author: conary_core::op::Actor {
+                            kind: conary_core::op::ActorKind::Person,
+                            login: "someone".into(),
+                            session: None,
+                        },
+                    })
+                    .unwrap();
+            }
+            let repo_held = std::fs::File::open(&repo_lock).unwrap().try_lock().is_err();
+            let other_train_free = !other_train_lock.exists()
+                || std::fs::File::open(&other_train_lock)
+                    .unwrap()
+                    .try_lock()
+                    .map(|()| {
+                        let _ = std::fs::File::open(&other_train_lock).unwrap().unlock();
+                    })
+                    .is_ok();
+            seen.set(Some((ledger_free, repo_held, other_train_free)));
         });
     }
     assert_eq!(step_once(&mut store, &hub).landed, [3, 4]);
     for seen in &seen {
-        assert_eq!(seen.get(), Some(true));
+        assert_eq!(
+            seen.get(),
+            Some((true, true, true)),
+            "expected ledger lock free, own repo train lock held, other repo train lock free"
+        );
     }
-    assert!(!held());
+    store.refresh().unwrap();
+    for pr in 100..103 {
+        assert!(store.ledger().by_pr(&other_repo, pr).is_some());
+    }
+    assert!(!ledger_held());
+    let f = std::fs::File::open(&repo_lock).unwrap();
+    assert!(f.try_lock().is_ok(), "repo train lock outlived step");
+    let _ = f.unlock();
 }
 
 // Joining and leaving hold it too, from their first look at the ledger
