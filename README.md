@@ -187,9 +187,10 @@ gate whether CI already attested a pass on the same tree
 
 ## Building
 
-The Rust workspace is in `crates/`. It needs only rustup and cargo, on any
-Linux: rustup reads `rust-toolchain.toml` and installs the toolchain it pins.
-These are the exact commands the plain-Cargo CI workflow
+Plain Cargo is the primary standalone build and check path. The Rust workspace
+is in `crates/` and needs only `rustup`, `cargo`, and `git` on Linux: rustup
+reads `rust-toolchain.toml` and installs the toolchain it pins. These are the
+exact commands the plain-Cargo CI workflow
 ([`.github/workflows/cargo.yml`](.github/workflows/cargo.yml)) runs:
 
     cargo fmt --all -- --check
@@ -197,11 +198,15 @@ These are the exact commands the plain-Cargo CI workflow
     cargo test --workspace --locked
     cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
 
-With Nix, the flake runs the same checks in a sandbox. That's the attested gate
-CI runs on [`.github/workflows/flake.yml`](.github/workflows/flake.yml):
+`flake.nix` is an optional standalone Nix packaging and dev-shell wrapper with
+no `FieldmouseWorks/burrow` dependency. It builds the same binaries wrapped
+with `git` and runs the workspace checks in a sandbox (also used by the
+existing attested gate in
+[`.github/workflows/flake.yml`](.github/workflows/flake.yml)):
 
-    nix develop        # a shell with the toolchains
-    nix flake check    # rustfmt, clippy and the tests, as above
+    nix develop        # a shell with the pinned toolchain and git
+    nix build          # build cn, conaryd and conary-mcp wrapped with git
+    nix flake check    # rustfmt, clippy, workspace tests, package-git and secrets
 
 ## License
 

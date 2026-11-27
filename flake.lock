@@ -1,31 +1,5 @@
 {
   "nodes": {
-    "burrow": {
-      "inputs": {
-        "crane": "crane",
-        "microvm": "microvm",
-        "nixpkgs": "nixpkgs",
-        "nixpkgs-unstable": "nixpkgs-unstable",
-        "rust-overlay": [
-          "rust-overlay"
-        ]
-      },
-      "locked": {
-        "lastModified": 1795765583,
-        "narHash": "sha256-FO7mN6b/NUVLMtiK02whuCNKWwkomwXky65EjjeB2No=",
-        "ref": "main",
-        "rev": "1e6ec7bdee532adc5055b6d409abcce365e8c66e",
-        "revCount": 938,
-        "type": "git",
-        "url": "https://github.com/FieldmouseWorks/burrow"
-      },
-      "original": {
-        "ref": "main",
-        "rev": "1e6ec7bdee532adc5055b6d409abcce365e8c66e",
-        "type": "git",
-        "url": "https://github.com/FieldmouseWorks/burrow"
-      }
-    },
     "crane": {
       "locked": {
         "lastModified": 1794962885,
@@ -40,29 +14,6 @@
         "shallow": true,
         "type": "git",
         "url": "https://github.com/ipetkov/crane"
-      }
-    },
-    "microvm": {
-      "inputs": {
-        "nixpkgs": [
-          "burrow",
-          "nixpkgs"
-        ],
-        "spectrum": "spectrum"
-      },
-      "locked": {
-        "lastModified": 1795298370,
-        "narHash": "sha256-mruPu1cqOVBxPiRwrh6r1tnX1OAzMggy+rDk6YuqhK8=",
-        "ref": "refs/heads/main",
-        "rev": "430a46d03ef15f1b8b715fafa85f21847960b783",
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/microvm-nix/microvm.nix"
-      },
-      "original": {
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/microvm-nix/microvm.nix"
       }
     },
     "nixpkgs": {
@@ -82,33 +33,16 @@
         "url": "https://github.com/NixOS/nixpkgs"
       }
     },
-    "nixpkgs-unstable": {
-      "locked": {
-        "lastModified": 1795234589,
-        "narHash": "sha256-f/VVvxf5RsQgWVhUtefoca5ktVg0DA2bnkMOcmSnozo=",
-        "ref": "nixos-unstable",
-        "rev": "2786a2a72088ecf32aea5b3ec52099e6a7cff78f",
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/NixOS/nixpkgs"
-      },
-      "original": {
-        "ref": "nixos-unstable",
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/NixOS/nixpkgs"
-      }
-    },
     "root": {
       "inputs": {
-        "burrow": "burrow",
+        "crane": "crane",
+        "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
       "inputs": {
         "nixpkgs": [
-          "burrow",
           "nixpkgs"
         ]
       },
@@ -125,22 +59,6 @@
         "shallow": true,
         "type": "git",
         "url": "https://github.com/oxalica/rust-overlay"
-      }
-    },
-    "spectrum": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1786032750,
-        "narHash": "sha256-+Ba/kIn5BjvV7PN8bWOo7RoqgTY/Yv2M7qeMf3wS2Ag=",
-        "ref": "refs/heads/main",
-        "rev": "77d2389874bb092b8dbf05ecc5b1030372e80e98",
-        "revCount": 1417,
-        "type": "git",
-        "url": "https://spectrum-os.org/git/spectrum"
-      },
-      "original": {
-        "type": "git",
-        "url": "https://spectrum-os.org/git/spectrum"
       }
     }
   },

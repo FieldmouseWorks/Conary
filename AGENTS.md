@@ -92,25 +92,28 @@ a key that isn't its author's shows as Unverified, and CI fails it.
 
 ## Build and test
 
-The gate is the flake, the same locally, in a sandbox and in CI:
+Plain Cargo is the primary standalone build and check path, using the toolchain
+`rust-toolchain.toml` pins and matching `.github/workflows/cargo.yml`
+([README](README.md#building)):
 
-    nix develop        # the toolchains
-    nix flake check    # the gate: every check CI runs on the code
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo test --workspace --locked
+    cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
 
-That covers rustfmt, clippy on all targets with warnings as errors, and the
-tests of the Cargo workspace in `crates/`, on the toolchain
-`rust-toolchain.toml` pins. The same checks run with plain cargo
-([README](README.md#building)). Beside it, `.github/workflows/house.yml` holds
-each PR to the house rules a machine can read, its title and body included.
+`flake.nix` is an optional standalone Nix packaging and dev-shell wrapper
+(`nix develop`, `nix build`, `nix flake check`) that also backs the existing
+attested gate in `.github/workflows/flake.yml`. Beside them,
+`.github/workflows/house.yml` holds each PR to the house rules a machine can
+read, its title and body included.
 
 All logic lives in the libraries, `conary-plugin`, `conary-core` and
 `conary-github` (its GitHub side); conaryd, the MCP server and the `cn` CLI
 stay thin layers over them.
 
-Nix is how remi builds and checks Conary, never something the code needs.
-Paths, the socket, keys and the service manager are configuration the binary
-reads, so a systemd unit or another distro's package is a small wrapper, the
-way remi's Nix module is.
+Nix is never something the code needs. Paths, the socket, keys and the service
+manager are configuration the binary reads, so a systemd unit or another
+distro's package is a small wrapper, the way remi's Nix module is.
 
 <!-- house:prs v1 begin. Copied from FieldmouseWorks/burrow house/prs.md, verbatim. Change it there, not here: burrow's house sync rewrites everything between these markers. -->
 ## Pull requests
