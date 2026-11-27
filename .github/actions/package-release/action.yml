@@ -1,0 +1,82 @@
+name: Package and verify Conary release archive
+description: Package cn, conaryd, and conary-mcp into a versioned Linux tar.gz with SHA256SUMS and verify contents.
+inputs:
+  version:
+    description: Version label for the archive filename (e.g. v0.1.0 or dev-<sha>)
+    required: true
+  out-dir:
+    description: Output directory for the archive and SHA256SUMS
+    required: false
+    default: dist
+outputs:
+  archive:
+    description: Path to the generated .tar.gz archive
+    value: ${{ steps.package.outputs.archive }}
+  checksums:
+    description: Path to the generated SHA256SUMS file
+    value: ${{ steps.package.outputs.checksums }}
+runs:
+  using: composite
+  steps:
+    - name: Package release archive and SHA256SUMS
+      id: package
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [[ "$VERSION" == *".."* ]]; then
+          echo "invalid version label: $VERSION" >&2
+          exit 1
+        fi
+        target="$(rustc -vV | awk '/^host:/ { print $2 }')"
+        stem="conary-${VERSION}-${target}"
+        archive="${stem}.tar.gz"
+        stage="$(mktemp -d)"
+        trap 'rm -rf "$stage"' EXIT
+
+        install -d -m 0755 "$stage/$stem/bin" "$stage/$stem/systemd" "$OUT_DIR"
+        for bin in cn conaryd conary-mcp; do
+          install -m 0755 "target/release/$bin" "$stage/$stem/bin/$bin"
+        done
+        install -m 0644 LICENSE "$stage/$stem/LICENSE"
+        install -m 0644 packaging/systemd/conaryd.service "$stage/$stem/systemd/conaryd.service"
+
+        tar --sort=name --owner=0 --group=0 --numeric-owner -C "$stage" -czf "$OUT_DIR/$archive" "$stem"
+        (cd "$OUT_DIR" && sha256sum "$archive" > SHA256SUMS)
+
+        echo "archive=$OUT_DIR/$archive" >> "$GITHUB_OUTPUT"
+        echo "checksums=$OUT_DIR/SHA256SUMS" >> "$GITHUB_OUTPUT"
+    - name: Verify release archive, checksums, and binaries
+      shell: bash
+      env:
+        ARCHIVE: ${{ steps.package.outputs.archive }}
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        set -euo pipefail
+        (cd "$OUT_DIR" && sha256sum -c SHA256SUMS)
+
+        entries="$(tar -tzf "$ARCHIVE")"
+        for forbidden in conary-flow-test-plugin conary-execution-test-plugin conary-example-plugin; do
+          if grep -Fq "$forbidden" <<< "$entries"; then
+            echo "forbidden binary found in archive: $forbidden" >&2
+            exit 1
+          fi
+        done
+
+        actual_bins="$(grep -E '^[^/]+/bin/[^/]+$' <<< "$entries" | sed 's|.*/||' | LC_ALL=C sort)"
+        expected_bins="$(printf '%s\n' cn conary-mcp conaryd)"
+        if [ "$actual_bins" != "$expected_bins" ]; then
+          echo "unexpected binary set in archive:" >&2
+          echo "$actual_bins" >&2
+          exit 1
+        fi
+
+        verify_dir="$(mktemp -d)"
+        trap 'rm -rf "$verify_dir"' EXIT
+        tar -xzf "$ARCHIVE" -C "$verify_dir"
+        stem="$(basename "$ARCHIVE" .tar.gz)"
+        for bin in cn conaryd conary-mcp; do
+          "$verify_dir/$stem/bin/$bin" --help > /dev/null
+        done

@@ -191,12 +191,20 @@ Plain Cargo is the primary standalone build and check path. The Rust workspace
 is in `crates/` and needs only `rustup`, `cargo`, and `git` on Linux: rustup
 reads `rust-toolchain.toml` and installs the toolchain it pins. These are the
 exact commands the plain-Cargo CI workflow
-([`.github/workflows/cargo.yml`](.github/workflows/cargo.yml)) runs:
+([`.github/workflows/cargo.yml`](.github/workflows/cargo.yml)) runs (followed
+by smoke-testing the release tarball and `SHA256SUMS` produced by
+[`.github/workflows/release.yml`](.github/workflows/release.yml)):
 
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
     cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
+
+For standalone Linux installation from release tarballs or plain Cargo, the
+sample non-NixOS systemd unit
+([`packaging/systemd/conaryd.service`](packaging/systemd/conaryd.service)),
+and the audited GitHub App permissions table, see
+[docs/standalone.md](docs/standalone.md).
 
 `flake.nix` is an optional standalone Nix packaging and dev-shell wrapper with
 no `FieldmouseWorks/burrow` dependency. It builds the same binaries wrapped

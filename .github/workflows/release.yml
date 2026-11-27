@@ -1,0 +1,98 @@
+# Standalone Linux release packaging for cn, conaryd, and conary-mcp with no
+# Nix and no FieldmouseWorks/burrow dependency. Builds and verifies the
+# versioned .tar.gz archive and SHA256SUMS with read-only permissions, and
+# publishes a GitHub Release only on v* tags (push or tag workflow_dispatch).
+name: release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub Release (requires dispatching from a v* tag)"
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve release version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] || [ "$REF_TYPE" = "tag" ]; then
+            if [ "$INPUT_PUBLISH" = "true" ] && [[ "$REF_NAME" != v* ]]; then
+              echo "publish=true requires dispatching from a v* tag (got: $REF_NAME)" >&2
+              exit 1
+            fi
+            value="$REF_NAME"
+          elif [ "$INPUT_PUBLISH" = "true" ]; then
+            echo "publish=true requires dispatching from a v* git tag (e.g. --ref v0.1.0)" >&2
+            exit 1
+          else
+            value="dev-${SHA:0:12}"
+          fi
+          if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [[ "$value" == *".."* ]]; then
+            echo "invalid version label: $value" >&2
+            exit 1
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain
+      - name: Build release binaries
+        run: cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
+      - name: Package and verify release archive
+        uses: ./.github/actions/package-release
+        with:
+          version: ${{ steps.version.outputs.value }}
+          out-dir: dist
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: conary-release-${{ steps.version.outputs.value }}
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    needs: package
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: conary-release-${{ needs.package.outputs.version }}
+          path: dist
+      - name: Verify checksums before publishing
+        run: (cd dist && sha256sum -c SHA256SUMS)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "Conary $TAG" --generate-notes
+          fi

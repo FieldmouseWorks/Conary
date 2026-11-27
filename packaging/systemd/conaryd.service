@@ -1,0 +1,74 @@
+# Sample systemd service unit for standalone Linux installations of conaryd.
+# Install to /etc/systemd/system/conaryd.service after creating the `conary`
+# service user, installing binaries to /usr/local/bin, and running `cn init`
+# for /var/lib/conary. See docs/standalone.md for setup details.
+
+[Unit]
+Description=Conary ledger daemon
+Documentation=https://github.com/FieldmouseWorks/Conary/blob/main/docs/conaryd.md
+Documentation=https://github.com/FieldmouseWorks/Conary/blob/main/docs/standalone.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conary
+Group=conary
+
+# Creates /var/lib/conary (ledger), /run/conary (socket), and /etc/conary (config).
+StateDirectory=conary
+StateDirectoryMode=0700
+RuntimeDirectory=conary
+RuntimeDirectoryMode=0750
+ConfigurationDirectory=conary
+ConfigurationDirectoryMode=0750
+
+# Optional environment overrides (for example CONARY_EVENTS_CONFIG,
+# CONARY_GATE_REUSE_CONFIG, or proxy variables). Leading '-' makes it optional.
+EnvironmentFile=-/etc/conary/conaryd.env
+
+ExecStart=/usr/local/bin/conaryd \
+    --ledger /var/lib/conary \
+    --socket /run/conary/conaryd.sock
+# To enable verified webhook ingress and/or gate-reuse lookups, either set
+# CONARY_EVENTS_CONFIG / CONARY_GATE_REUSE_CONFIG in /etc/conary/conaryd.env
+# or override ExecStart via a drop-in (`systemctl edit conaryd.service`),
+# starting with an empty `ExecStart=` line to clear the default above:
+# [Service]
+# ExecStart=
+# ExecStart=/usr/local/bin/conaryd \
+#     --ledger /var/lib/conary \
+#     --socket /run/conary/conaryd.sock \
+#     --events-config /etc/conary/events.json \
+#     --gate-reuse-config /etc/conary/gate-reuse.json
+
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

@@ -8,6 +8,9 @@ builds toward, and its [section 12](docs/DESIGN.md#12-roadmap) is the road to
 done. Where the rest lives:
 
 - [README](README.md): what it does today, and building it with plain cargo.
+- [docs/standalone.md](docs/standalone.md): standalone Linux installation,
+  release packaging, sample `packaging/systemd/conaryd.service`, and GitHub
+  App permissions.
 - [docs/ci-attestation.md](docs/ci-attestation.md): how CI attests evidence,
   and the negative runs.
 - [docs/conaryd.md](docs/conaryd.md), [docs/mcp.md](docs/mcp.md): the
