@@ -189,13 +189,16 @@ gate whether CI already attested a pass on the same tree
 
 The Rust workspace is in `crates/`. It needs only rustup and cargo, on any
 Linux: rustup reads `rust-toolchain.toml` and installs the toolchain it pins.
+These are the exact commands the plain-Cargo CI workflow
+([`.github/workflows/cargo.yml`](.github/workflows/cargo.yml)) runs:
 
-    cargo build
-    cargo test
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo test --workspace --locked
+    cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
 
-With Nix, the flake runs the same checks in a sandbox. That's the gate CI runs:
+With Nix, the flake runs the same checks in a sandbox. That's the attested gate
+CI runs on [`.github/workflows/flake.yml`](.github/workflows/flake.yml):
 
     nix develop        # a shell with the toolchains
     nix flake check    # rustfmt, clippy and the tests, as above

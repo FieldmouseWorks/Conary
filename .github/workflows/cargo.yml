@@ -1,0 +1,40 @@
+# Plain-Cargo Linux CI: builds, lints and tests Conary on stock ubuntu-latest
+# with no Nix and no FieldmouseWorks/burrow dependency, using the toolchain
+# pinned in rust-toolchain.toml via the runner's stock rustup.
+name: cargo
+on:
+  pull_request:
+    # `edited` for a retarget: the PR's merge ref changes with its base. A title
+    # or body edit runs nothing (the job's `if`).
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+# A PR's new run (a push, a reopen or a retarget) cancels its previous
+# in-progress run; push runs on main, and title or body edits, are independent
+# and never cancel another run.
+concurrency:
+  group: ${{ format('{0} {1}', github.workflow, (github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base)) && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id)) }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  cargo:
+    if: github.event.action != 'edited' || github.event.changes.base
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace --locked
+      - name: Build release binaries
+        run: cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
