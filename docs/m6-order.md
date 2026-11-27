@@ -202,7 +202,10 @@ tasks and #293 those in
 | FP11 ([#422](https://github.com/FieldmouseWorks/Conary/issues/422), after SJ is deployed) | | SJ ([#424](https://github.com/FieldmouseWorks/Conary/issues/424), #312's: [m6-properties.md](m6-properties.md#sj-burrow-serve-the-stuck-role-through-the-job-kind)) | | |
 | FP12 ([#423](https://github.com/FieldmouseWorks/Conary/issues/423)) | | | | |
 | [#293](https://github.com/FieldmouseWorks/Conary/issues/293) | | | | |
-| #319 | | | | |
+| [#317](https://github.com/FieldmouseWorks/Conary/issues/317) | | | | |
+| [#319](https://github.com/FieldmouseWorks/Conary/issues/319) (strictly before #320) | | | | |
+| [#320](https://github.com/FieldmouseWorks/Conary/issues/320) (after #319, #291/#380, #296/#333) | | | | |
+| [#321](https://github.com/FieldmouseWorks/Conary/issues/321) (`#321a` after #317, #320, RT4) | | | | |
 
 Everything in this table is a build. Every lane then stops at a switch.
 
@@ -247,8 +250,10 @@ scheduler on the machine.
 
 After these, each of the following is a switch of its own, in its plan's
 order: proj's stages 5 to 8, the gate's stages 3 to 5, and M6's slices 6 to
-8 (#317, #318, #320), then #321's measured week. Stages that wait for the
-steward to be gone (proj's 8, the gate's 5) wait for S4.
+8 (#317, #318, #320 — planned in [m6-red-trunk.md](m6-red-trunk.md) and
+[m6-r0-batching-acceptance.md](m6-r0-batching-acceptance.md)), then #321's
+measured week (`#321b`). Stages that wait for the steward to be gone (proj's
+8, the gate's 5, and `#321b`) wait for S4.
 
 No switch has a date. On the day this was written the eleven 5c tasks
 weren't filed and burrow was shut, so S1 was not days away.
