@@ -11,17 +11,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1795680853,
-        "narHash": "sha256-JBQS18S9YzCz0IJA6v0BRPXpo7fa9+ZdZgeChOyOScA=",
+        "lastModified": 1795765583,
+        "narHash": "sha256-FO7mN6b/NUVLMtiK02whuCNKWwkomwXky65EjjeB2No=",
         "ref": "main",
-        "rev": "54860b0d333bb174ad8180cb1aba802443ff1585",
-        "revCount": 927,
+        "rev": "1e6ec7bdee532adc5055b6d409abcce365e8c66e",
+        "revCount": 938,
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       },
       "original": {
         "ref": "main",
-        "rev": "54860b0d333bb174ad8180cb1aba802443ff1585",
+        "rev": "1e6ec7bdee532adc5055b6d409abcce365e8c66e",
         "type": "git",
         "url": "https://github.com/FieldmouseWorks/burrow"
       }
