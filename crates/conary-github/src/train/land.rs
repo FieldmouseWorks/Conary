@@ -34,6 +34,7 @@ pub(super) const BELOW: &str = "back in the train alone, classed R2 since it joi
 /// made is recorded, it's dropped, and what's left of it is built again.
 /// The last landing's head is retired first ([`retired`]). `Some` when the
 /// train waits on GitHub showing the merge.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn land_next(
     store: &mut Store,
     forge: &dyn Forge,
@@ -42,6 +43,7 @@ pub(super) fn land_next(
     trunk: &str,
     c: &Candidate,
     stepped: &mut Stepped,
+    before_land: &mut dyn FnMut(&mut Store, u64) -> Result<bool, TrainError>,
 ) -> Result<Option<Now>, TrainError> {
     let repo = &c.repo;
     retired(store, forge, source, c)?;
@@ -54,6 +56,7 @@ pub(super) fn land_next(
             .candidate(c.id)
             .is_none_or(|now| now.state != State::Green || now.landed.len() > c.landed.len())
     };
+    store.reading()?;
     let (got, pull) = ingest::pulled(store, source, config, repo, pr)?;
     if moved(store) {
         return Ok(None);
@@ -89,6 +92,7 @@ pub(super) fn land_next(
     // steward's but an outside op (DESIGN 4.5).
     if !got.settled {
         forge.mark(&full, head.as_str(), Mark::Waiting, UNSETTLED, None)?;
+        store.reading()?;
         store.record(Body::Leave {
             change: next.change,
             why: Left::Unready,
@@ -107,6 +111,7 @@ pub(super) fn land_next(
         .any(|m| m.change == next.change)
     {
         forge.mark(&full, head.as_str(), Mark::Waiting, BELOW, None)?;
+        store.reading()?;
         store.record(Body::Leave {
             change: next.change,
             why: Left::Below,
@@ -136,6 +141,9 @@ pub(super) fn land_next(
     let (why, description) = match messages {
         Err(why) => (why.clone(), why),
         Ok(messages) => {
+            if !before_land(store, pr)? {
+                return Ok(Some(landing(store, c)));
+            }
             forge.mark(
                 &full,
                 head.as_str(),
@@ -154,6 +162,7 @@ pub(super) fn land_next(
             let last = source.pull(&full, pr)?;
             if raised_since_join(store, repo, next.change, &last) {
                 forge.mark(&full, head.as_str(), Mark::Waiting, RAISED, None)?;
+                store.reading()?;
                 store.record(Body::Leave {
                     change: next.change,
                     why: Left::Unready,
@@ -171,6 +180,7 @@ pub(super) fn land_next(
                 match forge.land(&full, pr, head.as_str(), &message)? {
                     PrMerge::Merged => {
                         stepped.landed.push(pr);
+                        store.reading()?;
                         ingest::pull(store, source, config, repo, pr)?;
                         if moved(store) {
                             return Ok(None);
@@ -187,6 +197,7 @@ pub(super) fn land_next(
     };
     // Its head may say it's landing; it isn't, and nothing else may.
     forge.mark(&full, head.as_str(), Mark::Refused, &description, None)?;
+    store.reading()?;
     store.record(Body::Leave {
         change: next.change,
         why: Left::Refused,
@@ -275,6 +286,7 @@ pub(super) fn stopped_landing(
     let head = head_of(store, &next);
     if landing_marked(source, &full, head.as_str(), c.id)? {
         let pr = pr_of(store, next.change);
+        store.reading()?;
         let (_, pull) = ingest::pulled(store, source, config, repo, pr)?;
         let now = store.ledger().change(next.change).expect("in its train");
         let description = match (now.status(), now.landing.as_ref()) {

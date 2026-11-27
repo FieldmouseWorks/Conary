@@ -619,7 +619,9 @@ so the wait is one run, however many are waiting.
   merge takes the head it merges, not the base, but nothing that follows
   the repo's rules can move trunk between that read and the merge: each
   merge into trunk needs the train's status, only the head being landed has
-  it, and a step holds the ledger's lock throughout. A write past the rules
+  it, and a step holds its repository's train lock throughout (excluding other
+  steps, joins, departures and drops of the same repository while taking the
+  ledger's writer lock only for each write). A write past the rules
   is an `outside` op, a violation for the owner, and `finish` records that
   trunk's tree isn't the candidate's. Whether a change joins alone is its
   class, which the join reads from the policy and records: the ledger

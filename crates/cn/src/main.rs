@@ -627,10 +627,21 @@ fn choose_tokens(
     Ok(Tokens::given(token))
 }
 
-/// The ledger, open for writing once its log holds the anchor on GitHub.
+/// The ledger, open for writing once its log holds the anchor on GitHub,
+/// holding its writer lock until dropped.
 fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
     let (api, config) = writer(cli, github)?;
     let anchored = open(cli, github, &api)?;
+    Ok((anchored, api, config))
+}
+
+/// The ledger, open for writing without holding its writer lock: for `cn
+/// train`, whose operations take the repository's train lock first and take
+/// the ledger's writer lock only after it (never in reverse order).
+fn write_train(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
+    let (api, config) = writer(cli, github)?;
+    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
+    let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
     Ok((anchored, api, config))
 }
 

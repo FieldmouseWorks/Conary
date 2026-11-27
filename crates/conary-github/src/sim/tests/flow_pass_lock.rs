@@ -442,6 +442,66 @@ fn a_passs_step_reads_the_train_as_it_stands() {
     });
 }
 
+// A flow pass's train step (`flow/train.rs`) holds its repository's train lock,
+// not the ledger-wide writer lock: another repository's writer records and
+// moves the anchor freely during the step's GitHub reads and merges.
+#[test]
+fn a_passs_train_step_holds_up_no_other_repositorys_writer() {
+    unblocked(120, || {
+        const GATE: &str = "fresh / check";
+        let mut c = Case::new();
+        c.clean_review();
+        c.config.settings.train = true;
+        c.config.evidence.as_mut().unwrap().require = vec![GATE.into()];
+        let (ledger, mut a) = anchored(&c);
+        assert_eq!(pass(&c, &mut a), None);
+        let commit = {
+            let repo: conary_core::op::Repo = REPO.parse().unwrap();
+            let ledger = a.store.ledger();
+            let id = ledger
+                .train(&repo)
+                .and_then(|t| t.in_flight())
+                .expect("first pass built a candidate");
+            ledger.candidate(id).unwrap().commit.to_string()
+        };
+        c.hub.ci(&commit, &[(GATE, "success")]);
+        for run in c.hub.checks_on(&commit) {
+            c.hub.forget_artifacts(Some(run.id));
+            c.attest_run(&commit, run.id, None);
+        }
+
+        let wrote: Vec<Rc<Cell<Option<conary_core::OpId>>>> = vec![Rc::default(), Rc::default()];
+        for (pr, (call, theirs)) in
+            (1u64..).zip([Call::DefaultBranch, Call::Land].into_iter().zip(&wrote))
+        {
+            let (theirs, at) = (Rc::clone(theirs), ledger.path().to_owned());
+            c.hub.race(call.repo(REPO), move |hub| {
+                theirs.set(Some(other_writer(&at, hub, pr)));
+            });
+        }
+
+        assert_eq!(pass(&c, &mut a), None);
+        assert!(c.hub.merged(REPO, 3).is_some(), "PR 3 landed");
+        for w in &wrote {
+            assert!(
+                w.get().is_some(),
+                "other repository's writer ran during step"
+            );
+        }
+        let other: conary_core::op::Repo = "conary-test/other".parse().unwrap();
+        a.store.refresh().unwrap();
+        for pr in [1, 2] {
+            assert!(a.store.ledger().by_pr(&other, pr).is_some());
+        }
+        let public =
+            log::load_public_key(&log::public_path(&log::key_path(ledger.path()))).unwrap();
+        assert_eq!(
+            anchor::verify(ledger.path(), &public, &c.hub, ANCHOR).unwrap(),
+            a.store.head()
+        );
+    });
+}
+
 /// How the ledger at `dir` says trunk moved to `after`, each time it does.
 pub(super) fn moves(dir: &Path, after: &str) -> Vec<&'static str> {
     let public = log::load_public_key(&log::public_path(&log::key_path(dir))).unwrap();

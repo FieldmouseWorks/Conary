@@ -114,11 +114,13 @@ pub(super) fn apply(f: &Facts, decision: Decision) -> Decision {
 /// candidate finished, has nothing to step, unless it holds a PR out as red
 /// alone: only a step sees that PR's gate pass since.
 ///
-/// The pass decided on each PR before it waited for the lock the step holds,
-/// and another writer can hold that for long. So under the lock it looks
-/// again at each permission it `granted` a PR that's seated, and doesn't
-/// step when one no longer stands. A PR seated without one had its settled
-/// status withdrawn by its decision, which the step reads before it lands it.
+/// The pass decided on each PR before it waited for the locks the step takes,
+/// and another writer can hold one for long. So under the repository's train
+/// lock it looks again at each permission it `granted` a PR that's seated
+/// before stepping, and looks again right before each landing (after the last
+/// ledger write ahead of the merge), and doesn't land when one no longer
+/// stands. A PR seated without one had its settled status withdrawn by its
+/// decision, which the step reads before it lands it.
 ///
 /// What a step changes under a PR (it landed, went red, was released,
 /// refused or taken out) books that PR's next pass at once, since the train's own statuses
@@ -134,11 +136,14 @@ pub(super) fn step<G: Write>(
     reports: &mut [Report],
 ) -> Result<()> {
     // Who's seated, and so whose failed decision keeps it from stepping, is
-    // read under the lock the step lands under.
-    store.holding(|store| held(pass, github, repo, data, granted, store, reports))?
+    // read under the repository's train lock, which the step holds throughout
+    // without holding the ledger-wide writer lock across GitHub reads.
+    crate::train::holding_repo(store, repo, |store| {
+        held(pass, github, repo, data, granted, store, reports)
+    })?
 }
 
-/// [`step`], under the ledger's lock.
+/// [`step`], under the repository's train lock.
 fn held<G: Write>(
     pass: &Pass<'_>,
     github: &G,
@@ -148,7 +153,7 @@ fn held<G: Write>(
     store: &mut Store,
     reports: &mut [Report],
 ) -> Result<()> {
-    let ledger = store.ledger();
+    let ledger = store.refresh()?;
     let Some(train) = ledger.train(repo) else {
         return Ok(());
     };
@@ -177,13 +182,30 @@ fn held<G: Write>(
     if seated.iter().any(unseen) || paused()? {
         return Ok(());
     }
-    for Granted { facts, step } in granted {
+    let check_granted = |store: &mut Store,
+                         reports: &mut [Report],
+                         Granted { facts, step }: &Granted,
+                         verify_settled: bool|
+     -> bool {
         let pr = facts.number;
-        if !seated.contains(&pr) {
-            continue;
-        }
         let looked = data.load(pr).and_then(|record| {
-            super::execute::permission(pass, github, facts, step, &record, &mut Some(&mut *store))
+            super::execute::permission(pass, github, facts, step, &record, &mut Some(&mut *store))?;
+            if verify_settled {
+                let statuses = github.statuses(&repo.to_string(), &facts.revision.head)?;
+                let settled = statuses
+                    .iter()
+                    .find(|s| s.context == SETTLED)
+                    .is_some_and(|s| {
+                        s.state == "success"
+                            && s.creator
+                                .as_ref()
+                                .is_some_and(|u| facts.settings.flow_authors.contains(&u.login))
+                    });
+                if !settled {
+                    return Err("review-settled permission was not observed".into());
+                }
+            }
+            Ok(())
         });
         if let Err(error) = looked {
             let mut said = format!("looking again before the train's step: {error}");
@@ -195,6 +217,15 @@ fn held<G: Write>(
             if let Some(report) = reports.iter_mut().find(|r| r.pr == pr) {
                 report.error = Some(said);
             }
+            return false;
+        }
+        true
+    };
+    for g in granted {
+        if !seated.contains(&g.facts.number) {
+            continue;
+        }
+        if !check_granted(store, reports, g, false) {
             return Ok(());
         }
     }
@@ -202,6 +233,7 @@ fn held<G: Write>(
     if paused()? {
         return Ok(());
     }
+    let mut stop_err: Option<Box<dyn std::error::Error + Send + Sync>> = None;
     let stepped = pass
         .config
         .evidence
@@ -214,10 +246,36 @@ fn held<G: Write>(
                 trust: evidence.trust()?,
             };
             let config = super::ledger::config(&pass.config.settings);
-            Ok(crate::train::step(
-                store, github, github, &config, repo, &settings,
+            Ok(crate::train::step_before_land(
+                store,
+                github,
+                github,
+                &config,
+                repo,
+                &settings,
+                &mut |store, pr| {
+                    // Re-check permission after the last ledger write ahead of
+                    // this merge so no lock wait comes between the look and
+                    // the merge.
+                    if let Some(g) = granted.iter().find(|g| g.facts.number == pr)
+                        && !check_granted(store, reports, g, true)
+                    {
+                        return Ok(false);
+                    }
+                    match paused() {
+                        Ok(true) => Ok(false),
+                        Ok(false) => Ok(true),
+                        Err(e) => {
+                            stop_err = Some(e);
+                            Ok(false)
+                        }
+                    }
+                },
             )?)
         });
+    if let Some(err) = stop_err {
+        return Err(err);
+    }
     match stepped {
         Ok(stepped) => {
             let touched: Vec<u64> = (stepped.conflicts.iter().map(|c| c.pr))

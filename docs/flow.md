@@ -226,8 +226,10 @@ digest notice keeps the PR moving. Composite map keys are
 stored as ordered pairs. Atomic rename, file and directory sync protect each
 record. A repository file lock serializes mutating passes and kicks.
 The ledger's writer lock is another: a pass takes it only for each write,
-so its reads of GitHub hold up no other writer, apart from those a merge and
-the train's operations make under it ([Effects and retries](#effects-and-retries)). An op the pass decided from
+so its reads of GitHub hold up no other writer, apart from those a merge,
+join or departure makes under it ([Effects and retries](#effects-and-retries));
+a train step holds only its repository's train lock across GitHub reads and
+takes the ledger's writer lock per write or batch. An op the pass decided from
 a read is refused once another writer recorded about the same change since
 that read began, and that PR is read again by the next pass. So is a `land`
 or an `outside` once another writer recorded either at the same trunk commit.
@@ -637,11 +639,15 @@ of the whole repo with `settings.train` on ends with one step of its train
 (`train::step`, the one `cn train step` runs), after every open PR's
 decision, so the PRs it joined are in it, and still under the repository's
 lock, so no two passes step at once and a quiet lock means no step is under
-way. The step, and the look at who's seated before it, hold the ledger's
-lock, as a join and a departure do. The decisions came before the wait for
-that lock, so once it's held the pass looks again at each seated PR it
-granted: one whose permission no longer stands has it withdrawn and fails
-for the next pass, and the train doesn't step. The step's `--require` is `evidence.require`, its attestations are
+way. The step, and the look at who's seated before it, hold the repository's
+train lock throughout (taking the ledger's writer lock only for each write or
+batch, so another repository's writers are never held up by its GitHub reads),
+while joins and departures take the repository's train lock first and then the
+ledger's writer lock. The decisions came before those waits, so once the train
+lock is held the pass looks again at each seated PR it granted (and again right
+before each landing, after the last ledger write ahead of the merge): one whose
+permission no longer stands has it withdrawn and fails for the next pass, and
+the train doesn't land it. The step's `--require` is `evidence.require`, its attestations are
 counted as `evidence` says, and its candidates hold at most
 `settings.train_size` changes. With no `evidence`, or nothing required, the
 step fails and nothing lands. It isn't taken in a dry run, in a pass of one

@@ -148,15 +148,28 @@ fn awaited(syscall: &Path) -> bool {
     })
 }
 
-/// The calls of a pass left alone at which another writer could take the
-/// lock and the effect isn't made yet.
-fn free(effect: Effect) -> Vec<usize> {
+fn open_lock(path: &Path) -> std::fs::File {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .unwrap()
+}
+
+/// The calls of a pass left alone at which another holder could take `lock`
+/// and the effect isn't made yet.
+fn free_on(effect: Effect, lock_of: impl Fn(&Path) -> PathBuf) -> Vec<usize> {
     let (c, dir) = ready(effect);
+    let lock_path = lock_of(&dir);
     let free: Rc<RefCell<Vec<usize>>> = Rc::default();
     let (seen, at, calls) = (Rc::clone(&free), dir.clone(), Cell::new(0));
     c.hub.watch(move |hub| {
         let call = calls.replace(calls.get() + 1);
-        let lock = std::fs::File::open(at.join("lock")).unwrap();
+        let lock = open_lock(&lock_path);
         if lock.try_lock().is_ok() {
             if !done(effect, hub, &at) {
                 seen.borrow_mut().push(call);
@@ -168,6 +181,10 @@ fn free(effect: Effect) -> Vec<usize> {
     c.pass(jobs::now(), false);
     assert!(done(effect, &c.hub, &dir), "{effect:?}, left alone");
     free.take()
+}
+
+fn free(effect: Effect) -> Vec<usize> {
+    free_on(effect, |dir| dir.join("lock"))
 }
 
 /// What a pass did after `change` was made as it waited.
@@ -185,11 +202,17 @@ struct Waited {
     degraded: bool,
 }
 
-/// A pass on which another writer takes the lock just before call `at`, and
-/// lets it go once the pass waits for it, `change` made by then. `None` when
-/// the pass didn't wait, or made the effect before it did.
-fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
+/// A pass on which another holder takes `lock_of(&dir)` just before call `at`,
+/// and lets it go once the pass waits for it, `change` made by then. `None`
+/// when the pass didn't wait, or made the effect before it did.
+fn waited_on(
+    effect: Effect,
+    change: Change,
+    at: usize,
+    lock_of: impl Fn(&Path) -> PathBuf,
+) -> Option<Waited> {
     let (c, dir) = ready(effect);
+    let lock_path = lock_of(&dir);
     let (blocked, over) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
@@ -207,7 +230,7 @@ fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
     c.hub.watch(move |hub| {
         let call = calls.replace(calls.get() + 1);
         if call == at {
-            let lock = std::fs::File::open(ledger.join("lock")).unwrap();
+            let lock = open_lock(&lock_path);
             if lock.try_lock().is_err() {
                 return;
             }
@@ -251,13 +274,20 @@ fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
     })
 }
 
+fn waited(effect: Effect, change: Change, at: usize) -> Option<Waited> {
+    waited_on(effect, change, at, |dir| dir.join("lock"))
+}
+
 /// `effect` with each change made as the pass waits after its last call
-/// outside the lock: the wait for the hold the effect is made under.
-fn refused(effect: Effect, changes: &[Change]) {
-    let last = *free(effect).last().expect("a call outside the lock");
+/// outside `lock_of`: the wait for the hold the effect is made under.
+fn refused_on(effect: Effect, changes: &[Change], lock_of: impl Fn(&Path) -> PathBuf) {
+    let last = *free_on(effect, &lock_of)
+        .last()
+        .expect("a call outside the lock");
     let mut wrong = Vec::new();
     for &change in changes {
-        let got = waited(effect, change, last).expect("the pass waited before its effect");
+        let got =
+            waited_on(effect, change, last, &lock_of).expect("the pass waited before its effect");
         // The train itself takes out a PR whose settled status was withdrawn.
         let left = effect == Effect::Step && change == Change::Withdrawn;
         if got.acted
@@ -270,6 +300,10 @@ fn refused(effect: Effect, changes: &[Change]) {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+fn refused(effect: Effect, changes: &[Change]) {
+    refused_on(effect, changes, |dir| dir.join("lock"));
 }
 
 #[test]
@@ -311,20 +345,44 @@ fn a_join_isnt_made_on_what_the_pass_saw_before_it_waited() {
 
 #[test]
 fn a_train_isnt_stepped_on_what_the_pass_saw_before_it_waited() {
-    unblocked(120, || {
-        refused(
-            Effect::Step,
-            &[
-                Change::R2,
-                Change::Hold,
-                Change::ChangesRequested,
-                Change::Thread,
-                Change::BaseMoved,
-                Change::EvidenceGone,
-                Change::Withdrawn,
-                Change::Unreadable,
-            ],
-        );
+    unblocked(240, || {
+        let changes = [
+            Change::R2,
+            Change::Hold,
+            Change::ChangesRequested,
+            Change::Thread,
+            Change::BaseMoved,
+            Change::EvidenceGone,
+            Change::Withdrawn,
+            Change::Unreadable,
+        ];
+        // Wait on the repository's train lock (taken before the step).
+        let repo: conary_core::op::Repo = REPO.parse().unwrap();
+        refused_on(Effect::Step, &changes, |dir| {
+            crate::train::lock_path(dir, &repo)
+        });
+        // And wait on the ledger's writer lock at the last ledger wait before
+        // the merge: no wait for the ledger's lock comes after the last look.
+        let free = free(Effect::Step);
+        let idx = free.partition_point(|&call| waited(Effect::Step, Change::Hold, call).is_some());
+        let last_wait = free[idx
+            .checked_sub(1)
+            .expect("step waited on the ledger lock before landing")];
+        let mut wrong = Vec::new();
+        for &change in &changes {
+            let got =
+                waited(Effect::Step, change, last_wait).expect("the pass waited before its effect");
+            let left = change == Change::Withdrawn;
+            if got.acted
+                || got.granted
+                || got.status.as_deref() != Some("pending")
+                || (got.error.is_none() && !left)
+                || (change == Change::Unreadable && !got.degraded)
+            {
+                wrong.push(format!("Step (ledger lock), {change:?}: {got:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     });
 }
 
@@ -342,11 +400,16 @@ fn no_wait_of_a_pass_comes_between_a_look_and_what_it_permits() {
                 let mut waits = 0;
                 let mut at = free[0];
                 while let Some(&next) = free.iter().find(|&&call| call >= at) {
-                    // Each call left alone found the lock free, so the
-                    // pass waits at every one: none is skipped unseen.
-                    let got = waited(effect, change, next).unwrap_or_else(|| {
-                        panic!("{effect:?}, {change:?}: the pass didn't wait at call {next}")
-                    });
+                    let got = match waited(effect, change, next) {
+                        Some(got) => got,
+                        // A train step holds no ledger lock during its final
+                        // looks and merge; `waited` returning `None` proves
+                        // zero ledger-lock waits remain before `Call::Land`.
+                        None if effect == Effect::Step => break,
+                        None => {
+                            panic!("{effect:?}, {change:?}: the pass didn't wait at call {next}")
+                        }
+                    };
                     waits += 1;
                     if got.acted || got.granted {
                         wrong.push(format!("{effect:?}, {change:?}, at {next}: {got:?}"));

@@ -15,7 +15,7 @@ use conary_github::attest::service::Producers;
 use conary_github::attest::{Signer, Trust};
 use conary_github::train::{self, Joined, Leaving, Negatives, Now, Settings, Stepped};
 
-use crate::{Cli, GithubArgs, Result, read, word, write, write_notes};
+use crate::{Cli, GithubArgs, Result, read, word, write_notes, write_train};
 
 /// Whose attestations count, as the machine names them. A producer keys
 /// file that's named and doesn't read is an error, never no producers.
@@ -208,7 +208,7 @@ pub fn run(cli: &Cli, command: &TrainCommand) -> Result<()> {
         | TrainCommand::Step { repo, github, .. }
         | TrainCommand::Drop { repo, github, .. } => (repo, github),
     };
-    let (mut a, api, config) = write(cli, github)?;
+    let (mut a, api, config) = write_train(cli, github)?;
     let store = &mut a.store;
     let done: Result<(Value, String)> = match command {
         TrainCommand::Join {
