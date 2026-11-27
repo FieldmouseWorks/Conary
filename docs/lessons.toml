@@ -76,7 +76,7 @@ lesson = "A proof, build, replay or poll runs as a program; a model only reads a
 from = ["https://github.com/FieldmouseWorks/burrow/issues/646", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["plugin contract", "flow proofs", "M6 slice 5c", "M6 slice 5d", "M6 slice 6", "M6 slice 7", "M6 slice 8"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "docs/plugins.md#versions", "crates/conary-plugin/src/lib.rs", "docs/m6-plugins.md#c3-flow-prepare-proofs-outside-the-proof-slots-and-send-no-model-run-check-to-a-proof-plugin", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/375", "https://github.com/FieldmouseWorks/Conary/issues/315", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+where = ["docs/DESIGN.md#properties", "docs/plugins.md#versions", "crates/conary-plugin/src/lib.rs", "docs/m6-plugins.md#c3-flow-prepare-proofs-outside-the-proof-slots-and-send-no-model-run-check-to-a-proof-plugin", "docs/m6.md#what-m6-doesnt-port", "docs/m6-r0-batching-acceptance.md#lessons-held-by-these-deliveries", "https://github.com/FieldmouseWorks/Conary/issues/375", "https://github.com/FieldmouseWorks/Conary/issues/315", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "degraded-counts-as-failed"
@@ -84,7 +84,7 @@ lesson = "A degraded outcome (a fallback taken, a lookup that half-worked) is re
 from = ["https://github.com/FieldmouseWorks/burrow/issues/641", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["flow", "op log", "M6 slice 5d", "M6 slice 5c", "M6 slice 6", "M6 slice 7", "M6 slice 8"]
 status = "built"
-where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#46-op-log", "docs/flow.md#degraded-paths", "crates/conary-github/src/sim/tests/flow_degraded.rs", "crates/conary-github/src/sim/tests/flow_degraded_reads.rs", "crates/conary-github/src/sim/tests/flow_degraded_marks.rs", "crates/conary-core/src/store.rs", "https://github.com/FieldmouseWorks/Conary/issues/416", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port", "https://github.com/FieldmouseWorks/Conary/issues/374", "https://github.com/FieldmouseWorks/Conary/issues/317", "https://github.com/FieldmouseWorks/Conary/issues/318", "https://github.com/FieldmouseWorks/Conary/issues/320"]
+where = ["docs/DESIGN.md#properties", "docs/DESIGN.md#46-op-log", "docs/flow.md#degraded-paths", "crates/conary-github/src/sim/tests/flow_degraded.rs", "crates/conary-github/src/sim/tests/flow_degraded_reads.rs", "crates/conary-github/src/sim/tests/flow_degraded_marks.rs", "crates/conary-core/src/store.rs", "https://github.com/FieldmouseWorks/Conary/issues/416", "https://github.com/FieldmouseWorks/Conary/issues/312", "docs/m6.md#what-m6-doesnt-port", "docs/m6-r0-batching-acceptance.md#lessons-held-by-these-deliveries", "https://github.com/FieldmouseWorks/Conary/issues/374", "https://github.com/FieldmouseWorks/Conary/issues/317", "https://github.com/FieldmouseWorks/Conary/issues/318", "https://github.com/FieldmouseWorks/Conary/issues/320"]
 
 [[lessons]]
 id = "same-inputs-same-verdict"
@@ -92,7 +92,7 @@ lesson = "The same inputs get the same verdict: a result proven on a tree is reu
 from = ["https://github.com/FieldmouseWorks/remi/issues/981", "https://github.com/FieldmouseWorks/burrow/issues/656"]
 applies = ["evidence", "train", "M6 slice 8", "M6 slice 5c", "M6 slice 5d", "M6 slice 6", "M6 slice 7"]
 status = "designed"
-where = ["docs/DESIGN.md#43-evidence", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/293", "https://github.com/FieldmouseWorks/Conary/issues/320", "https://github.com/FieldmouseWorks/Conary/issues/318"]
+where = ["docs/DESIGN.md#43-evidence", "docs/m6-r0-batching-acceptance.md#lessons-held-by-these-deliveries", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/293", "https://github.com/FieldmouseWorks/Conary/issues/319", "https://github.com/FieldmouseWorks/Conary/issues/320", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "heavy-work-waits-for-settled-inputs"
@@ -100,7 +100,7 @@ lesson = "Heavy work starts once its inputs have settled, not on every push."
 from = ["https://github.com/FieldmouseWorks/remi/issues/981", "https://github.com/FieldmouseWorks/burrow/issues/656"]
 applies = ["flow", "train", "M6 slice 8", "M6 slice 5d"]
 status = "designed"
-where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/296", "https://github.com/FieldmouseWorks/Conary/issues/320"]
+where = ["docs/DESIGN.md#12-roadmap", "docs/m6-r0-batching-acceptance.md#delivery-3-320--one-gate-batch-execution-through-the-existing-train", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/296", "https://github.com/FieldmouseWorks/Conary/issues/320"]
 
 [[lessons]]
 id = "spenders-off-by-default"
@@ -172,7 +172,7 @@ lesson = "A pipeline piece is a reusable library any machine can use; a machine 
 from = ["https://github.com/FieldmouseWorks/burrow/issues/656", "https://github.com/FieldmouseWorks/remi/issues/981"]
 applies = ["conary-core", "conary-github", "M7 standalone setup", "M6 slice 5c", "M6 slice 8", "upkeep"]
 status = "designed"
-where = ["docs/DESIGN.md#12-roadmap", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs", "https://github.com/FieldmouseWorks/Conary/issues/316", "https://github.com/FieldmouseWorks/Conary/issues/319", "https://github.com/FieldmouseWorks/Conary/issues/320"]
+where = ["docs/DESIGN.md#12-roadmap", "docs/m6-r0-batching-acceptance.md#lessons-held-by-these-deliveries", "https://github.com/FieldmouseWorks/Conary/issues/378", "crates/conary-github/src/sim/tests/flow_defaults.rs", "https://github.com/FieldmouseWorks/Conary/issues/316", "https://github.com/FieldmouseWorks/Conary/issues/319", "https://github.com/FieldmouseWorks/Conary/issues/320"]
 
 [[lessons]]
 id = "pause-vacates"
@@ -188,7 +188,7 @@ lesson = "Work starts only when its result can decide something, by the cheapest
 from = ["https://github.com/FieldmouseWorks/remi/issues/1079", "https://github.com/FieldmouseWorks/burrow/issues/815", "https://github.com/FieldmouseWorks/burrow/issues/798", "https://github.com/FieldmouseWorks/burrow/issues/812"]
 applies = ["flow", "train", "M6 slice 5d", "M6 slice 8"]
 status = "designed"
-where = ["docs/DESIGN.md#properties", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/320", "docs/m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline"]
+where = ["docs/DESIGN.md#properties", "docs/m6-r0-batching-acceptance.md#delivery-3-320--one-gate-batch-execution-through-the-existing-train", "https://github.com/FieldmouseWorks/Conary/issues/291", "https://github.com/FieldmouseWorks/Conary/issues/292", "https://github.com/FieldmouseWorks/Conary/issues/320", "docs/m6-properties.md#fp2-flow-pause-and-hold-vacate-and-resume-without-the-pipeline"]
 
 # Seeded 2026-11-14 from the stalls of 2026-11-13 and 11-14.
 # docs/m6-order.md says which plan answers each one.
@@ -215,7 +215,7 @@ lesson = "Waiting on CI starts no model and ends only on the verdict; time queue
 from = ["https://github.com/FieldmouseWorks/remi/issues/1238", "https://github.com/FieldmouseWorks/burrow/issues/1043"]
 applies = ["flow", "waits and deadlines", "M6 slice 5d", "M6 slice 6"]
 status = "built"
-where = ["docs/DESIGN.md#properties", "docs/flow.md#deadlines", "crates/conary-github/src/sim/tests/flow_queue.rs", "docs/m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall", "https://github.com/FieldmouseWorks/Conary/issues/317"]
+where = ["docs/DESIGN.md#properties", "docs/flow.md#deadlines", "crates/conary-github/src/sim/tests/flow_queue.rs", "docs/m6-properties.md#fp7-flow-a-ci-wait-costs-nothing-and-its-queue-time-is-no-stall", "docs/m6-r0-batching-acceptance.md#delivery-1-317--r0-post-landing-review-and-durable-repair", "https://github.com/FieldmouseWorks/Conary/issues/317"]
 
 [[lessons]]
 id = "publish-only-news"
