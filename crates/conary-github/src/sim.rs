@@ -685,6 +685,11 @@ impl Hub {
         }
     }
 
+    /// Changes PR `number`'s timeline events, oldest first, in place.
+    pub(crate) fn edit_timeline(&self, repo: &str, number: u64, f: impl FnOnce(&mut Vec<Value>)) {
+        self.repo_mut(repo, |r| f(r.timeline.entry(number).or_default()));
+    }
+
     /// Puts an event GitHub's API sent on PR `number`'s timeline.
     pub(crate) fn put_event(&self, repo: &str, number: u64, event: &str, at: &str) {
         let mut e = fixtures::event();

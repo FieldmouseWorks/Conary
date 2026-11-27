@@ -101,9 +101,10 @@ pub(crate) fn holding(
     if !f.settings.train && *step == Step::Merge && f.classified.class == conary_core::Class::R2 {
         switches.push((Switch::TrainOff, vec![]));
     }
-    // A person's approval is what a person's owner label, an R2 change or a
-    // judge's owner verdict waits on, at the owner or at a landing step.
-    let approval = super::approval::required(f) || super::approval::person_labelled(f, memory);
+    // A person's approval is what an owner label not the flow's own, an R2
+    // change or a judge's owner verdict waits on, at the owner or at a
+    // landing step.
+    let approval = super::approval::required(f) || super::approval::label_is_door(f, memory);
     let owner_decides = unswitched.stage == Stage::Owner && f.trusted && f.complete && approval;
     if f.settings.people.is_empty() && (owner_decides || granting && super::approval::required(f)) {
         switches.push((Switch::NoPeople, vec![]));

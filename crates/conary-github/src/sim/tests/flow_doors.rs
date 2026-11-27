@@ -161,9 +161,10 @@ fn steward_labels(c: &Case) {
 }
 
 #[test]
-fn a_label_an_app_put_on_lists_nothing_of_its_own() {
-    // The steward listed the PR, with no mark of the flow's: its label is
-    // no door, and the flow makes its own call.
+fn a_label_the_flows_account_put_on_lists_nothing_of_its_own() {
+    // The steward listed the PR, as the App the flow posts as and with no
+    // mark of the flow's: its label is no door, and the flow makes its own
+    // call.
     let c = Case::new();
     let own = c.view(4000);
     steward_labels(&c);
@@ -174,6 +175,62 @@ fn a_label_an_app_put_on_lists_nothing_of_its_own() {
     c.label(&[]);
     c.label(&["needs-peter"]);
     assert_eq!(c.view(4001).step, Step::ListOwner(Door::Label));
+}
+
+#[test]
+fn the_flows_account_is_told_whatever_its_case() {
+    // GitHub's logins are case-insensitive, and so is `flow_authors`.
+    let c = Case::new();
+    let own = c.view(4000);
+    c.hub.label_as(
+        REMI,
+        3,
+        &["needs-peter"],
+        (&crate::sim::STEWARD.to_uppercase(), "Bot"),
+    );
+    assert_eq!(c.view(4000).step, own.step);
+}
+
+/// The App a job acts as, the machine's workers: not one the flow posts as.
+const JOB: &str = "fieldmouseworks-workers[bot]";
+
+#[test]
+fn a_label_a_job_put_on_holds_and_lists_the_owner() {
+    // A job escalated the PR to the owner with the label and stopped: it
+    // holds the PR as a person's label does, listed with the label's door,
+    // however clean its review and CI.
+    let mut c = Case::new();
+    c.settings.job_login = Some(JOB.into());
+    assert_eq!(c.view(4000).step, Step::Merge);
+    c.hub.label_as(REMI, 3, &["needs-peter"], (JOB, "Bot"));
+    let n = c.pass(4001);
+    assert_eq!(n.step, Step::ListOwner(Door::Label), "{n:?}");
+    assert_eq!(n.stage, Stage::Owner);
+    assert_eq!(request(&n)["key"]["door"], json!("label"));
+    // Any other App's is the same door: only the flow's own is none.
+    c.label(&[]);
+    c.pass(4002);
+    c.hub
+        .label_as(REMI, 3, &["needs-peter"], ("some-app[bot]", "Bot"));
+    assert_eq!(c.view(4003).step, Step::ListOwner(Door::Label));
+}
+
+#[test]
+fn a_label_by_an_account_since_deleted_waits_untold() {
+    // GitHub names no actor for a deleted account: who put it on can't be
+    // told, so it waits as a failed read does.
+    let c = Case::new();
+    c.hub.label_as(REMI, 3, &["needs-peter"], (JOB, "Bot"));
+    c.hub.edit_timeline(REMI, 3, |events| {
+        for e in events.iter_mut() {
+            e["actor"] = Value::Null;
+        }
+    });
+    let n = c.view(4000);
+    assert!(
+        n.description.contains("who put it on can't be told"),
+        "{n:?}"
+    );
 }
 
 #[test]
@@ -232,7 +289,7 @@ fn a_label_whose_timeline_names_no_one_waits_overdue() {
 
 #[test]
 fn a_label_no_one_can_be_told_put_on_waits_named() {
-    // The read fails: the label is neither listed as a person's door nor
+    // The read fails: the label is neither listed as a door nor
     // gone past, and the read is named.
     let c = Case::new();
     c.label(&["needs-peter"]);

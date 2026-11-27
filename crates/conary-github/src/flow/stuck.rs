@@ -269,7 +269,7 @@ pub(super) fn stall(
 
 /// Whether the flow works the PR past every gate [`super::decide::decide`]
 /// holds it at before its own steps: open and ready, trusted, read in
-/// full, on no base it waits for, and not at a person's owner label. A
+/// full, on no base it waits for, and not at an owner label that's a door. A
 /// stall a failed effect's strikes make, decided before those gates, is
 /// never the stuck role's on a PR they hold.
 fn worked(f: &Facts, m: &Memory) -> bool {
@@ -279,7 +279,7 @@ fn worked(f: &Facts, m: &Memory) -> bool {
         && f.complete
         && !f.base_held
         && f.stacked_on.is_none()
-        && (f.owner_approved || !super::approval::person_labelled(f, m))
+        && (f.owner_approved || !super::approval::label_is_door(f, m))
 }
 
 /// The `job` request's prompt: the handoff, as the stuck role's plugin

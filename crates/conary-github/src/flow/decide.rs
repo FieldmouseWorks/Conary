@@ -135,12 +135,12 @@ pub(super) fn decide(f: &Facts, m: &mut Memory, now: u64) -> Decision {
             "Stacked on an open PR: waiting to be retargeted",
         );
     }
-    match super::approval::person_label(f, m) {
+    match super::approval::label_door(f, m) {
         _ if f.owner_approved => {}
-        Some(super::approval::PersonLabel::Person) => return owner(f, Door::Label),
-        // A person's door can't be told from an App's listing: the flow
+        Some(super::approval::LabelDoor::Open) => return owner(f, Door::Label),
+        // A door can't be told from the flow's own listing: the flow
         // neither lists it nor goes on past it, and reads it again.
-        Some(super::approval::PersonLabel::Untold) => {
+        Some(super::approval::LabelDoor::Untold) => {
             return wait(
                 Stage::None,
                 None,
