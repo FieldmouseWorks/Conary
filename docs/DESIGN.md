@@ -112,7 +112,7 @@ milestone's exit check in the [roadmap](#12-roadmap) includes it.
 | `recover-by-kind` | At an expired stage the flow tries, once per stall, the recovery GitHub allows: a head behind its base is updated, and a cancelled check is brought back the way its kind permits, never one GitHub won't rerun. A refused recovery isn't tried again in that stall, and the status quotes GitHub's error | [FP8](m6-properties.md#fp8-flow-bring-back-a-stalled-stage-by-a-way-github-allows-and-quote-its-error) |
 | `scope-below-a-repo` | Not yet stated | [#313](https://github.com/FieldmouseWorks/Conary/issues/313) |
 | `publish-only-news` | A published list of what's stuck is one issue whose body is edited in place. A comment, and with it a job's turn, goes up only for a new item someone can act on; a cleared or reworded item edits the body and posts nothing. The job reads the list from the machine, never from the body's edit history | [#316](https://github.com/FieldmouseWorks/Conary/issues/316)'s task U5 ([m6-upkeep.md](m6-upkeep.md#u5-upkeep-the-owner-and-stuck-issues-kept-in-place-notifying-only-for-news)) |
-| `repair-ahead-of-red` | Not yet stated | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) |
+| `repair-ahead-of-red` | Whatever repairs a red trunk (a recovery `conary/undo/...` PR or a trusted `autoland/red-...` fix PR) never waits on the red trunk's own pending or hung CI runs, never waits behind ordinary base updates, and ranks ahead of every ordinary PR (including `high`) for proof slots, pass order and train admission | M6 slice 7, [#318](https://github.com/FieldmouseWorks/Conary/issues/318) ([m6-red-trunk.md](m6-red-trunk.md#rt1-flow-prioritize-red-trunk-repairs-ahead-of-red-runs-and-ordinary-work)) |
 
 #### Acceptance, lesson by lesson
 
@@ -315,8 +315,10 @@ Three rules make it trustworthy:
    tree gets its own: its train's candidate's, when trunk's tree after the
    landing is the candidate's (section 4.7), and otherwise trunk's CI's,
    recorded against the landing. A red result there starts an undo or a fix
-   (section 6). That is the owner's call for R0 and R1, where a revert
-   undoes the damage. R2 is different: undo can't help, so an R2 change
+   (section 6): for R0 and R1, where a revert undoes the damage, recovery
+   locates and undoes the culprit automatically with no person stepping in
+   (section 12, [M6 slice 7](m6-red-trunk.md)), gated by the repo's recovery
+   setting. R2 is different: undo can't help, so an R2 change
    lands only on evidence for the candidate tree itself (its head merged
    onto the trunk commit it lands on), and if trunk moves before the merge,
    that evidence no longer counts and the checks run again. Equal trees

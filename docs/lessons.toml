@@ -198,8 +198,8 @@ id = "repair-ahead-of-red"
 lesson = "A repair to a red trunk never waits on the red trunk's own runs, and goes ahead of everything else in line."
 from = ["https://github.com/FieldmouseWorks/burrow/issues/1102", "https://github.com/FieldmouseWorks/burrow/issues/1108"]
 applies = ["flow", "red-trunk recovery", "M6 slice 7"]
-status = "open"
-where = ["https://github.com/FieldmouseWorks/Conary/issues/318"]
+status = "designed"
+where = ["docs/DESIGN.md#properties", "docs/m6-red-trunk.md#rt1-flow-prioritize-red-trunk-repairs-ahead-of-red-runs-and-ordinary-work", "https://github.com/FieldmouseWorks/Conary/issues/318"]
 
 [[lessons]]
 id = "owner-only-for-doors"
