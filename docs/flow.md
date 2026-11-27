@@ -642,8 +642,9 @@ lock, so no two passes step at once and a quiet lock means no step is under
 way. The step, and the look at who's seated before it, hold the repository's
 train lock throughout (taking the ledger's writer lock only for each write or
 batch, so another repository's writers are never held up by its GitHub reads),
-while joins and departures take the repository's train lock first and then the
-ledger's writer lock. The decisions came before those waits, so once the train
+while joins, departures and classification writes take the repository's train
+lock first and then the ledger's writer lock. The decisions came before those
+waits, so once the train
 lock is held the pass looks again at each seated PR it granted (and again right
 before each landing, after the last ledger write ahead of the merge): one whose
 permission no longer stands has it withdrawn and fails for the next pass, and

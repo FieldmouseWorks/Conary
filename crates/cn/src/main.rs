@@ -415,7 +415,7 @@ fn run(cli: &Cli) -> Result<()> {
             let got = match asked {
                 class::Asked::Held(got) => got,
                 class::Asked::Read(read) => {
-                    let mut a = open(cli, github, &api)?;
+                    let mut a = open_unlocked(cli, github, &api)?;
                     let got = class::class(&mut a.store, &api, &policy, *read);
                     a.publish(&api)?;
                     write_notes(&api, &a, github, repo)?;
@@ -636,12 +636,21 @@ fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
 }
 
 /// The ledger, open for writing without holding its writer lock: for `cn
-/// train`, whose operations take the repository's train lock first and take
-/// the ledger's writer lock only after it (never in reverse order).
+/// train` and `cn class`, whose operations take the repository's train lock
+/// first and take the ledger's writer lock only after it (never in reverse).
+fn open_unlocked(cli: &Cli, github: &GithubArgs, api: &Api) -> Result<Anchored> {
+    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
+    Ok(anchor::open(
+        &cli.ledger,
+        key,
+        api,
+        &github.remote.anchor_repo,
+    )?)
+}
+
 fn write_train(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
     let (api, config) = writer(cli, github)?;
-    let key = log::load_signing_key(&log::key_path(&cli.ledger))?;
-    let anchored = anchor::open(&cli.ledger, key, &api, &github.remote.anchor_repo)?;
+    let anchored = open_unlocked(cli, github, &api)?;
     Ok((anchored, api, config))
 }
 

@@ -104,20 +104,7 @@ pub(super) fn land_next(
     // Classed R2 since it joined: its landing here would be on a tree no
     // gate ran, with changes after it in the candidate. It goes back in
     // alone instead, and the rest wait again.
-    if store
-        .ledger()
-        .below_class(repo)
-        .iter()
-        .any(|m| m.change == next.change)
-    {
-        forge.mark(&full, head.as_str(), Mark::Waiting, BELOW, None)?;
-        store.reading()?;
-        store.record(Body::Leave {
-            change: next.change,
-            why: Left::Below,
-            trunk: None,
-        })?;
-        stepped.reseated.push(pr);
+    if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
         return Ok(None);
     }
     let elsewhere = if c.trunk != trunk {
@@ -141,8 +128,18 @@ pub(super) fn land_next(
     let (why, description) = match messages {
         Err(why) => (why.clone(), why),
         Ok(messages) => {
+            // Re-read the ledger before `before_land` (and re-check after it,
+            // with no further lock wait) so an R2 class upgrade recorded
+            // meanwhile reseats the PR instead of landing it in a mixed batch.
+            store.refresh()?;
+            if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
+                return Ok(None);
+            }
             if !before_land(store, pr)? {
                 return Ok(Some(landing(store, c)));
+            }
+            if reseat_if_below(store, forge, repo, &full, next.change, pr, &head, stepped)? {
+                return Ok(None);
             }
             forge.mark(
                 &full,
@@ -205,6 +202,38 @@ pub(super) fn land_next(
     })?;
     stepped.refused.push(Refused { pr, why });
     Ok(None)
+}
+
+/// If `change` is now below its class in `store.ledger()` (classed R2 since it
+/// joined a mixed candidate), puts it back in alone and returns `true`.
+#[allow(clippy::too_many_arguments)]
+fn reseat_if_below(
+    store: &mut Store,
+    forge: &dyn Forge,
+    repo: &Repo,
+    full: &str,
+    change: ChangeId,
+    pr: u64,
+    head: &CommitId,
+    stepped: &mut Stepped,
+) -> Result<bool, TrainError> {
+    if !store
+        .ledger()
+        .below_class(repo)
+        .iter()
+        .any(|m| m.change == change)
+    {
+        return Ok(false);
+    }
+    forge.mark(full, head.as_str(), Mark::Waiting, BELOW, None)?;
+    store.reading()?;
+    store.record(Body::Leave {
+        change,
+        why: Left::Below,
+        trunk: None,
+    })?;
+    stepped.reseated.push(pr);
+    Ok(true)
 }
 
 /// Whether a label raises `change` that it didn't join with: one recorded

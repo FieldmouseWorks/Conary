@@ -1,10 +1,11 @@
 //! Every operation of a train holds its repository's train lock throughout,
-//! wherever it's called, a flow pass included: two steps, joins, departures
-//! or drops of the same repository never overlap (`docs/DESIGN.md`, R2).
-//! A step takes the ledger's writer lock only for each write (or batch), so
-//! its GitHub reads never hold up other repositories' writers. Joins,
-//! departures and drops take the repository's train lock first and then the
-//! ledger's writer lock (never the reverse), keeping the lock order strict.
+//! wherever it's called, a flow pass included: two steps, joins, departures,
+//! drops or classification writes of the same repository never overlap
+//! (`docs/DESIGN.md`, R2). A step takes the ledger's writer lock only for
+//! each write (or batch), so its GitHub reads never hold up other
+//! repositories' writers. Joins, departures, drops and `class::class` take
+//! the repository's train lock first and then the ledger's writer lock (never
+//! the reverse), keeping the lock order strict.
 
 use std::cell::RefCell;
 use std::collections::HashSet;

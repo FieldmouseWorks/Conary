@@ -214,6 +214,7 @@ impl From<ClassError> for TrainError {
             ClassError::Ingest(e) => Self::Ingest(e),
             ClassError::Store(e) => Self::Store(e),
             ClassError::Read(e) => Self::Read(e),
+            ClassError::Lock(e) => Self::Lock(e),
             ClassError::Moved { pr, head } => Self::Moved { pr, head },
         }
     }
