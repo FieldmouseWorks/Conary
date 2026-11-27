@@ -1,0 +1,132 @@
+{
+  "conary": "note v1",
+  "change": "0e2khda0zsy1zbq3h18x0rdcwv",
+  "repo": {
+    "owner": "fieldmouseworks",
+    "name": "conary"
+  },
+  "pr": 642,
+  "url": "https://github.com/fieldmouseworks/conary/pull/642",
+  "summary": "docs: plan deterministic red-trunk recovery",
+  "task": "fieldmouseworks/conary#318",
+  "author": {
+    "kind": "bot",
+    "login": "fieldmouseworks-workers[bot]",
+    "session": null
+  },
+  "class": "R0",
+  "landing": {
+    "revision": "963d2741cef0da05458e87185af623fbd0b742dec55910a73bf7845079c68193",
+    "before": "cb9fd76b77db5e5c8107f618469911908f956541",
+    "after": "44e82bde1ed9f05c5e4d9e51357378a0a5884625",
+    "by": {
+      "kind": "status",
+      "login": "fieldmouseworks-steward[bot]"
+    },
+    "at": 1795791901891
+  },
+  "evidence": [
+    {
+      "kind": "ci",
+      "check": "check / negative",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674908/job/140112143235"
+    },
+    {
+      "kind": "ci",
+      "check": "check / lane into main",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674908/job/140112143218"
+    },
+    {
+      "kind": "ci",
+      "check": "check / commits",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674908/job/140112142778"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / pick",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674805/job/140112142475"
+    },
+    {
+      "kind": "ci",
+      "check": "house",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271/job/140112139877"
+    },
+    {
+      "kind": "ci",
+      "check": "house/title (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/rust-first (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/timers (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/file-size (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/guide-size (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/model-names (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/branch (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "house/mention (#642)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674271"
+    },
+    {
+      "kind": "ci",
+      "check": "codeql / analyze (rust)",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674805/job/140112356702"
+    },
+    {
+      "kind": "ci",
+      "check": "check / check",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674908/job/140112179452"
+    },
+    {
+      "kind": "ci",
+      "check": "conary/judgment",
+      "result": "pass",
+      "source": "https://github.com/FieldmouseWorks/Conary/runs/140572409242"
+    },
+    {
+      "kind": "negative",
+      "check": "check / negative",
+      "result": "none",
+      "source": "https://github.com/FieldmouseWorks/Conary/actions/runs/45878674908/job/140112143235"
+    }
+  ]
+}
