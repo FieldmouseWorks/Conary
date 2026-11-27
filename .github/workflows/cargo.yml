@@ -38,3 +38,8 @@ jobs:
         run: cargo test --workspace --locked
       - name: Build release binaries
         run: cargo build --release --locked --bin cn --bin conaryd --bin conary-mcp
+      - name: Smoke-test release archive packaging
+        uses: ./.github/actions/package-release
+        with:
+          version: dev-${{ github.sha }}
+          out-dir: dist
