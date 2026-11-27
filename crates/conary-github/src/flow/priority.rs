@@ -84,20 +84,41 @@ pub fn level<'a>(settings: &Settings, labels: impl IntoIterator<Item = &'a str>)
         .unwrap_or(settings.default_priority)
 }
 
-/// The branch a red default branch's fix comes from, the red's commit after
-/// it: the steward's red jobs push there, and so does anyone of its own who
-/// fixes a red by hand (house/prs.md).
-pub const RED_FIX_BRANCH: &str = "autoland/red-";
+/// The default branch prefix for a fix targeting a red default branch.
+/// Machines using another convention (such as `autoland/red-`) set
+/// `settings.red_fix_branch`.
+pub const DEFAULT_RED_FIX_BRANCH: &str = "conary/red-";
+
+impl Settings {
+    /// Check that `red_fix_branch` is a non-empty branch prefix with no
+    /// whitespace, control characters, leading slash, or `..` traversal.
+    /// Error messages name only the option, never its value (`schema::Consistent`).
+    pub(crate) fn validate_red_fix_branch(&self) -> super::persist::Result<()> {
+        let prefix = &self.red_fix_branch;
+        if prefix.is_empty()
+            || prefix.starts_with('/')
+            || prefix.contains("..")
+            || prefix.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err("settings.red_fix_branch must be a non-empty branch prefix".into());
+        }
+        Ok(())
+    }
+}
 
 /// Whether the PR is a fix for its repository's red default branch: from a
-/// [`RED_FIX_BRANCH`] in the repository itself, by a trusted author, into the
-/// default branch. Anyone can open a PR from a branch of that name on a
-/// fork, and that one is no fix of the pipeline's. Every PR is built on the
-/// red branch until a fix lands, so a fix goes first in line ([`Rank`]) and
-/// waits on none of the red branch's own runs (the read's base hold). Draft
-/// or not: a draft never waits for a slot or joins the train, so its place
-/// in line orders nothing, and the base hold leaves drafts out itself.
-pub fn red_fix(pull: &PullRequest, trusted_authors: &[String]) -> bool {
+/// branch matching `settings.red_fix_branch` in the repository itself, by a
+/// trusted author, into the default branch. Anyone can open a PR from a
+/// branch of that name on a fork, and that one is no fix of the pipeline's.
+/// Every PR is built on the red branch until a fix lands, so a fix goes
+/// first in line ([`Rank`]) and waits on none of the red branch's own runs
+/// (the read's base hold). Draft or not: a draft never waits for a slot or
+/// joins the train, so its place in line orders nothing, and the base hold
+/// leaves drafts out itself.
+pub fn red_fix(settings: &Settings, trusted_authors: &[String], pull: &PullRequest) -> bool {
+    if settings.red_fix_branch.is_empty() {
+        return false;
+    }
     let own_branch = pull
         .head
         .repo
@@ -105,7 +126,7 @@ pub fn red_fix(pull: &PullRequest, trusted_authors: &[String]) -> bool {
         .and_then(|r| r.full_name.as_ref())
         .zip(pull.base.repo.as_ref().and_then(|r| r.full_name.as_ref()))
         .is_some_and(|(head, base)| head.eq_ignore_ascii_case(base));
-    pull.head.name.starts_with(RED_FIX_BRANCH)
+    pull.head.name.starts_with(&settings.red_fix_branch)
         && own_branch
         && pull.targets_trunk()
         && trusted_authors.contains(&pull.user.login)
@@ -144,7 +165,7 @@ impl Rank {
         Self::new(
             settings,
             pull.labels.iter().map(|l| l.name.as_str()),
-            red_fix(pull, trusted_authors),
+            red_fix(settings, trusted_authors, pull),
             pull.created_at
                 .as_deref()
                 .and_then(|at| super::reviews::timestamp(at).ok()),

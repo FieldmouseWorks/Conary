@@ -99,6 +99,8 @@ impl Pass<'_> {
         mut store: Option<&mut Store>,
     ) -> Result<Vec<Report>> {
         self.config.settings.validate_stage_labels()?;
+        self.config.settings.validate_red_fix_branch()?;
+        self.config.settings.review_adapter.validate()?;
         self.config.settings.deferred.validate(
             &self.config.settings,
             self.config.evidence.as_ref().map(|e| e.negative.as_str()),

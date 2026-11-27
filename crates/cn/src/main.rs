@@ -72,14 +72,17 @@ struct GithubArgs {
     /// Logins whose review markers are reviews: the steward's App's bot, SLUG[bot].
     #[arg(long = "reviewer", env = "CONARY_REVIEWERS", value_delimiter = ',')]
     reviewers: Vec<String>,
-    /// Logins whose posts are the reviewer's word, recorded unattested:
-    /// Codex's GitHub connector's bot.
+    /// Logins whose posts are the reviewer's word, recorded unattested.
     #[arg(
         long = "review-author",
         env = "CONARY_REVIEW_AUTHORS",
         value_delimiter = ','
     )]
     review_authors: Vec<String>,
+    /// Reviewer protocol spoken by `review-author` accounts (`conary`, `codex`,
+    /// or a JSON adapter object). Defaults to `conary`.
+    #[arg(long = "review-adapter", env = "CONARY_REVIEW_ADAPTER")]
+    review_adapter: Option<String>,
     /// Status contexts that are the steward's own, not checks.
     #[arg(
         long = "own-context",
@@ -639,9 +642,14 @@ fn write(cli: &Cli, github: &GithubArgs) -> Result<(Anchored, Api, Config)> {
 fn writer(cli: &Cli, github: &GithubArgs) -> Result<(Api, Config)> {
     let api =
         Api::new(&github.remote.api, tokens(&github.remote)?).with_etags(Etags::open(&cli.ledger)?);
+    let review_adapter = match github.review_adapter.as_deref() {
+        Some(spec) => conary_github::flow::ReviewAdapter::parse(spec)?,
+        None => conary_github::flow::ReviewAdapter::default(),
+    };
     let config = Config {
         reviewers: github.reviewers.clone(),
         review_authors: github.review_authors.clone(),
+        review_adapter,
         own_contexts: github.own_contexts.clone(),
     };
     Ok((api, config))

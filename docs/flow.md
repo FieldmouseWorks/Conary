@@ -17,8 +17,9 @@ the same policy as `cn class`. A minimal configuration is:
   "trusted_authors": ["repository-owner"],
   "settings": {
     "people": ["maintainer"],
-    "reviewers": ["codex"],
-    "review_authors": ["chatgpt-codex-connector[bot]"],
+    "reviewers": ["reviewer"],
+    "review_adapter": "conary",
+    "review_authors": ["reviewer-app[bot]"],
     "flow_authors": ["landing-app[bot]"]
   },
   "plugins": {
@@ -46,8 +47,11 @@ work, so a machine supplies its own: with no `review_authors` no review
 counts, with no `flow_authors` neither its own `review-settled` nor the
 train's status does, with no `owner_label` what the owner decides waits unlisted,
 `stage_labels` defaults to generic `waiting: …` names (`waiting: owner` for the
-owner stage), and `proof_slots` defaults to `0`, which starts no proof and no
-preparation (`null` sets no limit).
+owner stage), `review_adapter` defaults to `"conary"` (Conary's vendor-neutral
+marker protocol; deployments using Codex's GitHub connector set `"codex"`),
+`red_fix_branch` defaults to `"conary/red-"` (deployments using burrow's prefix
+set `"autoland/red-"`), and `proof_slots` defaults to `0`, which starts no proof
+and no preparation (`null` sets no limit).
 Execution choices are optional entries in the same machine-owned configuration:
 
 ```json
@@ -471,7 +475,8 @@ level its labels are mapped to, or `default_priority` (`medium`) with none.
 A label maps to one level: it's a key of that map, and the loader refuses
 a key given twice. A fix for the repository's red default branch is `high`
 whatever its labels, so nobody has to label it: a trusted author's PR from
-an `autoland/red-` branch in the repository itself into the default branch
+a branch starting with `settings.red_fix_branch` (default `conary/red-`; e.g.
+`autoland/red-` for burrow) in the repository itself into the default branch
 ([`flow::red_fix`](../crates/conary-github/src/flow/priority.rs), the same
 test that lets it skip waiting on the red branch's own runs).
 
@@ -658,24 +663,37 @@ PR's close, and conaryd's start.
 
 ## Review
 
-The reviewer is Codex's GitHub connector, which reviews each push on its
-own and posts on the PR (`flow::reviews`, as burrow's steward reads it). Its
-word on a head is the newer of what its summary comment's
-`codex-review-state:v1` mark says of that exact commit (`completed` with no
-findings is clean, `completed` with findings is findings, anything else is
-under way) and a review on the head whose `**Reviewed commit:**` receipt
-names it (findings). Each review with a receipt, at any head, is a round.
+The reviewer protocol is selected by `settings.review_adapter` (`flow::reviews`),
+which decouples the flow state machine and ledger ingest from any single
+vendor's GitHub App:
+
+- `"conary"` (default): Conary's vendor-neutral marker protocol. Its summary
+  comment carries `<!-- conary-review-state:v1 {"commit_sha":"…","status":"running"|"completed","has_any_findings":true|false|null} -->`,
+  findings reviews carry `<!-- conary-review-receipt:v1 {"commit_sha":"…"} -->`,
+  its ask comment is `/conary review`, finding thread severities use `[P0]`..`[P3]`
+  (defaulting to `P1`), and ledger verdicts are recorded under check name `"conary"`.
+- `"codex"`: Built-in adapter for the ChatGPT Codex Connector GitHub App,
+  reading `codex-review-state:v1` (`code_review`), `**Reviewed commit:**`
+  receipts, `![P0 Badge]`..`![P3 Badge]` severity badges, posting the bare
+  `@codex review`, and recording verdicts under check name `"codex"`.
+- `{"custom": {"check_name": "…", "ask_comment": "…" | null, "state_marker": "…", "receipt_marker": "…"}}`:
+  Custom marker-based GitHub reviewer protocol using the same JSON payload
+  shapes with caller-selected marker names, trigger comment (or `null` when
+  a `review_ask` door handles all asks), and ledger check name.
+
 Only posts by `settings.review_authors` count, so nobody posing as the
-connector moves a PR. Its word binds only the commit: a PR retargeted or
+reviewer moves a PR. Each review with a receipt, at any head, is a round. The
+reviewer's word binds only the commit: a PR retargeted or
 whose description was edited at or after its head's push (or at all, when
 GitHub can't say when the head was pushed: the earliest check suite on it)
 goes to a judge with the reason `changed` instead of landing on it.
 
 A head with no word yet waits in `review` for five minutes after the flow
 first saw it, then the flow asks for a look (`AskReview`), at most once an
-hour per head. Five minutes only covers the connector's start: a review
-that's coming shows within a minute or two of a person's push. The connector takes that ask from no App, so a configuration
-can name a door that posts it as someone it does take it from:
+hour per head. Five minutes only covers the reviewer's start: a review
+that's coming shows within a minute or two of a person's push. When a reviewer
+takes its ask from no App, a configuration can name a door that posts it as
+someone it does take it from:
 
 ```json
 {"review_ask": {"command": ["/absolute/path/to/door"], "repos": ["owner/repo"]}}
@@ -691,9 +709,9 @@ an ask the flow didn't count. Acting as that
 person is the door's alone: on a burrow-managed host it's
 [burrow-review-ask](https://github.com/FieldmouseWorks/burrow/blob/main/crates/burrow-review-ask/src/lib.rs),
 for the repositories in `autoland.askAsOwner.repos`. In any other repository
-the ask is a PR comment of the flow's own: the bare `@codex review` (the
-connector reads any text after it as a task and posts nothing, so the why
-stays in the flow's record), counted as asked only once GitHub took it. A
+the ask is a PR comment of the flow's own using the configured adapter's ask
+comment (for example `/conary review` under `conary`, or the bare
+`@codex review` under `codex`), counted as asked only once GitHub took it. A
 head an App put on the branch is asked for on the pass that first sees it,
 since the connector reviews no App's push unasked. Who put it there is the
 account GitHub's activity names for the push (a push, force push or the

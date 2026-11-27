@@ -159,7 +159,12 @@ fn repeats(f: &Facts) -> Vec<(&str, Severity)> {
             answered
                 .iter()
                 .any(|(path, earlier)| *path == t.path && *earlier == said)
-                .then(|| (id.as_str(), super::handoff::severity(&t.comments[0].body)))
+                .then(|| {
+                    (
+                        id.as_str(),
+                        f.settings.review_adapter.severity(&t.comments[0].body),
+                    )
+                })
         })
         .collect()
 }

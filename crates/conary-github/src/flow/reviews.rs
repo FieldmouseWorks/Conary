@@ -1,25 +1,22 @@
-//! What the reviewer said of a PR's head, read from what Codex's GitHub
-//! connector (the ChatGPT Codex Connector App) posts on the PR: the summary
-//! comment it keeps up to date, whose `codex-review-state:v1` mark names the
-//! commit it last reviewed, whether that review is done and whether it found
-//! anything; and a review with inline findings for each look that found
-//! some, its receipt naming the commit it read. Only posts by the review
-//! authors count, since anyone can write the marks. burrow's steward reads
-//! them the same way (burrow-upkeep's `verdict`).
+//! What the reviewer said of a PR's head, read through the configured
+//! [`ReviewAdapter`] from what `settings.review_authors` post on the PR.
 //!
-//! The connector reviews each push itself, so nothing carries from an
-//! earlier head: a head is clean only once a review of that exact commit
-//! finished with nothing found. Its word binds only the commit, though: a
-//! retarget onto another base is another diff, and an edited description is
-//! text a review may not have read, and nothing the connector posts says
-//! which base or description it read, or when a review began. So a PR that
-//! changed either way at or after its head's push is `changed`, and a judge,
-//! whose verdict binds all three, decides it instead.
+//! Only posts by the configured review authors count, since anyone can write
+//! HTML comment marks. The reviewer's word binds only the commit: a retarget
+//! onto another base is another diff, and an edited description is text a
+//! review may not have read, so a PR that changed either way at or after its
+//! head's push is `changed`, and a judge decides it instead.
+mod codex;
+mod marker;
+
+use std::collections::BTreeMap;
+
+use conary_core::plugin::Severity;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
 use super::{Reviewer, Settings, Verdict};
 use crate::api::{ApiError, Comment, Review as GithubReview};
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
 pub fn fingerprint(body: &str) -> String {
     let quoted = if body.trim().is_empty() {
@@ -67,29 +64,170 @@ impl Since {
     }
 }
 
-/// The comment that asks the connector for a review of the head: the bare
-/// trigger. The connector reads any text after it as a task and posts no
-/// review, so the why stays in the flow's own record, never in the comment.
-pub(super) const ASK: &str = "@codex review";
-
-/// The summary comment's state for one kind of review.
-#[derive(serde::Deserialize)]
-struct State {
-    commit_sha: Option<String>,
-    status: Option<String>,
-    has_any_findings: Option<bool>,
+/// Protocol contract for a GitHub-posting reviewer adapter: how to ask it for
+/// a review, how to read its verdicts and rounds from PR reviews and comments,
+/// how to parse a finding's severity from a review thread's opening comment,
+/// and the check name its word is recorded under in the ledger.
+pub(crate) trait ReviewerAdapter<'a> {
+    fn check_name(&self) -> &'a str;
+    fn ask_comment(&self) -> Option<&'a str>;
+    fn words<'b>(
+        &self,
+        head: &str,
+        records: &'b [GithubReview],
+        comments: &'b [Comment],
+        authors: &dyn Fn(&str) -> bool,
+    ) -> Result<Said<'b>, ApiError>;
+    fn severity(&self, body: &str) -> Severity;
 }
 
-static STATE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?s)<!-- codex-review-state:v1 (\{.*?\}) -->").expect("pattern")
-});
-static RECEIPT: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`").expect("pattern")
-});
+/// Configuration for a custom marker-based GitHub reviewer adapter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CustomReviewAdapter {
+    /// Check name recorded in the ledger for this reviewer's verdicts.
+    #[schemars(extend("x-spender" = false))]
+    pub check_name: String,
+    /// PR comment body posted to request a review when no `review_ask` door
+    /// covers the repository; `null` disables comment triggers.
+    #[schemars(extend("x-spender" = false))]
+    #[serde(default)]
+    pub ask_comment: Option<String>,
+    /// HTML comment marker name for summary state payloads (`<!-- <state_marker> {...} -->`).
+    #[schemars(extend("x-spender" = false))]
+    pub state_marker: String,
+    /// HTML comment marker name for review receipt payloads (`<!-- <receipt_marker> {...} -->`).
+    #[schemars(extend("x-spender" = false))]
+    pub receipt_marker: String,
+}
 
-/// The name the reviewer goes by in its marks (`codex-review-state:v1`),
-/// and the check the ledger records its word under.
-pub(crate) const NAME: &str = "codex";
+/// Which GitHub-posting reviewer protocol the flow and ledger ingest speak.
+/// The default (`conary`) is vendor-neutral; `codex` selects the built-in
+/// ChatGPT Codex Connector adapter; `custom` configures arbitrary HTML comment
+/// markers and trigger text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAdapter {
+    /// Conary's vendor-neutral marker protocol (`conary-review-state:v1`,
+    /// `conary-review-receipt:v1`, `/conary review`, and `[P0]`..`[P3]`).
+    #[default]
+    Conary,
+    /// Built-in adapter for the ChatGPT Codex Connector GitHub App.
+    Codex,
+    /// Custom marker-based GitHub reviewer protocol.
+    Custom(CustomReviewAdapter),
+}
+
+impl ReviewAdapter {
+    /// Parse a CLI/env specification: `"conary"`, `"codex"`, or a JSON value
+    /// matching [`ReviewAdapter`] (e.g. `{"custom": {...}}`).
+    pub fn parse(spec: &str) -> std::result::Result<Self, String> {
+        let adapter = match spec.trim() {
+            "conary" => Self::Conary,
+            "codex" => Self::Codex,
+            other if other.starts_with('{') || other.starts_with('"') => {
+                serde_json::from_str::<Self>(other)
+                    .map_err(|_| "invalid review adapter JSON".to_owned())?
+            }
+            _ => {
+                return Err(
+                    "unknown review adapter: expected `conary`, `codex`, or a JSON adapter object"
+                        .into(),
+                );
+            }
+        };
+        adapter.validate().map_err(|e| e.to_string())?;
+        Ok(adapter)
+    }
+
+    /// Check that custom adapter fields are well-formed. Error messages name
+    /// only options, never configured values (`schema::Consistent`).
+    pub fn validate(&self) -> super::persist::Result<()> {
+        let Self::Custom(c) = self else {
+            return Ok(());
+        };
+        let valid_token =
+            |s: &str| !s.is_empty() && !s.chars().any(|ch| ch.is_whitespace() || ch.is_control());
+        if !valid_token(&c.check_name) {
+            return Err(
+                "settings.review_adapter.custom.check_name must be a non-empty token".into(),
+            );
+        }
+        if c.ask_comment
+            .as_deref()
+            .is_some_and(|s| s.trim().is_empty())
+        {
+            return Err("settings.review_adapter.custom.ask_comment must not be blank".into());
+        }
+        if !valid_token(&c.state_marker) || c.state_marker.contains("-->") {
+            return Err(
+                "settings.review_adapter.custom.state_marker must be a non-empty marker name"
+                    .into(),
+            );
+        }
+        if !valid_token(&c.receipt_marker) || c.receipt_marker.contains("-->") {
+            return Err(
+                "settings.review_adapter.custom.receipt_marker must be a non-empty marker name"
+                    .into(),
+            );
+        }
+        if c.state_marker == c.receipt_marker {
+            return Err(
+                "settings.review_adapter.custom.receipt_marker must differ from settings.review_adapter.custom.state_marker"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn with_adapter<'a, R>(&'a self, f: impl FnOnce(&dyn ReviewerAdapter<'a>) -> R) -> R {
+        match self {
+            Self::Conary => {
+                let adapter = marker::MarkerAdapter::conary();
+                f(&adapter)
+            }
+            Self::Codex => f(&codex::CodexAdapter),
+            Self::Custom(c) => {
+                let adapter = marker::MarkerAdapter {
+                    check_name: &c.check_name,
+                    ask_comment: c.ask_comment.as_deref(),
+                    state_marker: &c.state_marker,
+                    receipt_marker: &c.receipt_marker,
+                };
+                f(&adapter)
+            }
+        }
+    }
+
+    /// The check name recorded in the ledger for this adapter's verdicts.
+    pub fn check_name(&self) -> &str {
+        self.with_adapter(|a| a.check_name())
+    }
+
+    /// The PR comment body posted to request a review when no `review_ask`
+    /// door covers the repository.
+    pub fn ask_comment(&self) -> Option<&str> {
+        self.with_adapter(|a| a.ask_comment())
+    }
+
+    /// Parse the severity of a review thread's opening comment under this
+    /// adapter's convention. Threads without a recognized mark default to `P1`.
+    pub fn severity(&self, body: &str) -> Severity {
+        self.with_adapter(|a| a.severity(body))
+    }
+
+    /// Everything the accounts `authors` admits said of `head` under this
+    /// adapter's protocol.
+    pub(crate) fn words<'a>(
+        &self,
+        head: &str,
+        records: &'a [GithubReview],
+        comments: &'a [Comment],
+        authors: impl Fn(&str) -> bool,
+    ) -> Result<Said<'a>, ApiError> {
+        self.with_adapter(|a| a.words(head, records, comments, &authors))
+    }
+}
 
 /// One thing the reviewer said of a head: its verdict, when GitHub dates
 /// the post that says it (Unix seconds, 0 undated), the post's body, and
@@ -101,112 +239,21 @@ pub(crate) struct Word<'a> {
     pub url: Option<&'a str>,
 }
 
-/// Everything the reviewer said, as [`words`] reads it.
+/// Everything the reviewer said, as [`ReviewAdapter::words`] reads it.
 pub(crate) struct Said<'a> {
     /// What it said of the head, its summary comments first and then its
     /// reviews, each as GitHub lists them.
     pub words: Vec<Word<'a>>,
     /// The rounds it took: its reviews with findings, at any head.
     pub rounds: u32,
-    /// Why one of its summaries' marks didn't parse, if one didn't: it
-    /// says nothing, and the flow's decision waits on it
-    /// ([`super::degraded`]).
+    /// Why one of its marks didn't parse, if one didn't: it says nothing, and
+    /// the flow's decision waits on it ([`super::degraded`]).
     pub unparsed: Option<&'static str>,
 }
 
-/// Everything the accounts `authors` admits said of `head`. The flow
-/// ([`read`]) and the ledger (`ingest`) both read the reviewer through
-/// this. Fails on a time GitHub gave that isn't one.
-pub(crate) fn words<'a>(
-    head: &str,
-    records: &'a [GithubReview],
-    comments: &'a [Comment],
-    authors: impl Fn(&str) -> bool,
-) -> Result<Said<'a>, ApiError> {
-    let theirs = |login: Option<&str>| login.is_some_and(&authors);
-    let when = |t: Option<&str>| match t {
-        None | Some("") => Ok(0),
-        Some(t) => timestamp(t),
-    };
-    let mut said = Vec::new();
-    let mut unparsed = None;
-    for c in comments {
-        if !theirs(c.user.as_ref().map(|u| u.login.as_str())) {
-            continue;
-        }
-        let Some(body) = c.body.as_deref() else {
-            continue;
-        };
-        let Some(m) = STATE.captures(body) else {
-            continue;
-        };
-        let Ok(mut all) = serde_json::from_str::<serde_json::Value>(&m[1]) else {
-            unparsed = Some("its summary's mark isn't JSON");
-            continue;
-        };
-        // A summary with no code review in it says nothing of one.
-        let code = all["code_review"].take();
-        if code.is_null() {
-            continue;
-        }
-        let Ok(code) = serde_json::from_value::<State>(code) else {
-            unparsed = Some("its summary's code review isn't a review's state");
-            continue;
-        };
-        if code.commit_sha.as_deref() != Some(head) {
-            continue;
-        }
-        let verdict = match (code.status.as_deref(), code.has_any_findings) {
-            (Some("completed"), Some(false)) => Verdict::Clean,
-            (Some("completed"), Some(true)) => Verdict::Findings,
-            (Some("running"), _) => Verdict::Running,
-            // Ended with no word on findings (completed with none, failed,
-            // skipped, cancelled), or a state this doesn't know: nothing is
-            // under way, so it says nothing and the head is asked for again.
-            // Waiting on it would wait forever.
-            _ => continue,
-        };
-        said.push(Word {
-            verdict,
-            at: when(c.updated_at.as_deref())?,
-            body,
-            url: c.html_url.as_deref(),
-        });
-    }
-    let mut rounds = 0u32;
-    for r in records {
-        if !theirs(r.user.as_ref().map(|u| u.login.as_str())) {
-            continue;
-        }
-        let Some(body) = r.body.as_deref() else {
-            continue;
-        };
-        let Some(read) = RECEIPT.captures(body) else {
-            continue;
-        };
-        rounds = rounds.saturating_add(1);
-        // A receipt names only a prefix of the commit, so it counts only on
-        // the commit the review is on: findings there, never clean (the
-        // summary says that).
-        if r.commit_id.as_deref() == Some(head) && head.starts_with(&read[1]) {
-            said.push(Word {
-                verdict: Verdict::Findings,
-                at: when(r.submitted_at.as_deref())?,
-                body,
-                url: r.html_url.as_deref(),
-            });
-        }
-    }
-    Ok(Said {
-        words: said,
-        rounds,
-        unparsed,
-    })
-}
-
 /// What the reviewer last said of `head`, for each of the settings'
-/// reviewers: the newest of its [`words`]. Fails on a time GitHub gave
-/// that isn't one.
+/// reviewers: the newest of its [`ReviewAdapter::words`]. Fails on a time
+/// GitHub gave that isn't one.
 pub(super) fn read(
     head: &str,
     records: &[GithubReview],
@@ -219,9 +266,11 @@ pub(super) fn read(
         words,
         rounds,
         unparsed,
-    } = words(head, records, comments, |l| {
-        settings.review_authors.contains(l)
-    })?;
+    } = settings
+        .review_adapter
+        .words(head, records, comments, |l| {
+            settings.review_authors.contains(l)
+        })?;
     reads.mark(super::Mark::Review, unparsed);
     let mut said = Reviewer {
         changed: since.changed(),
@@ -262,174 +311,6 @@ pub(super) fn changes_requested(records: &[GithubReview]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::User;
-
-    const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const OLD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
-
-    fn settings() -> Settings {
-        Settings {
-            review_authors: [CONNECTOR.into()].into(),
-            ..Settings::default()
-        }
-    }
-    fn by(login: &str) -> Option<User> {
-        Some(User {
-            login: login.into(),
-            kind: "Bot".into(),
-        })
-    }
-    /// The connector's summary comment, as it keeps it, for a review of `of`.
-    fn summary(of: &str, status: &str, findings: Option<bool>, at: &str) -> Comment {
-        let state = serde_json::json!({
-            "code_review": {"commit_sha": of, "has_any_findings": findings, "has_unresolved_findings": findings, "status": status},
-            "security_review": {"commit_sha": null, "has_any_findings": null, "has_unresolved_findings": null, "status": null},
-        });
-        Comment {
-            user: by(CONNECTOR),
-            body: Some(format!(
-                "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {state} -->\n\n## Codex Review Summary"
-            )),
-            created_at: Some(at.into()),
-            updated_at: Some(at.into()),
-            html_url: None,
-        }
-    }
-    /// The connector's review with findings on `on`, its receipt naming `named`.
-    fn receipt(on: &str, named: &str, at: &str) -> GithubReview {
-        GithubReview {
-            id: Some(1),
-            state: Some("COMMENTED".into()),
-            user: by(CONNECTOR),
-            body: Some(format!(
-                "<!-- codex-review-receipt:v1 -->\n\n### Codex Review\n\n**Reviewed commit:** `{named}`\n"
-            )),
-            commit_id: Some(on.into()),
-            html_url: None,
-            submitted_at: Some(at.into()),
-        }
-    }
-    fn said(reviews: &[GithubReview], comments: &[Comment]) -> (Option<Verdict>, u32) {
-        let r = &read(
-            HEAD,
-            reviews,
-            comments,
-            Since::default(),
-            &settings(),
-            &mut Default::default(),
-        )
-        .unwrap()["reviewer"];
-        (r.verdict, r.rounds)
-    }
-
-    #[test]
-    fn a_summary_says_running_clean_or_findings_of_its_commit_only() {
-        const T: &str = "2026-11-18T00:00:00Z";
-        assert_eq!(said(&[], &[]), (None, 0));
-        for (status, findings, verdict) in [
-            ("completed", Some(false), Verdict::Clean),
-            ("completed", Some(true), Verdict::Findings),
-            ("running", None, Verdict::Running),
-        ] {
-            assert_eq!(
-                said(&[], &[summary(HEAD, status, findings, T)]),
-                (Some(verdict), 0)
-            );
-        }
-        // Ended with no word on findings, or a state this doesn't know: no
-        // review is under way, so it says nothing (#513).
-        for (status, findings) in [
-            ("completed", None),
-            ("failed", None),
-            ("skipped", None),
-            ("cancelled", None),
-            ("queued-somehow", Some(false)),
-        ] {
-            assert_eq!(
-                said(&[], &[summary(HEAD, status, findings, T)]),
-                (None, 0),
-                "{status}"
-            );
-        }
-        assert_eq!(
-            said(&[], &[summary(OLD, "completed", Some(false), T)]),
-            (None, 0)
-        );
-    }
-
-    #[test]
-    fn a_receipt_counts_a_round_and_is_findings_only_on_its_own_commit() {
-        const T: &str = "2026-11-18T00:00:00Z";
-        assert_eq!(
-            said(&[receipt(HEAD, &HEAD[..10], T)], &[]),
-            (Some(Verdict::Findings), 1)
-        );
-        // Named another commit than the one it's on, or on an older one.
-        assert_eq!(said(&[receipt(HEAD, &OLD[..10], T)], &[]), (None, 1));
-        assert_eq!(said(&[receipt(OLD, &OLD[..10], T)], &[]), (None, 1));
-    }
-
-    #[test]
-    fn the_newest_word_on_the_head_wins() {
-        let findings = receipt(HEAD, &HEAD[..10], "2026-11-18T00:00:00Z");
-        let clean = summary(HEAD, "completed", Some(false), "2026-11-18T01:00:00Z");
-        assert_eq!(said(&[findings], &[clean]), (Some(Verdict::Clean), 1));
-        let findings = receipt(HEAD, &HEAD[..10], "2026-11-18T02:00:00Z");
-        let clean = summary(HEAD, "completed", Some(false), "2026-11-18T01:00:00Z");
-        assert_eq!(said(&[findings], &[clean]), (Some(Verdict::Findings), 1));
-        // A later summary with no word on findings doesn't hide them.
-        let findings = receipt(HEAD, &HEAD[..10], "2026-11-18T00:00:00Z");
-        let none = summary(HEAD, "completed", None, "2026-11-18T01:00:00Z");
-        assert_eq!(said(&[findings], &[none]), (Some(Verdict::Findings), 1));
-    }
-
-    /// What the connector posted on two PRs, as GitHub's REST API gave it
-    /// (its own posts only): remi#1409's summary and clean receipt, and a
-    /// findings review on burrow#1217.
-    #[test]
-    fn reads_the_connectors_posts_as_github_gives_them() {
-        let comments: Vec<Comment> =
-            serde_json::from_str(include_str!("reviews/remi-1409-comments.json")).unwrap();
-        let clean = &read(
-            "34131866953a65cf56c0c2d01f5329959b4e338d",
-            &[],
-            &comments,
-            Since::default(),
-            &settings(),
-            &mut Default::default(),
-        )
-        .unwrap()["reviewer"];
-        // Its clean receipt is a PR comment, not a review: no round.
-        assert_eq!((clean.verdict, clean.rounds), (Some(Verdict::Clean), 0));
-        assert_eq!(clean.at, timestamp("2026-11-19T03:52:54Z").unwrap());
-        let reviews: Vec<GithubReview> =
-            serde_json::from_str(include_str!("reviews/burrow-1217-reviews.json")).unwrap();
-        let findings = &read(
-            "3fcbe7a9347244680d1271ed8f7d5ea797247bcc",
-            &reviews,
-            &[],
-            Since::default(),
-            &settings(),
-            &mut Default::default(),
-        )
-        .unwrap()["reviewer"];
-        assert_eq!(
-            (findings.verdict, findings.rounds),
-            (Some(Verdict::Findings), 1)
-        );
-        // On the head a later push left, it's a round and no verdict.
-        let later = &read(
-            "ed80c8841e88fb8848f117a3036f0fd4fc4b38ea",
-            &reviews,
-            &[],
-            Since::default(),
-            &settings(),
-            &mut Default::default(),
-        )
-        .unwrap()["reviewer"];
-        assert_eq!((later.verdict, later.rounds), (None, 1));
-    }
 
     #[test]
     fn a_pr_changed_at_or_after_its_push_is_changed() {

@@ -1,6 +1,7 @@
 //! The reviewer's word on a PR's head, recorded as `review` results that
-//! nothing attests (DESIGN.md 4.3): what Codex's GitHub connector posts, and
-//! the markers the steward put on the reviews it posted before.
+//! nothing attests (DESIGN.md 4.3): what the configured reviewer adapter reads
+//! from `review_authors`'s posts, and the markers the steward put on the
+//! reviews it posted before.
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -68,9 +69,9 @@ pub(super) fn review_marker(
     })
 }
 
-/// What the reviewer said of this head, as the flow reads it
-/// ([`crate::flow::reviews::words`]): each finished verdict, a pass for
-/// clean and a fail for findings, recorded unattested, since nothing
+/// What the reviewer said of this head, as the flow reads it through the
+/// configured [`crate::flow::ReviewAdapter`]: each finished verdict, a pass
+/// for clean and a fail for findings, recorded unattested, since nothing
 /// attests a reviewer's word (DESIGN.md 4.3). Its posts name the commit and
 /// not the base, so only those dated at or after the last retarget
 /// (`since`) are about this revision.
@@ -87,9 +88,12 @@ pub(super) fn reviewer(
     let since = since.map(reviews::timestamp).transpose()?;
     // A summary whose mark didn't parse said nothing to record: the flow's
     // decision is what counts it failed.
-    let said = reviews::words(&pr.head.sha, reviews, comments, |login| {
-        config.review_authors.iter().any(|a| a == login)
-    })?;
+    let said = config
+        .review_adapter
+        .words(&pr.head.sha, reviews, comments, |login| {
+            config.review_authors.iter().any(|a| a == login)
+        })?;
+    let check_name = config.review_adapter.check_name();
     let mut words: Vec<_> = said
         .words
         .into_iter()
@@ -109,9 +113,9 @@ pub(super) fn reviewer(
                 change,
                 revision,
                 kind: CheckKind::Review,
-                check: reviews::NAME.to_owned(),
+                check: check_name.to_owned(),
                 result,
-                source: publication(&w, pr.number),
+                source: publication(&w, check_name, pr.number),
                 attest: None,
             })
         })
@@ -119,16 +123,133 @@ pub(super) fn reviewer(
 }
 
 /// A word's publication, as the source its record names: where it is, and
-/// when GitHub dated it. The connector rewrites its summary comment in
+/// when GitHub dated it. A reviewer may rewrite its summary comment in
 /// place, so its address alone would make a later word the same record as
 /// an earlier one with the same result, and the ledger would drop it.
-fn publication(w: &crate::flow::reviews::Word<'_>, pr: u64) -> String {
+fn publication(w: &crate::flow::reviews::Word<'_>, check_name: &str, pr: u64) -> String {
     let at = i64::try_from(w.at)
         .ok()
         .and_then(|s| jiff::Timestamp::from_second(s).ok())
         .map_or_else(|| w.at.to_string(), |t| t.to_string());
     match w.url {
         Some(url) => format!("{url} at {at}"),
-        None => format!("{} on PR {pr} at {at}", crate::flow::reviews::NAME),
+        None => format!("{check_name} on PR {pr} at {at}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{Ref, User};
+    use crate::flow::{CustomReviewAdapter, ReviewAdapter};
+
+    const HEAD: &str = "3333333333333333333333333333333333333333";
+    const BASE: &str = "1111111111111111111111111111111111111111";
+    const BOT: &str = "acme-reviewer[bot]";
+
+    fn pr() -> PullRequest {
+        PullRequest {
+            number: 9,
+            state: "open".into(),
+            title: "change".into(),
+            body: None,
+            user: User {
+                login: "owner".into(),
+                kind: "User".into(),
+            },
+            created_at: None,
+            updated_at: Some("2026-10-27T11:00:00Z".into()),
+            merged: None,
+            merged_at: None,
+            merge_commit_sha: None,
+            auto_merge: None,
+            base: Ref {
+                sha: BASE.into(),
+                name: "main".into(),
+                repo: None,
+            },
+            head: Ref {
+                sha: HEAD.into(),
+                name: "feature".into(),
+                repo: None,
+            },
+            labels: vec![],
+        }
+    }
+
+    #[test]
+    fn non_codex_review_adapter_records_its_own_check_name_and_ignores_codex_marks() {
+        let change = ChangeId::new().unwrap();
+        let revision = RevisionId::new(&BASE.parse().unwrap(), &HEAD.parse().unwrap());
+        let bot = || {
+            Some(User {
+                login: BOT.into(),
+                kind: "Bot".into(),
+            })
+        };
+        let reviews = vec![Review {
+            id: Some(21),
+            user: bot(),
+            state: Some("COMMENTED".into()),
+            body: Some(format!(
+                r#"<!-- acme-review-receipt:v1 {{"commit_sha":"{HEAD}"}} -->"#
+            )),
+            commit_id: Some(HEAD.into()),
+            html_url: Some("https://github.com/x/y/pull/9#pullrequestreview-21".into()),
+            submitted_at: Some("2026-10-27T11:10:00Z".into()),
+        }];
+        let comments = vec![
+            // Newer Codex-formatted comment must be ignored under the custom adapter.
+            Comment {
+                user: bot(),
+                body: Some(format!(
+                    r#"<!-- codex-review-state:v1 {{"code_review":{{"commit_sha":"{HEAD}","status":"completed","has_any_findings":true}}}} -->"#
+                )),
+                created_at: Some("2026-10-27T11:30:00Z".into()),
+                updated_at: Some("2026-10-27T11:30:00Z".into()),
+                html_url: Some("https://github.com/x/y/pull/9#issuecomment-1".into()),
+            },
+            Comment {
+                user: bot(),
+                body: Some(format!(
+                    r#"<!-- acme-review-state:v1 {{"commit_sha":"{HEAD}","status":"completed","has_any_findings":false}} -->"#
+                )),
+                created_at: Some("2026-10-27T11:20:00Z".into()),
+                updated_at: Some("2026-10-27T11:20:00Z".into()),
+                html_url: Some("https://github.com/x/y/pull/9#issuecomment-22".into()),
+            },
+        ];
+        let cfg = Config {
+            reviewers: vec!["steward[bot]".into()],
+            review_authors: vec![BOT.into()],
+            review_adapter: ReviewAdapter::Custom(CustomReviewAdapter {
+                check_name: "acme-review".into(),
+                ask_comment: Some("@acme review".into()),
+                state_marker: "acme-review-state:v1".into(),
+                receipt_marker: "acme-review-receipt:v1".into(),
+            }),
+            own_contexts: vec!["review-settled".into()],
+        };
+        let bodies = reviewer(&cfg, &pr(), change, revision, &reviews, &comments, None).unwrap();
+        let got: Vec<_> = bodies
+            .iter()
+            .map(|b| match b {
+                Body::Evidence {
+                    kind,
+                    check,
+                    result,
+                    attest,
+                    ..
+                } => (*kind, check.as_str(), *result, attest.is_some()),
+                other => panic!("unexpected body: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (CheckKind::Review, "acme-review", Outcome::Fail, false),
+                (CheckKind::Review, "acme-review", Outcome::Pass, false),
+            ]
+        );
     }
 }

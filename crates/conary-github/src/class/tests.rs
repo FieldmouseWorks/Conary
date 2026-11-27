@@ -47,6 +47,7 @@ fn config() -> Config {
     Config {
         reviewers: vec!["steward".into()],
         review_authors: vec![],
+        review_adapter: Default::default(),
         own_contexts: vec!["review-settled".into()],
     }
 }

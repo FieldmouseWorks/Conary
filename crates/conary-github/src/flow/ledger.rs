@@ -8,6 +8,7 @@ pub(crate) fn config(settings: &Settings) -> crate::Config {
     crate::Config {
         reviewers: settings.flow_authors.iter().cloned().collect(),
         review_authors: settings.review_authors.iter().cloned().collect(),
+        review_adapter: settings.review_adapter.clone(),
         own_contexts: vec![SETTLED.into()],
     }
 }

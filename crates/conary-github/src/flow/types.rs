@@ -369,9 +369,13 @@ pub struct Settings {
     /// review authors post.
     #[schemars(extend("x-spender" = false))]
     pub reviewers: BTreeSet<String>,
-    /// The accounts the reviewer posts as (Codex's GitHub connector): its
-    /// summary comment and its reviews are read only from these. None set,
-    /// no review counts.
+    /// The protocol adapter used to ask `review_authors` for reviews, parse
+    /// their verdicts and finding severities, and name their ledger check.
+    /// Defaults to Conary's vendor-neutral `conary` marker protocol.
+    #[schemars(extend("x-spender" = false))]
+    pub review_adapter: super::ReviewAdapter,
+    /// The accounts the reviewer posts as: its summary comment and its
+    /// reviews are read only from these. None set, no review counts.
     #[schemars(extend("x-spender" = false))]
     pub review_authors: BTreeSet<String>,
     /// The accounts the flow posts as: `review-settled`, the train's status
@@ -419,6 +423,10 @@ pub struct Settings {
     /// The priority level of a PR with none of `priority_labels`.
     #[schemars(extend("x-spender" = false))]
     pub default_priority: Level,
+    /// The branch prefix identifying a fix for a red default branch in the
+    /// repository itself (defaults to `conary/red-`).
+    #[schemars(extend("x-spender" = false))]
+    pub red_fix_branch: String,
     /// The label that hands a PR to its owner. None set, what the owner
     /// decides waits unlisted.
     #[schemars(extend("x-spender" = false))]
@@ -532,6 +540,7 @@ impl Default for Settings {
             job_timeout: 3600,
             judge_engines: BTreeSet::new(),
             reviewers: BTreeSet::from(["reviewer".into()]),
+            review_adapter: super::ReviewAdapter::default(),
             review_authors: BTreeSet::new(),
             flow_authors: BTreeSet::new(),
             verdict_authors: BTreeSet::new(),
@@ -549,6 +558,7 @@ impl Default for Settings {
                 ("priority: low".into(), Level::Low),
             ]),
             default_priority: Level::Medium,
+            red_fix_branch: super::DEFAULT_RED_FIX_BRANCH.into(),
             owner_label: None,
             stage_labels: super::StageLabels::default(),
             people: BTreeSet::new(),
