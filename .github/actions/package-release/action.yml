@@ -26,7 +26,7 @@ runs:
         OUT_DIR: ${{ inputs.out-dir }}
       run: |
         set -euo pipefail
-        if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+        if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [[ "$VERSION" == *".."* ]]; then
           echo "invalid version label: $VERSION" >&2
           exit 1
         fi

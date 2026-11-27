@@ -32,7 +32,10 @@ ExecStart=/usr/local/bin/conaryd \
     --socket /run/conary/conaryd.sock
 # To enable verified webhook ingress and/or gate-reuse lookups, either set
 # CONARY_EVENTS_CONFIG / CONARY_GATE_REUSE_CONFIG in /etc/conary/conaryd.env
-# or replace ExecStart via a drop-in (`systemctl edit conaryd.service`):
+# or override ExecStart via a drop-in (`systemctl edit conaryd.service`),
+# starting with an empty `ExecStart=` line to clear the default above:
+# [Service]
+# ExecStart=
 # ExecStart=/usr/local/bin/conaryd \
 #     --ledger /var/lib/conary \
 #     --socket /run/conary/conaryd.sock \

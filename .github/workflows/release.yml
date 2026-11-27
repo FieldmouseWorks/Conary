@@ -28,11 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.value }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Resolve release version
+      - name: Resolve release version and checkout ref
         id: version
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -44,19 +40,49 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "push" ]; then
             value="$REF_NAME"
-          elif [ -n "$INPUT_VERSION" ]; then
-            value="$INPUT_VERSION"
+            checkout_ref="refs/tags/$value"
+            verify_tag="true"
           elif [ "$INPUT_PUBLISH" = "true" ]; then
-            echo "publish=true requires an existing tag in inputs.version" >&2
-            exit 1
+            if [ -z "$INPUT_VERSION" ]; then
+              echo "publish=true requires an existing tag in inputs.version" >&2
+              exit 1
+            fi
+            value="$INPUT_VERSION"
+            checkout_ref="refs/tags/$value"
+            verify_tag="true"
           else
-            value="dev-${SHA:0:12}"
+            if [ -n "$INPUT_VERSION" ]; then
+              value="$INPUT_VERSION"
+            else
+              value="dev-${SHA:0:12}"
+            fi
+            checkout_ref=""
+            verify_tag="false"
           fi
-          if [[ ! "$value" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+          if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [[ "$value" == *".."* ]]; then
             echo "invalid version label: $value" >&2
             exit 1
           fi
           echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
+          echo "verify_tag=$verify_tag" >> "$GITHUB_OUTPUT"
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.version.outputs.checkout_ref }}
+          persist-credentials: false
+      - name: Verify checked-out commit matches release tag
+        if: steps.version.outputs.verify_tag == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
+          if [ "$head_sha" != "$tag_sha" ]; then
+            echo "checked-out commit ($head_sha) does not match tag $TAG ($tag_sha)" >&2
+            exit 1
+          fi
       - name: Verify toolchain from rust-toolchain.toml
         run: rustup show active-toolchain
       - name: Build release binaries
