@@ -1,7 +1,7 @@
 # Standalone Linux release packaging for cn, conaryd, and conary-mcp with no
 # Nix and no FieldmouseWorks/burrow dependency. Builds and verifies the
 # versioned .tar.gz archive and SHA256SUMS with read-only permissions, and
-# publishes a GitHub Release only on v* tags or an explicit publish dispatch.
+# publishes a GitHub Release only on v* tags (push or tag workflow_dispatch).
 name: release
 on:
   push:
@@ -9,12 +9,8 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version label (e.g. v0.1.0); defaults to dev-<short-sha>"
-        required: false
-        type: string
       publish:
-        description: "Publish a GitHub Release for an existing tag matching version"
+        description: "Publish a GitHub Release (requires dispatching from a v* tag)"
         required: false
         default: false
         type: boolean
@@ -28,61 +24,37 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.value }}
     steps:
-      - name: Resolve release version and checkout ref
+      - name: Resolve release version
         id: version
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_VERSION: ${{ inputs.version }}
           INPUT_PUBLISH: ${{ inputs.publish }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "push" ]; then
-            value="$REF_NAME"
-            checkout_ref="refs/tags/$value"
-            verify_tag="true"
-          elif [ "$INPUT_PUBLISH" = "true" ]; then
-            if [ -z "$INPUT_VERSION" ]; then
-              echo "publish=true requires an existing tag in inputs.version" >&2
+          if [ "$EVENT_NAME" = "push" ] || [ "$REF_TYPE" = "tag" ]; then
+            if [ "$INPUT_PUBLISH" = "true" ] && [[ "$REF_NAME" != v* ]]; then
+              echo "publish=true requires dispatching from a v* tag (got: $REF_NAME)" >&2
               exit 1
             fi
-            value="$INPUT_VERSION"
-            checkout_ref="refs/tags/$value"
-            verify_tag="true"
+            value="$REF_NAME"
+          elif [ "$INPUT_PUBLISH" = "true" ]; then
+            echo "publish=true requires dispatching from a v* git tag (e.g. --ref v0.1.0)" >&2
+            exit 1
           else
-            if [ -n "$INPUT_VERSION" ]; then
-              value="$INPUT_VERSION"
-            else
-              value="dev-${SHA:0:12}"
-            fi
-            checkout_ref=""
-            verify_tag="false"
+            value="dev-${SHA:0:12}"
           fi
           if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || [[ "$value" == *".."* ]]; then
             echo "invalid version label: $value" >&2
             exit 1
           fi
           echo "value=$value" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
-          echo "verify_tag=$verify_tag" >> "$GITHUB_OUTPUT"
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ steps.version.outputs.checkout_ref }}
           persist-credentials: false
-      - name: Verify checked-out commit matches release tag
-        if: steps.version.outputs.verify_tag == 'true'
-        env:
-          TAG: ${{ steps.version.outputs.value }}
-        run: |
-          set -euo pipefail
-          head_sha="$(git rev-parse HEAD)"
-          tag_sha="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
-          if [ "$head_sha" != "$tag_sha" ]; then
-            echo "checked-out commit ($head_sha) does not match tag $TAG ($tag_sha)" >&2
-            exit 1
-          fi
       - name: Verify toolchain from rust-toolchain.toml
         run: rustup show active-toolchain
       - name: Build release binaries
@@ -100,7 +72,7 @@ jobs:
           if-no-files-found: error
   publish:
     needs: package
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
     runs-on: ubuntu-latest
     permissions:
       contents: write
